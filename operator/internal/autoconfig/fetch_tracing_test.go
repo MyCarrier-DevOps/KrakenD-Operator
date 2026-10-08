@@ -1,0 +1,349 @@
+/*
+Copyright 2026 The KrakenD Operator Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package autoconfig
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"go.opentelemetry.io/otel/codes"
+	corev1 "k8s.io/api/core/v1"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/redact"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
+)
+
+// The spec host is a third party: it gets no trace header, and no span keeps
+// the URL's credentials.
+func TestClientSpans_RecordTheRedactedURLAndPropagateNothing(t *testing.T) {
+	rec := tracingtest.New(t)
+	var headers http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	client := &http.Client{Transport: clientSpans{next: http.DefaultTransport, tracer: rec.Tracer()}}
+	ctx, parent := rec.Tracer().Start(context.Background(), "autoconfig.fetch")
+	u := strings.Replace(srv.URL, "http://", "http://user:secret@", 1) + "/spec.json?token=abc123"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	parent.End()
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "autoconfig.fetch", "HTTP GET")
+	for _, kv := range spans.One(t, "HTTP GET").Attributes() {
+		if v := kv.Value.String(); strings.Contains(v, "secret") || strings.Contains(v, "abc123") {
+			t.Errorf("attribute %s = %q records a credential", kv.Key, v)
+		}
+	}
+	if tp := headers.Get("Traceparent"); tp != "" {
+		t.Errorf("the spec host got traceparent %q, want none", tp)
+	}
+}
+
+// A failed fetch's error, which becomes a status message and a span event,
+// names the URL without its credentials.
+func TestFetcher_ErrorsCarryNoCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	f := &httpFetcher{
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+	}
+	withSecrets := func(base string) string {
+		return strings.Replace(base, "http://", "http://user:secret@", 1) + "/spec.json?token=abc123"
+	}
+	unreachable := "http://127.0.0.1:1"
+
+	for _, raw := range []string{withSecrets(srv.URL), withSecrets(unreachable)} {
+		_, err := f.Fetch(context.Background(), FetchSource{URL: raw})
+		if err == nil {
+			t.Fatalf("Fetch(%s) succeeded", raw)
+		}
+		if msg := err.Error(); strings.Contains(msg, "secret") || strings.Contains(msg, "abc123") {
+			t.Errorf("error %q carries a credential", msg)
+		}
+		if _, ok := errorsAsURLError(err); ok {
+			t.Errorf("error %q still wraps a *url.Error", err)
+		}
+	}
+}
+
+func errorsAsURLError(err error) (*url.Error, bool) {
+	var uerr *url.Error
+	return uerr, errors.As(err, &uerr)
+}
+
+// An unparseable URL's error does not repeat the URL either.
+func TestFetcher_AParseErrorCarriesNoCredentials(t *testing.T) {
+	f := &httpFetcher{}
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: "http://user:pw@host:badport/spec.json?token=secret"})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if msg := err.Error(); strings.Contains(msg, "pw@") || strings.Contains(msg, "secret") {
+		t.Errorf("error %q carries a credential", msg)
+	}
+}
+
+func TestNewFetcher_FetchIsASpanAboveItsHTTPRequest(t *testing.T) {
+	rec := tracingtest.New(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"openapi":"3.0.0"}`))
+	}))
+	defer srv.Close()
+	f := NewFetcher(fakeClient(), rec.Tracer()).(*httpFetcher)
+	// The SSRF guard refuses loopback: keep the traced wrapper, swap what it wraps.
+	f.lenientClient.Transport = clientSpans{next: http.DefaultTransport, tracer: rec.Tracer()}
+
+	if _, err := f.Fetch(context.Background(), FetchSource{URL: srv.URL + "/spec.json?token=abc123", AllowClusterLocal: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "autoconfig.fetch", "HTTP GET")
+	if _, ok := NewFetcher(fakeClient(), nil).(*httpFetcher).strictClient.Transport.(clientSpans); !ok {
+		t.Error("the strict client's transport is not traced")
+	}
+}
+
+// requireNoSecretInSpans fails the test if any attribute, status description
+// or event attribute of the recorded spans contains one of secrets.
+func requireNoSecretInSpans(t *testing.T, spans tracingtest.Spans, secrets ...string) {
+	t.Helper()
+	check := func(where, v string) {
+		for _, secret := range secrets {
+			if strings.Contains(v, secret) {
+				t.Errorf("%s = %q records %q", where, v, secret)
+			}
+		}
+	}
+	for _, span := range spans {
+		for _, kv := range span.Attributes() {
+			check(span.Name()+" attribute "+string(kv.Key), kv.Value.Emit())
+		}
+		check(span.Name()+" status", span.Status().Description)
+		for _, ev := range span.Events() {
+			for _, kv := range ev.Attributes {
+				check(span.Name()+" event attribute "+string(kv.Key), kv.Value.Emit())
+			}
+		}
+	}
+}
+
+// A URL in the opaque form (no "//") parses with its credentials in Opaque:
+// they are recorded nowhere, however it reaches a fetch.
+func TestFetch_AnOpaqueURLLeaksNoCredentials(t *testing.T) {
+	const opaque = "https:user:pw@schemas.example.com/spec.json?token=abc"
+	rec := tracingtest.New(t)
+	f := NewFetcher(fakeClient(), rec.Tracer())
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: opaque})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if msg := err.Error(); strings.Contains(msg, "user:pw") || strings.Contains(msg, "abc") {
+		t.Errorf("error %q carries a credential", msg)
+	}
+	requireNoSecretInSpans(t, rec.Ended(), "user:pw", "abc")
+}
+
+// A URL without a host is refused before any request is made.
+func TestFetch_AURLWithoutAHostIsRefusedEarly(t *testing.T) {
+	rec := tracingtest.New(t)
+	f := NewFetcher(fakeClient(), rec.Tracer())
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: "https:user:pw@schemas.example.com/spec.json"})
+
+	if err == nil || !strings.Contains(err.Error(), "no host") {
+		t.Fatalf("Fetch error = %v, want a refusal naming the missing host", err)
+	}
+	if n := len(rec.Ended().Named("HTTP GET")); n != 0 {
+		t.Errorf("%d HTTP GET spans, want none: the request is never made", n)
+	}
+}
+
+// A redirect whose Location cannot be parsed fails the fetch without repeating
+// the Location, which can carry a signature in its query.
+func TestFetch_AnUnparseableRedirectLocationLeaksNothing(t *testing.T) {
+	rec := tracingtest.New(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "http://host:badport/x?sig=LOCSECRET")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	f := NewFetcher(fakeClient(), rec.Tracer()).(*httpFetcher)
+	f.lenientClient.Transport = clientSpans{next: http.DefaultTransport, tracer: rec.Tracer()}
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: srv.URL + "/spec.json", AllowClusterLocal: true})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if strings.Contains(err.Error(), "LOCSECRET") {
+		t.Errorf("error %q carries the Location's query", err)
+	}
+	requireNoSecretInSpans(t, rec.Ended(), "LOCSECRET")
+}
+
+// Nothing between clientSpans and the network can add a header: the transport
+// each production client wraps is the SSRF-safe *http.Transport itself.
+func TestNewFetcher_NothingWrapsTheTransportUnderTheSpans(t *testing.T) {
+	f := NewFetcher(fakeClient(), nil).(*httpFetcher)
+
+	for name, c := range map[string]*http.Client{"strict": f.strictClient, "lenient": f.lenientClient} {
+		spans, ok := c.Transport.(clientSpans)
+		if !ok {
+			t.Fatalf("the %s client's transport is %T, want clientSpans", name, c.Transport)
+		}
+		if _, ok := spans.next.(*http.Transport); !ok {
+			t.Errorf("the %s client's clientSpans wraps %T, want *http.Transport", name, spans.next)
+		}
+	}
+}
+
+// A client span is an error when the server answers with a 4xx or 5xx status,
+// as the OpenTelemetry HTTP conventions have it, and not otherwise.
+func TestClientSpans_AnErrorStatusMarksTheSpan(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   codes.Code
+	}{
+		{http.StatusOK, codes.Unset},
+		{http.StatusNotFound, codes.Error},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			rec := tracingtest.New(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+			client := &http.Client{Transport: clientSpans{next: http.DefaultTransport, tracer: rec.Tracer()}}
+
+			resp, err := client.Get(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+
+			if got := rec.Ended().One(t, "HTTP GET").Status().Code; got != tc.want {
+				t.Errorf("HTTP GET status = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Every error of a fetch names the document once, redacted, whichever step of
+// the fetch failed: a $ref's error is then enough to tell which of its
+// documents it was.
+func TestFetch_EveryErrorNamesTheRedactedURLOnce(t *testing.T) {
+	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("x"))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	defer short.Close()
+	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, maxBodyBytes+2))
+	}))
+	defer big.Close()
+	withSecrets := func(raw string) string {
+		return strings.Replace(raw, "://", "://user:pw@", 1) + "/spec.json?token=TOKVAL"
+	}
+	missingSecret := &v1alpha1.AuthConfig{BearerTokenSecret: &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "absent"}, Key: "token",
+	}}
+
+	for _, tc := range []struct {
+		name   string
+		source FetchSource
+	}{
+		{"a body that ends early", FetchSource{URL: withSecrets(short.URL)}},
+		{"a body over the limit", FetchSource{URL: withSecrets(big.URL)}},
+		{"a scheme that is not http", FetchSource{URL: "ftp://user:pw@example.com/spec.json?token=TOKVAL"}},
+		{"auth that cannot be applied", FetchSource{URL: withSecrets(short.URL), Auth: missingSecret}},
+		{"a URL that does not parse", FetchSource{URL: "http://user:pw@host:badport/spec.json?token=TOKVAL"}},
+		{"a URL without a host", FetchSource{URL: "https:user:pw@example.com/spec.json?token=TOKVAL"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &httpFetcher{
+				client:       fakeClient(),
+				strictClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+			}
+			tc.source.AllowClusterLocal = false
+
+			_, err := f.Fetch(context.Background(), tc.source)
+
+			if err == nil {
+				t.Fatal("Fetch succeeded")
+			}
+			want := "fetching " + redact.URL(tc.source.URL) + ": "
+			if n := strings.Count(err.Error(), "fetching "); n != 1 || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("error %q, want it to start with %q and name the fetch once", err, want)
+			}
+			if msg := err.Error(); strings.Contains(msg, "pw@") || strings.Contains(msg, "TOKVAL") {
+				t.Errorf("error %q carries a credential", msg)
+			}
+		})
+	}
+}
+
+// A scheme-less URL whose first segment is a token parses with the token as
+// its scheme: the error must not repeat the scheme.
+func TestFetch_ASchemeThatIsATokenIsNotEchoed(t *testing.T) {
+	f := &httpFetcher{}
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: "glpat-AbC123:x@gitlab.example.com/spec.json"})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if msg := err.Error(); strings.Contains(strings.ToLower(msg), "glpat") {
+		t.Errorf("error %q echoes the scheme", msg)
+	}
+}
+
+// A request that cannot be created is named once, redacted, as well.
+func TestFetch_ARequestThatCannotBeCreatedNamesTheURLOnce(t *testing.T) {
+	f := &httpFetcher{}
+	var noContext context.Context
+
+	_, err := f.fetchFromURL(noContext, FetchSource{URL: "https://user:pw@example.com/spec.json?token=TOKVAL"})
+
+	want := "fetching https://example.com/spec.json?token=REDACTED: creating request: "
+	if err == nil || !strings.HasPrefix(err.Error(), want) || strings.Count(err.Error(), "fetching ") != 1 {
+		t.Errorf("error = %v, want it to start with %q", err, want)
+	}
+}

@@ -19,6 +19,10 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -329,10 +333,10 @@ func TestNormalizeToJSON_AutoDetect(t *testing.T) {
 	}
 }
 
-func TestCUEEvaluator_Overrides(t *testing.T) {
-	eval := NewCUEEvaluator()
-	defs := map[string]string{
-		"main.cue": `
+// overrideLookupDefs is a custom definition that reads _overrides by the
+// operationId.
+const overrideLookupDefs = `
+import "regexp"
 import "strings"
 
 _spec: _
@@ -347,18 +351,28 @@ endpoint: {
 				"backends": [{
 					"host": ["http://svc"]
 					"url_pattern": path
+					// The entry-level extraConfig is also merged from the
+					// override by the evaluator, so the backend carries the
+					// observable result of the lookup.
+					if _overrides[_key] != _|_ {
+						"extraConfig": _overrides[_key]
+					}
 				}]
-				// sanitizeName lowercases operationId
-				if _overrides[strings.ToLower(op.operationId)] != _|_ {
-					"extraConfig": _overrides[strings.ToLower(op.operationId)]
+				// Override keys are the SanitizeName form of the operationId.
+				_key: strings.Trim(regexp.ReplaceAll("[^a-z0-9-]", strings.ToLower(op.operationId), "-"), "-")
+				if _overrides[_key] != _|_ {
+					"extraConfig": _overrides[_key]
 				}
 				_operationId: op.operationId
 			}
 		}
 	}
 }
-`,
-	}
+`
+
+func TestCUEEvaluator_Overrides(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{"main.cue": overrideLookupDefs}
 
 	specJSON := []byte(`{
 		"paths": {
@@ -393,9 +407,15 @@ endpoint: {
 	if len(out.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
 	}
-	// Verify the extra_config was applied
-	if out.Entries[0].ExtraConfig == nil {
-		t.Error("expected extra_config from override to be present")
+	// The evaluator merges the override into the entry itself, so the entry's
+	// extraConfig proves nothing about the CUE lookup. The definition copies
+	// the looked-up value onto the backend: that is the case-fold pin.
+	if len(out.Entries[0].Backends) == 0 {
+		t.Fatal("expected a backend")
+	}
+	be := out.Entries[0].Backends[0]
+	if be.ExtraConfig == nil || !strings.Contains(string(be.ExtraConfig.Raw), `"auth/validator"`) {
+		t.Errorf("expected the lookup of listUsers to find the override, got backend extraConfig %v", be.ExtraConfig)
 	}
 }
 
@@ -682,9 +702,11 @@ func TestMergeExtraConfig_NilOverride(t *testing.T) {
 
 // --- applyFieldOverrides comprehensive tests ---
 
-// testOutputWithEntries creates a CUEOutput with entries and operationID mappings.
+// testOutputWithEntries creates a CUEOutput with entries and operationID
+// mappings, with the per-entry operationIds the evaluator records.
 func testOutputWithEntries() *CUEOutput {
 	return &CUEOutput{
+		entryOperationIDs: []string{"listUsers", "createOrder"},
 		Entries: []v1alpha1.EndpointEntry{
 			{
 				Endpoint: "/api/users",
@@ -714,6 +736,15 @@ func testOutputWithEntries() *CUEOutput {
 			"/api/orders:POST": {"orders"},
 		},
 	}
+}
+
+// testOutputWithSharedOperationID is testOutputWithEntries with both entries
+// declaring the operationId listUsers.
+func testOutputWithSharedOperationID() *CUEOutput {
+	out := testOutputWithEntries()
+	out.entryOperationIDs[1] = "listUsers"
+	out.OperationIDs["/api/orders:POST"] = "listUsers"
+	return out
 }
 
 func TestApplyFieldOverrides_Timeout(t *testing.T) {
@@ -768,13 +799,13 @@ func TestApplyFieldOverrides_Endpoint(t *testing.T) {
 func TestApplyFieldOverrides_Method(t *testing.T) {
 	out := testOutputWithEntries()
 	applyFieldOverrides(out, []v1alpha1.OperationOverride{
-		{OperationID: "listUsers", Method: "HEAD"},
+		{OperationID: "listUsers", Method: "PATCH"},
 	})
 
-	if out.Entries[0].Method != "HEAD" {
-		t.Errorf("expected method HEAD, got %s", out.Entries[0].Method)
+	if out.Entries[0].Method != "PATCH" {
+		t.Errorf("expected method PATCH, got %s", out.Entries[0].Method)
 	}
-	if out.OperationIDs["/api/users:HEAD"] != "listUsers" {
+	if out.OperationIDs["/api/users:PATCH"] != "listUsers" {
 		t.Errorf("expected OperationIDs to be remapped for method, got %v", out.OperationIDs)
 	}
 }
@@ -823,23 +854,65 @@ func TestApplyFieldOverrides_BackendExtraConfig(t *testing.T) {
 	}
 }
 
-func TestApplyFieldOverrides_BackendIndexOutOfBounds(t *testing.T) {
+func TestApplyFieldOverrides_BackendIndexOutOfRangeIsUnmatched(t *testing.T) {
 	out := testOutputWithEntries()
-	backendEC := &runtime.RawExtension{
-		Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{
+		OperationID: "createOrder",
+		Backends:    []v1alpha1.BackendOverride{{Index: 1, ExtraConfig: ec}, {Index: 2, ExtraConfig: ec}, {Index: -1}},
+	}})
+	want := []string{"createOrder backends[2]", "createOrder backends[-1]"}
+	if !slices.Equal(out.UnmatchedOverrides, want) {
+		t.Errorf("UnmatchedOverrides = %v, want %v", out.UnmatchedOverrides, want)
 	}
-	applyFieldOverrides(out, []v1alpha1.OperationOverride{
-		{
-			OperationID: "listUsers",
-			Backends: []v1alpha1.BackendOverride{
-				{Index: 99, ExtraConfig: backendEC},
-			},
-		},
-	})
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[1].Backends[1].ExtraConfig.Raw, &got); err != nil || got["backend/http"] == nil {
+		t.Errorf("in-range backends[1] override not applied: %v", out.Entries[1].Backends[1].ExtraConfig)
+	}
+}
 
-	// Should not panic; backend[0] should remain unmodified
-	if out.Entries[0].Backends[0].ExtraConfig != nil {
-		t.Error("backend[0] ExtraConfig should remain nil (out-of-bounds index should be skipped)")
+func TestApplyFieldOverrides_SharedOperationIDIsAmbiguous(t *testing.T) {
+	out := testOutputWithSharedOperationID()
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{OperationID: "listUsers"}, {OperationID: "ghost"}})
+	if !slices.Equal(out.AmbiguousOverrides, []string{"listUsers"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [listUsers]", out.AmbiguousOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_OperationIDSharedWithFailedOperationIsAmbiguous(t *testing.T) {
+	out := testOutputWithEntries()
+	out.Failed = []OperationIssue{{Operation: Operation{Method: "GET", Path: "/v2/users", OperationID: "listUsers"}}}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{OperationID: "listUsers"}})
+	if !slices.Equal(out.AmbiguousOverrides, []string{"listUsers"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [listUsers]", out.AmbiguousOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_BackendOverrideOnFailedOperationIsNotUnmatched(t *testing.T) {
+	out := testOutputWithEntries()
+	out.Failed = []OperationIssue{{Operation: Operation{Method: "GET", Path: "/v2/users", OperationID: "getUser"}}}
+	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{
+		OperationID: "getUser",
+		Backends:    []v1alpha1.BackendOverride{{Index: 0, ExtraConfig: ec}, {Index: 7, ExtraConfig: ec}},
+	}})
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, want none for a failed target", out.UnmatchedOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_AmbiguousOverrideSkipsBackendRangeCheck(t *testing.T) {
+	out := testOutputWithSharedOperationID()
+	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{
+		OperationID: "listUsers",
+		Backends:    []v1alpha1.BackendOverride{{Index: 1, ExtraConfig: ec}},
+	}})
+	if !slices.Equal(out.AmbiguousOverrides, []string{"listUsers"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [listUsers]", out.AmbiguousOverrides)
+	}
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, want none: the override is ambiguous, not out of range", out.UnmatchedOverrides)
 	}
 }
 
@@ -853,6 +926,37 @@ func TestApplyFieldOverrides_NonExistentOperationID(t *testing.T) {
 	// Nothing should change
 	if out.Entries[0].Timeout != nil {
 		t.Error("timeout should remain nil for unmatched operationID")
+	}
+	if len(out.UnmatchedOverrides) != 1 || out.UnmatchedOverrides[0] != "nonExistent" {
+		t.Errorf("expected UnmatchedOverrides [nonExistent], got %v", out.UnmatchedOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_MatchedOverrideNotReported(t *testing.T) {
+	out := testOutputWithEntries()
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers"},
+	})
+
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("expected no UnmatchedOverrides for a matched operationID, got %v", out.UnmatchedOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_ReportsOnlyUnmatchedInOrder(t *testing.T) {
+	out := testOutputWithEntries()
+	timeout := metav1.Duration{Duration: 30 * time.Second}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers", Timeout: &timeout},
+		{OperationID: "ghostA"},
+		{OperationID: "ghostB"},
+	})
+
+	if len(out.UnmatchedOverrides) != 2 || out.UnmatchedOverrides[0] != "ghostA" || out.UnmatchedOverrides[1] != "ghostB" {
+		t.Errorf("expected UnmatchedOverrides [ghostA ghostB], got %v", out.UnmatchedOverrides)
+	}
+	if out.Entries[0].Timeout == nil || out.Entries[0].Timeout.Duration != 30*time.Second {
+		t.Errorf("expected listUsers timeout 30s applied, got %v", out.Entries[0].Timeout)
 	}
 }
 
@@ -869,7 +973,7 @@ func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
 		{
 			OperationID: "listUsers",
 			Endpoint:    "/api/v3/users",
-			Method:      "OPTIONS",
+			Method:      "PUT",
 			Timeout:     &timeout,
 			CacheTTL:    &cacheTTL,
 			PolicyRef:   policyRef,
@@ -881,8 +985,8 @@ func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
 	if entry.Endpoint != "/api/v3/users" {
 		t.Errorf("endpoint = %s, want /api/v3/users", entry.Endpoint)
 	}
-	if entry.Method != "OPTIONS" {
-		t.Errorf("method = %s, want OPTIONS", entry.Method)
+	if entry.Method != "PUT" {
+		t.Errorf("method = %s, want PUT", entry.Method)
 	}
 	if entry.Timeout == nil || entry.Timeout.Duration != 60*time.Second {
 		t.Errorf("timeout = %v, want 60s", entry.Timeout)
@@ -905,7 +1009,7 @@ func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
 		t.Error("qos/ratelimit/router should be preserved from original")
 	}
 	// Keys should be remapped
-	if out.OperationIDs["/api/v3/users:OPTIONS"] != "listUsers" {
+	if out.OperationIDs["/api/v3/users:PUT"] != "listUsers" {
 		t.Errorf("OperationIDs not remapped: %v", out.OperationIDs)
 	}
 }
@@ -983,6 +1087,178 @@ func TestApplyFieldOverrides_ExtraConfigMergeWithEmbeddedCUE(t *testing.T) {
 	// Documentation should be preserved from CUE
 	if _, ok := ec["documentation/openapi"]; !ok {
 		t.Error("documentation/openapi should be preserved from CUE evaluation")
+	}
+}
+
+func TestEvaluate_OverrideOnOperationWithoutOperationIdIsReported(t *testing.T) {
+	// Regression: an operation with no operationId in the OpenAPI spec has no
+	// _operationId in the CUE output, so an override targeting it can never
+	// match. It must be reported as unmatched rather than silently dropped.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/webhook-receiver/status": {
+				"post": {
+					"responses": {"202": {"description": "Accepted"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "WebhookStatus",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"documentation/openapi":{"audience":["internal"]}}`),
+				},
+			},
+		},
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "public" {
+		t.Errorf("expected audience [public] (override not applied), got %v", doc["audience"])
+	}
+
+	if len(out.UnmatchedOverrides) != 1 || out.UnmatchedOverrides[0] != "WebhookStatus" {
+		t.Errorf("expected UnmatchedOverrides [WebhookStatus], got %v", out.UnmatchedOverrides)
+	}
+}
+
+func TestEvaluate_OperationAudienceMustBeListOfStrings(t *testing.T) {
+	// A non-list audience on an operation must fail that operation rather
+	// than reach the gateway, where it fails `krakend check -t -n -c` and
+	// blocks config updates for the whole gateway.
+	for name, audience := range map[string]string{
+		"map instead of list":   `{"internal": null}`,
+		"null instead of list":  `null`,
+		"list with a null item": `["internal", null]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := evaluateEmbedded(t, `{"paths":{"/api/v1/users":{"get":{"operationId":"listUsers",`+
+				`"audience":`+audience+`,"responses":{"200":{"description":"OK"}}}}}}`)
+			if len(out.Entries) != 0 {
+				t.Errorf("expected no entry for a non-list audience, got %+v", out.Entries)
+			}
+			if len(out.Failed) != 1 || !strings.Contains(out.Failed[0].Message, "audience") {
+				t.Errorf("expected listUsers failed naming the audience field, got %+v", out.Failed)
+			}
+		})
+	}
+}
+
+func TestEvaluate_OperationAudienceListOfStringsPassesThrough(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/users": {
+				"get": {
+					"operationId": "listUsers",
+					"audience": ["internal"],
+					"responses": {"200": {"description": "OK"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "internal" {
+		t.Errorf("expected audience [internal], got %v", doc["audience"])
+	}
+}
+
+func TestEvaluate_OperationNoAudienceDefaultsToPublic(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/users": {
+				"get": {
+					"operationId": "listUsers",
+					"responses": {"200": {"description": "OK"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "public" {
+		t.Errorf("expected audience [public], got %v", doc["audience"])
 	}
 }
 
@@ -1583,5 +1859,535 @@ func TestApplyURLTransformToEntries_NilTransformNoop(t *testing.T) {
 	ApplyURLTransformToEntries(entries, nil)
 	if entries[0].Endpoint != "/x" {
 		t.Fatalf("nil transform must be a no-op, got %s", entries[0].Endpoint)
+	}
+}
+
+// evaluateEmbedded evaluates specJSON against the embedded default CUE
+// definitions with the given overrides.
+func evaluateEmbedded(t *testing.T, specJSON string, overrides ...v1alpha1.OperationOverride) *CUEOutput {
+	t.Helper()
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(specJSON),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides:   overrides,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	return out
+}
+
+func TestEvaluate_OverrideExtraConfigWithNonIdentifierOperationID(t *testing.T) {
+	// SanitizeName maps "_" to "-", and a leading digit is not a CUE
+	// identifier: the override label must be quoted.
+	for _, opID := range []string{"get_a", "get-a", "1getA", "___"} {
+		t.Run(opID, func(t *testing.T) {
+			spec := fmt.Sprintf(`{"paths":{"/a":{"get":{"operationId":%q,`+
+				`"responses":{"200":{"description":"OK"}}}}}}`, opID)
+			out := evaluateEmbedded(t, spec, v1alpha1.OperationOverride{
+				OperationID: opID,
+				ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`)},
+			})
+			if len(out.Entries) != 1 {
+				t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+			}
+			// These rows pin that the injected label compiles; the entry is
+			// merged by the evaluator, not by a CUE lookup.
+			if out.Entries[0].ExtraConfig == nil ||
+				!strings.Contains(string(out.Entries[0].ExtraConfig.Raw), `"auth/validator"`) {
+				t.Errorf("expected the override's auth/validator, got %s", out.Entries[0].ExtraConfig.Raw)
+			}
+		})
+	}
+}
+
+func TestCUEEvaluator_OverridesKeyedBySanitizedOperationID(t *testing.T) {
+	spec := `{"paths":{"/a":{"get":{"operationId":"get_a"}}}}`
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(spec),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: map[string]string{"main.cue": overrideLookupDefs},
+		Overrides: []v1alpha1.OperationOverride{{
+			OperationID: "get_a",
+			ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`)},
+		}},
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+	if len(out.Entries[0].Backends) == 0 {
+		t.Fatal("expected a backend")
+	}
+	be := out.Entries[0].Backends[0]
+	if be.ExtraConfig == nil || !strings.Contains(string(be.ExtraConfig.Raw), `"auth/validator"`) {
+		t.Errorf("expected the definition to find the override by the sanitized operationId, got %v", be.ExtraConfig)
+	}
+}
+
+func TestEvaluate_UnsupportedMethodsAreSkippedAndReported(t *testing.T) {
+	out := evaluateEmbedded(t, `{"paths":{"/a":{
+		"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}},
+		"head":{"operationId":"headA","responses":{"200":{"description":"OK"}}},
+		"options":{"responses":{"200":{"description":"OK"}}},
+		"trace":{"operationId":"traceA","responses":{"200":{"description":"OK"}}}}}}`)
+
+	if len(out.Entries) != 1 || out.Entries[0].Method != "GET" {
+		t.Fatalf("expected only the GET entry, got %+v", out.Entries)
+	}
+	var got []string
+	for _, s := range out.Skipped {
+		if s.Reason != v1alpha1.ReasonUnsupportedMethod {
+			t.Errorf("skipped %s %s: reason %q", s.Method, s.Path, s.Reason)
+		}
+		got = append(got, s.Method+" "+s.Path+" "+s.OperationID)
+	}
+	if want := []string{"HEAD /a headA", "OPTIONS /a ", "TRACE /a traceA"}; !slices.Equal(got, want) {
+		t.Errorf("skipped = %q, want %q", got, want)
+	}
+}
+
+func TestEvaluate_SkippedOperationsCarryTheTransformedPath(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(`{"paths":{"/v1/a":{"head":{"operationId":"headA",` +
+			`"responses":{"200":{"description":"OK"}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1", AddPathPrefix: "/api"},
+		ServiceName:  "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0].Path != "/api/a" {
+		t.Errorf("skipped = %+v, want one entry at /api/a", out.Skipped)
+	}
+}
+
+// Two unsupported-method operations the URL transform puts on one route are
+// each skipped with their own operationId and tags, in the order
+// StripServers leaves them in (paths sorted, so /v1/x before /x). The
+// route-keyed maps hold only one of them, so a skip labelled from them would
+// be filtered, and so reported, as the wrong operation.
+func TestEvaluate_SkippedOperationsOnOneRouteKeepTheirOwnIDAndTags(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	spec, err := StripServers([]byte(`{"paths":{` +
+		`"/x":{"head":{"operationId":"b","tags":["tb"],"responses":{"200":{"description":"OK"}}}},` +
+		`"/v1/x":{"head":{"operationId":"a","tags":["ta"],"responses":{"200":{"description":"OK"}}}}}}`))
+	if err != nil {
+		t.Fatalf("StripServers: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: spec, SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	tagsByID := map[string][]string{}
+	for _, s := range out.Skipped {
+		tagsByID[s.OperationID] = s.Tags
+	}
+	if want := map[string][]string{"a": {"ta"}, "b": {"tb"}}; !reflect.DeepEqual(tagsByID, want) {
+		t.Errorf("skipped (operationId -> tags) = %v, want %v", tagsByID, want)
+	}
+
+	// kept returns the operationIds of the skips a filter leaves in scope.
+	kept := func(spec v1alpha1.FilterSpec) []string {
+		var ids []string
+		for _, s := range out.Skipped {
+			key := s.Path + ":" + s.Method
+			in := NewFilter().Apply([]v1alpha1.EndpointEntry{{Endpoint: s.Path, Method: s.Method}},
+				map[string][]string{key: s.Tags}, map[string]string{key: s.OperationID}, spec)
+			if len(in) > 0 {
+				ids = append(ids, s.OperationID)
+			}
+		}
+		return ids
+	}
+	if got, want := kept(v1alpha1.FilterSpec{ExcludeOperationIds: []string{"b"}}), []string{"a"}; !slices.Equal(got, want) {
+		t.Errorf("excludeOperationIds [b] keeps %v, want %v", got, want)
+	}
+	if got, want := kept(v1alpha1.FilterSpec{IncludeTags: []string{"tb"}}), []string{"b"}; !slices.Equal(got, want) {
+		t.Errorf("includeTags [tb] keeps %v, want %v", got, want)
+	}
+}
+
+func TestEvaluate_OverrideMethodToSupportedGeneratesTheEntry(t *testing.T) {
+	out := evaluateEmbedded(t, `{"paths":{"/a":{"head":{"operationId":"headA",`+
+		`"responses":{"200":{"description":"OK"}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "headA", Method: "GET"})
+
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("unmatched overrides = %q, want none", out.UnmatchedOverrides)
+	}
+	if len(out.Entries) != 1 || out.Entries[0].Method != "GET" {
+		t.Errorf("entries = %+v, want one GET entry", out.Entries)
+	}
+	if len(out.Skipped) != 0 {
+		t.Errorf("skipped = %+v, want none", out.Skipped)
+	}
+}
+
+func TestEvaluate_OverrideMethodToUnsupportedIsSkipped(t *testing.T) {
+	// A stored override from before admission rejected such methods.
+	out := evaluateEmbedded(t, `{"paths":{"/a":{"get":{"operationId":"getA",`+
+		`"responses":{"200":{"description":"OK"}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "getA", Method: "HEAD"})
+
+	if len(out.Entries) != 0 {
+		t.Errorf("entries = %+v, want none", out.Entries)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0].Method != "HEAD" || out.Skipped[0].OperationID != "getA" ||
+		out.Skipped[0].Reason != v1alpha1.ReasonUnsupportedMethod {
+		t.Errorf("skipped = %+v, want HEAD /a getA UnsupportedMethod", out.Skipped)
+	}
+	if _, ok := out.OperationIDs["/a:HEAD"]; ok {
+		t.Errorf("operationIds still lists the skipped entry: %v", out.OperationIDs)
+	}
+}
+
+func TestEvaluate_InvalidEntryFailsOnlyItsOperation(t *testing.T) {
+	// A response without a description fails concrete validation for its
+	// entry only.
+	out := evaluateEmbedded(t, `{"paths":{
+		"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}},
+		"/b":{"get":{"operationId":"getB","tags":["b"],"responses":{"200":{}}}}}}`)
+
+	if len(out.Entries) != 1 || out.Entries[0].Endpoint != "/a" {
+		t.Fatalf("expected only the /a entry, got %+v", out.Entries)
+	}
+	if len(out.Failed) != 1 {
+		t.Fatalf("expected 1 failed operation, got %+v", out.Failed)
+	}
+	f := out.Failed[0]
+	if f.Method != "GET" || f.Path != "/b" || f.OperationID != "getB" || !slices.Equal(f.Tags, []string{"b"}) ||
+		f.Reason != v1alpha1.ReasonCUEEvaluationFailed || !strings.Contains(f.Message, "description") {
+		t.Errorf("unexpected failed operation %+v", f)
+	}
+}
+
+func TestEvaluate_UndecodableEntryFailsOnlyItsOperation(t *testing.T) {
+	// timeout "30" is valid CUE but not a duration: the entry cannot be
+	// decoded, and must fail its operation instead of disappearing.
+	out := evaluateEmbedded(t, `{"paths":{
+		"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}},
+		"/b":{"get":{"operationId":"getB","timeout":"30","responses":{"200":{"description":"OK"}}}}}}`)
+
+	if len(out.Entries) != 1 || out.Entries[0].Endpoint != "/a" {
+		t.Fatalf("expected only the /a entry, got %+v", out.Entries)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getB" ||
+		!strings.Contains(out.Failed[0].Message, "missing unit in duration") {
+		t.Errorf("expected getB failed with the duration error, got %+v", out.Failed)
+	}
+}
+
+func TestEvaluate_ErrorOutsideEntriesFailsEvaluation(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	_, err = NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(`{"paths":{"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}}}}`),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		CustomDefs:  map[string]string{"custom.cue": `_defaultTimeout: "5s"`},
+		ServiceName: "_spec",
+	})
+	if err == nil || !strings.Contains(err.Error(), "_defaultTimeout") {
+		t.Errorf("expected a whole-evaluation error naming _defaultTimeout, got %v", err)
+	}
+}
+
+func TestEvaluate_OverrideOnFailedOperationIsHeldNotUnmatched(t *testing.T) {
+	out := evaluateEmbedded(t, `{"paths":{"/b":{"get":{"operationId":"getB","responses":{"200":{}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "getB"})
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("expected no unmatched overrides for a failed target, got %v", out.UnmatchedOverrides)
+	}
+}
+
+func TestEvaluate_FailedOperationCollidingAfterPrefixStripKeepsItsOperationID(t *testing.T) {
+	// /v1/x fails CUE and strips to /x, the route of getX. The failure keeps
+	// its own operationId, so an override on it is held with it, not reported
+	// as an operationId the spec lacks.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(`{"paths":{` +
+			`"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"OK"}}}},` +
+			`"/v1/x":{"get":{"operationId":"getXv1","responses":{"200":{}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		ServiceName:  "_spec",
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+		Overrides:    []v1alpha1.OperationOverride{{OperationID: "getXv1"}},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getXv1" || out.Failed[0].Path != "/x" {
+		t.Errorf("expected getXv1 failed at /x, got %+v", out.Failed)
+	}
+	if len(out.UnmatchedOverrides) != 0 || len(out.AmbiguousOverrides) != 0 {
+		t.Errorf("expected the override held with its operation, got unmatched %v, ambiguous %v",
+			out.UnmatchedOverrides, out.AmbiguousOverrides)
+	}
+}
+
+func TestEvaluate_FailedOperationCarriesTransformedPath(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:     []byte(`{"paths":{"/b":{"get":{"operationId":"getB","responses":{"200":{}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		URLTransform: &v1alpha1.URLTransformSpec{AddPathPrefix: "/svc"},
+		ServiceName:  "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].Path != "/svc/b" {
+		t.Errorf("expected the failed operation at /svc/b, got %+v", out.Failed)
+	}
+}
+
+func TestEvaluate_FailedOperationsAreSortedByTransformedPath(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	// Stripping /z reorders the paths: /z/a becomes /a and sorts before /b.
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(`{"paths":{
+			"/b":{"get":{"operationId":"getB","responses":{"200":{}}}},
+			"/z/a":{"get":{"operationId":"getA","responses":{"200":{}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/z"},
+		ServiceName:  "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Failed) != 2 || out.Failed[0].Path != "/a" || out.Failed[1].Path != "/b" {
+		t.Errorf("expected failed operations sorted /a, /b, got %+v", out.Failed)
+	}
+}
+
+func TestEvaluate_FailedMessageIsStableAcrossRuns(t *testing.T) {
+	// The message lands in status, so a different text on each pass would
+	// rewrite it forever. CUE reports a conflict in the order its operands
+	// were unified, which follows the order the definition files load in.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	messages := map[string]bool{}
+	for range 100 {
+		out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+			SpecData:    []byte(`{"paths":{"/b":{"get":{"operationId":"getB","responses":{"200":{"description":"OK"}}}}}}`),
+			SpecFormat:  v1alpha1.SpecFormatJSON,
+			DefaultDefs: defs,
+			CustomDefs: map[string]string{
+				"a.cue": `endpoint: "/b:GET": timeout: "1s"`,
+				"b.cue": `endpoint: "/b:GET": timeout: "2s"`,
+				"c.cue": `endpoint: "/b:GET": timeout: "3s"`,
+			},
+			ServiceName: "_spec",
+		})
+		if err != nil {
+			t.Fatalf("evaluate: %v", err)
+		}
+		if len(out.Failed) != 1 {
+			t.Fatalf("expected 1 failed operation, got %+v", out.Failed)
+		}
+		messages[out.Failed[0].Message] = true
+	}
+	if len(messages) != 1 {
+		t.Errorf("expected one message across runs, got %d: %v", len(messages), messages)
+	}
+}
+
+// evaluateWithCustomDefs evaluates specJSON against the embedded default
+// definitions plus custom definition files.
+func evaluateWithCustomDefs(specJSON string, custom map[string]string) (*CUEOutput, error) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		return nil, err
+	}
+	return NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(specJSON),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		CustomDefs:  custom,
+		ServiceName: "_spec",
+	})
+}
+
+const twoOperationSpec = `{"paths":{
+	"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}},
+	"/b":{"get":{"operationId":"getB","responses":{"200":{"description":"OK"}}}}}}`
+
+func TestEvaluate_ErrorUnderEndpointPatternFailsEvaluation(t *testing.T) {
+	// A typo in a pattern constraint reaches every entry, and no one entry
+	// owns the error: dropping it would publish every endpoint without the
+	// validator.
+	_, err := evaluateWithCustomDefs(twoOperationSpec, map[string]string{
+		"custom.cue": `_authCfg: {x: 1}
+endpoint: [string]: extraConfig: "auth/validator": _authCgf`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "_authCgf") {
+		t.Errorf("expected a whole-evaluation error naming _authCgf, got %v", err)
+	}
+}
+
+func TestEvaluate_RootErrorOnEntryFailsThatEntry(t *testing.T) {
+	// The reference is unresolved, which only the root validation reports:
+	// the entry alone decodes, with the default timeout.
+	out, err := evaluateWithCustomDefs(twoOperationSpec, map[string]string{
+		"custom.cue": `endpoint: "/b:GET": timeout: _overrides["getb"].t`,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 || out.Entries[0].Endpoint != "/a" {
+		t.Fatalf("expected only the /a entry, got %+v", out.Entries)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getB" ||
+		!strings.Contains(out.Failed[0].Message, `reference "_overrides" not found`) {
+		t.Errorf("expected getB failed with the root error, got %+v", out.Failed)
+	}
+}
+
+func TestEvaluate_ConflictInHiddenLabelUnderEndpointFailsEvaluation(t *testing.T) {
+	// The entry falls back to its default through a disjunction, so it
+	// decodes, while the conflict in the hidden label belongs to no entry.
+	_, err := evaluateWithCustomDefs(twoOperationSpec, map[string]string{
+		"a.cue": `endpoint: _h: t: "1s"`,
+		"b.cue": `endpoint: _h: t: "2s"`,
+		"c.cue": `endpoint: "/b:GET": timeout: *endpoint._h.t | "3s"`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "_h") {
+		t.Errorf("expected a whole-evaluation error naming _h, got %v", err)
+	}
+}
+
+func TestEvaluate_OverrideRemapsAFailedOperation(t *testing.T) {
+	// A HEAD operation that fails CUE and an override that remaps it to GET
+	// /v2/users: the failure belongs to the route the override gives it.
+	out := evaluateEmbedded(t, `{"paths":{"/legacy/users":{"head":{"operationId":"headUsers","responses":{"200":{}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "headUsers", Endpoint: "/v2/users", Method: "GET"})
+
+	if len(out.Failed) != 1 || out.Failed[0].Method != "GET" || out.Failed[0].Path != "/v2/users" {
+		t.Errorf("expected the failure at GET /v2/users, got %+v", out.Failed)
+	}
+}
+
+func TestEvaluate_FailedOperationWithUnsupportedMethodIsSkipped(t *testing.T) {
+	// A HEAD operation can never publish, so its CUE failure must not hold
+	// anything back: it is skipped like any other unsupported method.
+	out := evaluateEmbedded(t, `{"paths":{"/legacy/users":{"head":{"operationId":"headUsers","responses":{"200":{}}}}}}`)
+
+	if len(out.Failed) != 0 {
+		t.Errorf("expected no failed operation, got %+v", out.Failed)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0].Method != "HEAD" || out.Skipped[0].OperationID != "headUsers" ||
+		out.Skipped[0].Reason != v1alpha1.ReasonUnsupportedMethod {
+		t.Errorf("expected headUsers skipped as UnsupportedMethod, got %+v", out.Skipped)
+	}
+}
+
+func TestEvaluate_FailedOperationWithUnknownMethodStaysFailed(t *testing.T) {
+	// A conflicting method leaves the entry's method unknown. The operation
+	// is not known to be unsupported, so it must keep failing the sync
+	// rather than be skipped and let its endpoint be deleted as stale.
+	out, err := evaluateWithCustomDefs(`{"paths":{}}`, map[string]string{
+		"a.cue": `endpoint: getUser: {
+	endpoint: "/users/{id}"
+	method: "GET"
+	backends: [{host: ["http://x"], urlPattern: "/users/{id}", method: "GET"}]
+	_operationId: "getUser"
+}`,
+		"b.cue": `endpoint: getUser: method: "POST"`,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Skipped) != 0 {
+		t.Errorf("expected nothing skipped, got %+v", out.Skipped)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getUser" {
+		t.Errorf("expected getUser failed, got %+v", out.Failed)
+	}
+}
+
+func TestEvaluate_FailedOperationWithLabelMethodStaysFailed(t *testing.T) {
+	// The label suffix HEAD is not a method the entry declares: its method
+	// is not concrete, so the failure must not be skipped.
+	out, err := evaluateWithCustomDefs(`{"paths":{}}`, map[string]string{
+		"a.cue": `endpoint: "users:HEAD": {
+	endpoint: "/users"
+	method: string
+	_operationId: "listUsers"
+}`,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Skipped) != 0 || len(out.Failed) != 1 || out.Failed[0].OperationID != "listUsers" {
+		t.Errorf("expected listUsers failed and nothing skipped, got failed %+v skipped %+v", out.Failed, out.Skipped)
+	}
+}
+
+func TestEvaluate_EntryOperationIDsStayInStepWithEntries(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	spec := `{"paths": {
+		"/a": {"get": {"operationId": "getA", "responses": {"200": {"description": "OK"}}}},
+		"/b": {"head": {"operationId": "headB", "responses": {"200": {"description": "OK"}}}},
+		"/c": {"get": {"operationId": "getC", "responses": {"200": {"description": "OK"}}}}}}`
+
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+		DefaultHost: "http://svc:8080",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if len(out.Entries) != 2 || len(out.entryOperationIDs) != 2 {
+		t.Fatalf("entries = %d, entryOperationIDs = %v, want 2 of each", len(out.Entries), out.entryOperationIDs)
+	}
+	for i, e := range out.Entries {
+		if got, want := out.entryOperationIDs[i], out.OperationIDs[e.Endpoint+":"+e.Method]; got != want {
+			t.Errorf("entry %s has entryOperationIDs[%d] = %q, want %q", e.Endpoint, i, got, want)
+		}
 	}
 }

@@ -18,7 +18,9 @@ package autoconfig
 
 import (
 	"context"
-	"encoding/json"
+	"maps"
+	"reflect"
+	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -132,11 +134,64 @@ func TestGenerator_DuplicateOperationID(t *testing.T) {
 	if len(out.Endpoints) != 1 {
 		t.Errorf("expected 1 endpoint (duplicate skipped), got %d", len(out.Endpoints))
 	}
-	if out.SkippedOperations != 1 {
-		t.Errorf("expected 1 skipped, got %d", out.SkippedOperations)
+	want := []OperationIssue{{
+		Operation: Operation{Method: "GET", Path: "/v2/users", OperationID: "listUsers"},
+		Reason:    v1alpha1.ReasonDuplicateOperationId,
+		Message:   `operationId "listUsers" is already used by GET /v1/users`,
+	}}
+	if !reflect.DeepEqual(out.Skipped, want) {
+		t.Errorf("Skipped = %+v, want %+v", out.Skipped, want)
 	}
-	if len(out.Duplicates) != 1 || out.Duplicates[0] != "listUsers" {
-		t.Errorf("expected duplicate listUsers, got %v", out.Duplicates)
+}
+
+func TestGenerator_SkipsEntriesThatShareARouteOrAName(t *testing.T) {
+	backends := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	tests := []struct {
+		name    string
+		entries []v1alpha1.EndpointEntry
+		opIDs   map[string]string
+		want    OperationIssue
+	}{
+		{
+			name: "same path and method",
+			entries: []v1alpha1.EndpointEntry{
+				{Endpoint: "/v1/users", Method: "GET", Backends: backends},
+				{Endpoint: "/v1/users", Method: "GET", Backends: backends},
+			},
+			want: OperationIssue{
+				Operation: Operation{Method: "GET", Path: "/v1/users"},
+				Reason:    v1alpha1.ReasonDuplicateOperationId,
+				Message:   "same path and method as GET /v1/users",
+			},
+		},
+		{
+			name: "same endpoint name",
+			entries: []v1alpha1.EndpointEntry{
+				{Endpoint: "/a", Method: "GET", Backends: backends},
+				{Endpoint: "/b", Method: "GET", Backends: backends},
+			},
+			opIDs: map[string]string{"/a:GET": "getUser", "/b:GET": "GETUSER"},
+			want: OperationIssue{
+				Operation: Operation{Method: "GET", Path: "/b", OperationID: "GETUSER"},
+				Reason:    v1alpha1.ReasonDuplicateOperationId,
+				Message:   `endpoint name "ac-getuser" is already used by GET /a`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"}}
+			out, err := NewGenerator().Generate(context.Background(), GenerateInput{
+				AutoConfig: ac, Entries: tt.entries, OperationIDs: tt.opIDs,
+				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(out.Endpoints) != 1 || !reflect.DeepEqual(out.Skipped, []OperationIssue{tt.want}) {
+				t.Errorf("endpoints = %d, Skipped = %+v, want 1 and %+v", len(out.Endpoints), out.Skipped, tt.want)
+			}
+		})
 	}
 }
 
@@ -160,8 +215,8 @@ func TestGenerator_MultipleEntries(t *testing.T) {
 	if len(out.Endpoints) != 5 {
 		t.Errorf("expected 5 endpoints, got %d", len(out.Endpoints))
 	}
-	if out.SkippedOperations != 0 {
-		t.Errorf("expected 0 skipped, got %d", out.SkippedOperations)
+	if len(out.Skipped) != 0 {
+		t.Errorf("expected nothing skipped, got %+v", out.Skipped)
 	}
 }
 
@@ -175,8 +230,8 @@ func TestSanitizeName(t *testing.T) {
 		{"---trim---", "trim"},
 	}
 	for _, tt := range tests {
-		if got := sanitizeName(tt.input); got != tt.expected {
-			t.Errorf("sanitizeName(%q) = %q, want %q", tt.input, got, tt.expected)
+		if got := SanitizeName(tt.input); got != tt.expected {
+			t.Errorf("SanitizeName(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }
@@ -196,37 +251,38 @@ func TestSanitizePath(t *testing.T) {
 	}
 }
 
-func TestGenerator_ComponentSchemasAttached(t *testing.T) {
-	g := NewGenerator()
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
-	}
-	entries := []v1alpha1.EndpointEntry{
-		{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
-		{Endpoint: "/api/orders", Method: "POST", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/orders"}}},
-	}
-	schemas := map[string]runtime.RawExtension{
-		"user":  {Raw: json.RawMessage(`{"type":"object"}`)},
-		"order": {Raw: json.RawMessage(`{"type":"object"}`)},
-	}
-
-	out, err := g.Generate(context.Background(), GenerateInput{
-		AutoConfig:       ac,
-		Entries:          entries,
-		OperationIDs:     map[string]string{"/api/users:GET": "listUsers", "/api/orders:POST": "createOrder"},
+func TestGenerator_AttachesEachEndpointsSchemaClosure(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"}}
+	out, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig: ac,
+		Entries: []v1alpha1.EndpointEntry{
+			docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`),
+			docEntry("/errors", `{"response_definition":{"500":{"ref":"Error"},"404":{"ref":"Ghost"}}}`),
+			{Endpoint: "/health", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}}}},
+		},
+		OperationIDs:     map[string]string{"/pets:GET": "getPets", "/errors:GET": "getErrors", "/health:GET": "health"},
 		GatewayRef:       v1alpha1.GatewayRef{Name: "gw"},
-		ComponentSchemas: schemas,
+		ComponentSchemas: petSchemas(),
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("generate: %v", err)
+	}
+	if len(out.Endpoints) != 3 {
+		t.Fatalf("generated %d endpoints, want 3", len(out.Endpoints))
+	}
+	want := map[string][]string{
+		"ac-getpets":   {"Address", "Owner", "Pet"},
+		"ac-geterrors": {"Error"},
+		"ac-health":    nil,
 	}
 	for _, ep := range out.Endpoints {
-		if len(ep.Spec.ComponentSchemas) != 2 {
-			t.Errorf("endpoint %s: expected 2 component schemas, got %d", ep.Name, len(ep.Spec.ComponentSchemas))
+		if got := slices.Sorted(maps.Keys(ep.Spec.ComponentSchemas)); !slices.Equal(got, want[ep.Name]) {
+			t.Errorf("%s: component schemas %v, want %v", ep.Name, got, want[ep.Name])
 		}
-		if _, ok := ep.Spec.ComponentSchemas["user"]; !ok {
-			t.Errorf("endpoint %s: missing 'user' schema", ep.Name)
-		}
+	}
+	wantWarnings := []string{`schema reference "Ghost" (first used by GET /errors) is not defined in components/schemas`}
+	if !slices.Equal(out.Warnings, wantWarnings) {
+		t.Errorf("Warnings = %q, want %q", out.Warnings, wantWarnings)
 	}
 }
 
@@ -250,5 +306,50 @@ func TestGenerator_NilComponentSchemas(t *testing.T) {
 	}
 	if out.Endpoints[0].Spec.ComponentSchemas != nil {
 		t.Error("expected nil ComponentSchemas when none provided")
+	}
+}
+
+// generatePets generates the /pets, /errors and /health endpoints from
+// components.
+func generatePets(t *testing.T, components map[string]runtime.RawExtension) *GenerateOutput {
+	t.Helper()
+	ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"}}
+	out, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig: ac,
+		Entries: []v1alpha1.EndpointEntry{
+			docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`),
+			docEntry("/errors", `{"response_definition":{"500":{"ref":"Error"}}}`),
+		},
+		OperationIDs:     map[string]string{"/pets:GET": "getPets", "/errors:GET": "getErrors"},
+		GatewayRef:       v1alpha1.GatewayRef{Name: "gw"},
+		ComponentSchemas: components,
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	return out
+}
+
+func TestGenerator_SchemaClosureIsStableAcrossPasses(t *testing.T) {
+	first := generatePets(t, petSchemas())
+	second := generatePets(t, petSchemas())
+
+	if !reflect.DeepEqual(first.Endpoints, second.Endpoints) {
+		t.Error("an unchanged spec generated different endpoints on the second pass")
+	}
+}
+
+func TestGenerator_SchemaEditRewritesOnlyEndpointsThatReferenceIt(t *testing.T) {
+	before := generatePets(t, petSchemas())
+	edited := petSchemas()
+	edited["Address"] = runtime.RawExtension{Raw: []byte(`{"type":"object","description":"edited"}`)}
+	after := generatePets(t, edited)
+
+	changed := map[string]bool{}
+	for i, ep := range after.Endpoints {
+		changed[ep.Name] = !reflect.DeepEqual(before.Endpoints[i], ep)
+	}
+	if want := map[string]bool{"ac-getpets": true, "ac-geterrors": false}; !reflect.DeepEqual(changed, want) {
+		t.Errorf("changed endpoints = %v, want %v", changed, want)
 	}
 }

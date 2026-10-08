@@ -31,6 +31,8 @@ const (
 	EditionEE Edition = "EE"
 )
 
+// GatewayPhase is derived from the Ready condition. Rendering and Validating are no
+// longer written; they stay in the enum so previously stored values keep validating.
 // +kubebuilder:validation:Enum=Pending;Rendering;Validating;Deploying;Running;Degraded;Error
 type GatewayPhase string
 
@@ -45,6 +47,11 @@ const (
 )
 
 // KrakenDGatewaySpec defines the desired state of KrakenDGateway.
+// +kubebuilder:validation:XValidation:rule="self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || (has(self.license.secretRef) && size(self.license.secretRef.name) > 0)))",message="edition EE requires license.externalSecret.enabled or a license.secretRef with a non-empty name",fieldPath=".license"
+// +kubebuilder:validation:XValidation:rule="self.edition != 'CE' || !has(self.license) || !((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || has(self.license.secretRef))",message="CE edition does not require license configuration",fieldPath=".license"
+// +kubebuilder:validation:XValidation:rule="!has(self.license) || !(has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled && has(self.license.secretRef))",message="externalSecret and secretRef are mutually exclusive",fieldPath=".license"
+// +kubebuilder:validation:XValidation:rule="!has(self.openapi) || !self.openapi.enabled || ((has(self.openapi.port) && self.openapi.port > 0) ? self.openapi.port : 8090) != ((has(self.config.port) && self.config.port > 0) ? self.config.port : 8080)",message="openapi port must differ from the gateway listen port",fieldPath=".openapi.port"
+// +kubebuilder:validation:XValidation:rule="!(self.edition == 'EE' && has(self.dragonfly) && has(self.dragonfly.authentication) && has(self.dragonfly.authentication.passwordFromSecret)) || (oldSelf.hasValue() && oldSelf.value().edition == 'EE' && has(oldSelf.value().dragonfly) && has(oldSelf.value().dragonfly.authentication) && has(oldSelf.value().dragonfly.authentication.passwordFromSecret) && oldSelf.value().dragonfly.authentication.passwordFromSecret == self.dragonfly.authentication.passwordFromSecret)",optionalOldSelf=true,message="dragonfly.authentication.passwordFromSecret is not supported yet with edition EE: the operator renders KrakenD's redis pool without the password, so KrakenD could not authenticate",fieldPath=".dragonfly.authentication.passwordFromSecret"
 type KrakenDGatewaySpec struct {
 	// Version is the KrakenD version to deploy (e.g. "2.13").
 	Version string `json:"version"`
@@ -93,6 +100,9 @@ type KrakenDGatewaySpec struct {
 	// rendered KrakenD configuration and a sidecar container serves it
 	// on an additional container port. The port is exposed on the gateway
 	// Service but is NOT added to the Istio VirtualService (local traffic only).
+	// The export needs the Enterprise binary: no export, sidecar or Service
+	// port is created for a CE gateway, or while an EE gateway serves its CE
+	// fallback.
 	OpenAPI *OpenAPIExportSpec `json:"openapi,omitempty"`
 
 	// PostRestartJob configures a Kubernetes Job that runs a user-provided
@@ -178,6 +188,7 @@ type OpenAPIExportSpec struct {
 // PostRestartJobSpec configures a Kubernetes Job that runs a user-provided
 // bash script once per unique config + postRestartJob-spec revision (see
 // internal/resources.PostRestartJobChecksum).
+// +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.script) && size(self.script) > 0)",message="script is required when postRestartJob is enabled",fieldPath=".script"
 type PostRestartJobSpec struct {
 	// Enabled toggles post-restart Job creation.
 	Enabled bool `json:"enabled"`
@@ -275,8 +286,13 @@ type PostRestartJobSpec struct {
 	// script-level failure. A value of "0" means no cap (an emptyDir
 	// SizeLimit of zero is treated by the kubelet as unbounded — it only
 	// enforces a limit for positive quantities); a negative value is
-	// rejected by the validating webhook.
+	// rejected by the validating webhook. The suffix is a binary (Ki..Ei) or
+	// decimal (n..E) SI suffix, or an e/E exponent of at most two digits:
+	// larger exponents are refused before they are parsed.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="type(self) == int || (size(self) <= 64 && self.matches('^([+]|-)?(([0-9]+([.][0-9]*)?)|([.][0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE]([+]|-)?[0-9]{1,2}))?$') && isQuantity(self))",message="must be a quantity of at most 64 characters that Kubernetes can decode"
+	// +kubebuilder:validation:XIntOrString
+	// +kubebuilder:validation:Pattern=`^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?[0-9]{1,2}))?$`
 	TmpSizeLimit *resource.Quantity `json:"tmpSizeLimit,omitempty"`
 }
 
@@ -286,6 +302,8 @@ type GatewayConfig struct {
 	Name string `json:"name,omitempty"`
 
 	// Port is the KrakenD listen port (default 8080).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port,omitempty"`
 
 	// ListenIP is the bind address (default "0.0.0.0").
@@ -295,15 +313,25 @@ type GatewayConfig struct {
 	Host []string `json:"host,omitempty"`
 
 	// Timeout is the global request timeout (e.g. "3s").
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[0-9]+(ns|ms|us|µs|s|m|h)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	Timeout string `json:"timeout,omitempty"`
 
 	// CacheTTL is the global cache TTL (e.g. "0s").
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[0-9]+(ns|ms|us|µs|s|m|h)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	CacheTTL string `json:"cacheTTL,omitempty"`
 
-	// OutputEncoding selects the default response encoding: json, negotiate, no-op.
+	// OutputEncoding selects the default response encoding.
+	// +kubebuilder:validation:Enum=json;fast-json;json-collection;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// DNSCacheTTL is the DNS lookup cache duration (e.g. "30s").
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[0-9]+(ns|ms|us|µs|s|m|h)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	DNSCacheTTL string `json:"dnsCacheTTL,omitempty"`
 
 	// EchoEndpoint enables the /__echo/ endpoint for debugging.
@@ -341,8 +369,9 @@ type CORSConfig struct {
 	AllowHeaders     []string `json:"allowHeaders,omitempty"`
 	ExposeHeaders    []string `json:"exposeHeaders,omitempty"`
 	AllowCredentials bool     `json:"allowCredentials,omitempty"`
-	MaxAge           string   `json:"maxAge,omitempty"`
-	Debug            bool     `json:"debug,omitempty"`
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	MaxAge string `json:"maxAge,omitempty"`
+	Debug  bool   `json:"debug,omitempty"`
 }
 
 // SecurityConfig configures HTTP security headers.
@@ -367,7 +396,8 @@ type LoggingConfig struct {
 
 // RouterConfig configures KrakenD router behavior.
 type RouterConfig struct {
-	ReturnErrorMsg               bool     `json:"returnErrorMsg,omitempty"`
+	ReturnErrorMsg bool `json:"returnErrorMsg,omitempty"`
+	// +kubebuilder:validation:Pattern=`^/`
 	HealthPath                   string   `json:"healthPath,omitempty"`
 	AutoOptions                  bool     `json:"autoOptions,omitempty"`
 	DisableAccessLog             bool     `json:"disableAccessLog,omitempty"`
@@ -573,14 +603,23 @@ type RedisSpec struct {
 
 // RedisConnectionPool holds Redis connection pool parameters.
 type RedisConnectionPool struct {
-	Addresses    []string                  `json:"addresses"`
+	Addresses []string `json:"addresses"`
+	// Password is not rendered yet; setting or changing it is rejected.
+	// +kubebuilder:validation:XValidation:rule="false",message="password is not supported yet: the operator has never rendered it, so KrakenD would connect without it"
 	Password     *corev1.SecretKeySelector `json:"password,omitempty"`
 	PoolSize     int                       `json:"poolSize,omitempty"`
 	MinIdleConns int                       `json:"minIdleConns,omitempty"`
-	DialTimeout  string                    `json:"dialTimeout,omitempty"`
-	ReadTimeout  string                    `json:"readTimeout,omitempty"`
-	WriteTimeout string                    `json:"writeTimeout,omitempty"`
-	TLS          *RedisTLSConfig           `json:"tls,omitempty"`
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[0-9]+(ns|ms|us|µs|s|m|h)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	DialTimeout string `json:"dialTimeout,omitempty"`
+	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
+	ReadTimeout string `json:"readTimeout,omitempty"`
+	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
+	WriteTimeout string `json:"writeTimeout,omitempty"`
+	// TLS is not rendered yet; setting or changing it is rejected.
+	// +kubebuilder:validation:XValidation:rule="false",message="tls is not supported yet: the operator has never rendered it, so KrakenD would connect without it"
+	TLS *RedisTLSConfig `json:"tls,omitempty"`
 }
 
 // RedisTLSConfig configures TLS for Redis connections.
@@ -601,7 +640,9 @@ type IstioSpec struct {
 }
 
 // PluginsSpec configures KrakenD plugin sources.
+// +kubebuilder:validation:XValidation:rule="self.sources.filter(s, has(s.persistentVolumeClaimRef)).size() <= 1",message="only one PVC plugin source is supported",fieldPath=".sources"
 type PluginsSpec struct {
+	// +kubebuilder:validation:MaxItems=32
 	Sources []PluginSource `json:"sources"`
 }
 
@@ -621,17 +662,27 @@ type OCIImageRef struct {
 
 // KrakenDGatewayStatus defines the observed state of KrakenDGateway.
 type KrakenDGatewayStatus struct {
-	Phase              GatewayPhase       `json:"phase,omitempty"`
-	ConfigChecksum     string             `json:"configChecksum,omitempty"`
-	PluginChecksum     string             `json:"pluginChecksum,omitempty"`
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
-	Replicas           int32              `json:"replicas,omitempty"`
-	ReadyReplicas      int32              `json:"readyReplicas,omitempty"`
-	LicenseExpiry      *metav1.Time       `json:"licenseExpiry,omitempty"`
-	ActiveImage        string             `json:"activeImage,omitempty"`
-	EndpointCount      int32              `json:"endpointCount,omitempty"`
-	DragonflyAddress   string             `json:"dragonflyAddress,omitempty"`
+	// Phase is derived from the Ready condition on every reconcile and kept
+	// for compatibility; read the Ready condition instead.
+	Phase          GatewayPhase `json:"phase,omitempty"`
+	ConfigChecksum string       `json:"configChecksum,omitempty"`
+	// ConfigEdition is the edition configChecksum was validated for and is
+	// deployed with: EE, or CE for a CE gateway or an EE gateway in license
+	// fallback. The Deployment's image follows it.
+	// +optional
+	ConfigEdition      Edition `json:"configEdition,omitempty"`
+	PluginChecksum     string  `json:"pluginChecksum,omitempty"`
+	ObservedGeneration int64   `json:"observedGeneration,omitempty"`
+	// Conditions are keyed by type. Ready is the summary condition.
+	// +listType=map
+	// +listMapKey=type
+	Conditions       []metav1.Condition `json:"conditions,omitempty"`
+	Replicas         int32              `json:"replicas,omitempty"`
+	ReadyReplicas    int32              `json:"readyReplicas,omitempty"`
+	LicenseExpiry    *metav1.Time       `json:"licenseExpiry,omitempty"`
+	ActiveImage      string             `json:"activeImage,omitempty"`
+	EndpointCount    int32              `json:"endpointCount,omitempty"`
+	DragonflyAddress string             `json:"dragonflyAddress,omitempty"`
 	// LastPostRestartJobChecksum records the combined (config +
 	// postRestartJob-spec) checksum for which the most recent post-restart
 	// Job was created (see internal/resources.PostRestartJobChecksum). Used
@@ -649,10 +700,14 @@ type KrakenDGatewayStatus struct {
 // +kubebuilder:resource:shortName=kgw
 // +kubebuilder:printcolumn:name="Edition",type=string,JSONPath=`.spec.edition`
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.version`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDGateway is the Schema for the krakendgateways API.
+// KrakenDGateway declares a KrakenD API gateway. The operator creates and keeps
+// its Deployment, Service and rendered configuration in sync with the gateway
+// and its endpoints.
 type KrakenDGateway struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

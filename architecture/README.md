@@ -42,7 +42,7 @@
 - Monitor EE license expiry and proactively alert or fall back to CE before processes shut down
 - Mount custom KrakenD plugins (`.so` files) via Kubernetes volumes without requiring custom image builds
 - Automatically generate KrakenDEndpoint CRDs from OpenAPI (Swagger) specifications via the `KrakenDAutoConfig` CRD
-- Validate generated KrakenD configurations before deployment (`krakend check -tlc`)
+- Validate generated KrakenD configurations before deployment (`krakend check -t -n -c`)
 
 ### Non-Goals
 
@@ -173,10 +173,10 @@ spec:
   edition: EE                          # CE or EE
   version: "2.13"                      # KrakenD version tag
   image: ""                            # Override: full image reference (ignores edition/version for image selection only; `edition` still controls config rendering)
-  ceImage: ""                          # CE fallback image override (default: krakend/krakend:{version}); used when fallbackToCE=true and the operator switches from EE to CE
-  replicas: 3                          # omitted from Deployment when autoscaling.enabled=true (HPA owns scaling)
+  ceImage: ""                          # CE fallback image override (default: krakend:{version}); used when fallbackToCE=true and the operator switches from EE to CE
+  replicas: 3                          # ignored when autoscaling is set; a new Deployment starts at minReplicas and the HPA owns the count
+  # Omit the autoscaling block to disable autoscaling (there is no `enabled` field).
   autoscaling:
-    enabled: false
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
@@ -286,10 +286,11 @@ spec:
             storage: "10Gi"
         # storageClassName: ""         # default storage class
     args: []                           # additional Dragonfly server flags
-    authentication:
-      passwordFromSecret:
-        name: dragonfly-auth
-        key: password
+    # authentication is rejected on EE gateways, because the operator does not render the password into KrakenD's pool:
+    # authentication:
+    #   passwordFromSecret:
+    #     name: dragonfly-auth
+    #     key: password
     # --- OR skip CR creation (use external Redis/Dragonfly via redis.connectionPool) ---
     # enabled: false
 
@@ -297,18 +298,18 @@ spec:
   redis:
     connectionPool:
       addresses: []                    # user-set for external Redis only; when dragonfly.enabled=true, operator derives address internally — leave empty
-      password:                          # only used when dragonfly.enabled=false (external Redis/Dragonfly)
-        secretRef:
-          name: ""
-          key: ""
+      # password and tls are rejected when set or changed, because the operator has never rendered them:
+      # password:
+      #   name: ""
+      #   key: ""
       poolSize: 50
       minIdleConns: 10
       dialTimeout: "5s"
-      readTimeout: "3s"
-      writeTimeout: "3s"
-      tls:                             # only used when dragonfly.enabled=false (external Redis/Dragonfly)
-        enabled: false
-        secretName: ""               # Opaque Secret containing ca.crt, tls.crt, tls.key (cert-manager adds ca.crt automatically; create manually if not using cert-manager)
+      readTimeout: "3s"                # deprecated: no effect, KrakenD's redis pools have no such setting
+      writeTimeout: "3s"               # deprecated: no effect, KrakenD's redis pools have no such setting
+      # tls:
+      #   enabled: false
+      #   secretName: ""               # Opaque Secret containing ca.crt, tls.crt, tls.key (cert-manager adds ca.crt automatically; create manually if not using cert-manager)
 
   # --- Istio Integration ---
   istio:
@@ -341,17 +342,23 @@ spec:
     fallbackToCE: true                 # switch to CE image on license expiry
 
 status:
-  phase: Running                       # Pending, Rendering, Validating, Deploying, Running, Degraded, Error
+  phase: Running                       # derived from Ready: Pending, Deploying, Running, Degraded, Error
   configChecksum: "sha256:abc123..."
+  configEdition: EE                    # the edition configChecksum was validated for
   observedGeneration: 5
   replicas: 3
   readyReplicas: 3
   conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-04-03T10:00:15Z"
+      reason: Ready
+      message: "Configuration applied and all replicas available"
     - type: ConfigValid
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: ValidationPassed
-      message: "krakend check -tlc passed"
+      reason: ConfigApplied
+      message: "Configuration passed validation and is applied"
     - type: Available
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:05Z"
@@ -365,8 +372,8 @@ status:
     - type: DragonflyReady
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:10Z"
-      reason: DragonflyPhaseReady
-      message: "Dragonfly CR reports ready phase"
+      reason: DragonflyReady
+      message: "Dragonfly instance is ready"
     - type: IstioConfigured
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:02Z"
@@ -375,18 +382,8 @@ status:
     - type: Progressing
       status: "False"
       lastTransitionTime: "2026-04-03T10:00:15Z"
-      reason: DeploymentComplete
-      message: "Rolling update completed"
-    - type: LicenseDegraded
-      status: "False"
-      lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: EEActive
-      message: "Running with EE license"
-    - type: LicenseExpired
-      status: "False"
-      lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: EEActive
-      message: "License is not expired"
+      reason: RolloutComplete
+      message: "Deployment rollout completed successfully"
     - type: LicenseSecretUnavailable
       status: "False"
       lastTransitionTime: "2026-04-03T09:59:55Z"
@@ -397,6 +394,14 @@ status:
   endpointCount: 42
   dragonflyAddress: "production-gateway-dragonfly.api-gateway.svc.cluster.local:6379"
 ```
+
+**Schema rules.** The CRD enforces what the object alone decides, as it does for KrakenDEndpoint, so the API server rejects a violation before any webhook runs:
+
+- `config.timeout`, `cacheTTL`, `dnsCacheTTL`, `cors.maxAge` and `redis.connectionPool.dialTimeout` are KrakenD durations (one integer and one unit). `timeout`, `cacheTTL`, `dnsCacheTTL` and `dialTimeout` also carry a CEL duration-parse rule and `MaxLength` 64, because the pattern admits values such as `99999999999h` that KrakenD rejects. `postRestartJob.tmpSizeLimit` carries `isQuantity` and a 64-character bound, because the quantity pattern admits values such as `1e99999999999999999999` that Go's quantity decode rejects. A strict pattern (a decimal or binary SI suffix, or an `e`/`E` exponent of at most two digits) is checked first, so `isQuantity` never parses a pathological exponent such as `1e2147483648`, which takes seconds. `config.port` is 1-65535, `config.outputEncoding` an enum of KrakenD 2.13's values, and `router.healthPath` starts with `/`.
+- CEL rules on the spec: an Enterprise gateway needs `license.externalSecret.enabled` or a `license.secretRef` with a non-empty name, a Community gateway has neither, the two sources are mutually exclusive, and the OpenAPI port differs from the listen port (defaults 8090 and 8080). At most one plugin source uses a PVC, and `plugins.sources` holds at most 32 items, which also bounds the rule's cost. An enabled `postRestartJob` needs a script.
+- `redis.connectionPool.password` and `.tls` are rejected when set or changed, because the operator has never rendered them. `dragonfly.authentication.passwordFromSecret` is rejected on an Enterprise gateway for the same reason. The Dragonfly rule reads `edition`, so it uses `optionalOldSelf` to admit an update whose stored object already had the same password on an Enterprise gateway (a changed password is rejected); the field-level rules rely on native ratcheting.
+
+The webhook keeps what needs the default-image context or quantity arithmetic: the probe rules, the runAs ratchets, the `tmpSizeLimit` sign check and the warnings.
 
 ### 3.2 KrakenDEndpoint
 
@@ -489,21 +494,47 @@ spec:
             name: standard-backend-policy
 
 status:
-  phase: Active                        # Pending, Active, Invalid, Conflicted, Detached
+  phase: Active                        # derived from Ready: Pending, Active, Invalid, Conflicted, Detached
   observedGeneration: 3
   endpointCount: 2
+  methods: GET,POST
   conditions:
-    - type: Accepted
+    - type: ResolvedRefs               # endpoint controller
       status: "True"
+      observedGeneration: 3
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: GatewayFound
-      message: "Attached to gateway production-gateway"
-    - type: Valid
+      reason: RefsResolved
+      message: "Gateway and all policy references resolved"
+    - type: Accepted                   # gateway controller
       status: "True"
-      lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: SchemaValidPassed
-      message: "Schema validation passed"
+      observedGeneration: 3
+      lastTransitionTime: "2026-04-03T10:00:01Z"
+      reason: Accepted
+      message: "Included in the configuration of gateway api-gateway/production-gateway"
+    - type: Ready                      # endpoint controller, derived from the two above
+      status: "True"
+      observedGeneration: 3
+      lastTransitionTime: "2026-04-03T10:00:01Z"
+      reason: Ready
+      message: "References resolved and accepted by the gateway"
 ```
+
+**Schema rules.** The CRD enforces what the object alone decides, so the API server rejects a violation before any webhook runs and the same rules apply to GitOps tools that bypass the webhook:
+
+- `spec.endpoints` is a map list keyed on (`endpoint`, `method`) with at least one entry. A repeated pair is rejected (`Duplicate value`), and server-side apply merges entries by key instead of replacing the list.
+- Every entry has at least one backend. `endpoint` starts with `/` and has no `*`, `?`, `&`, `%`, whitespace or control character, except a trailing `/*` wildcard. A backend `host` is non-empty and holds no whitespace or control character: `krakend check` prints both verbatim in its errors.
+- `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer. A CEL rule also requires that they parse as a duration that fits in 64 bits of nanoseconds, with a `maxLength` of 64: the pattern alone admits overflowing values such as `2562048h`. The rule runs only on values that match the pattern, so a stored non-duration fails the pattern alone and ratchets, and a spec holds at most 1024 entries, which keeps the rules inside the CEL cost budget.
+- `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
+
+**Entry rules at admission.** The webhook checks the rules the operator enforces that the entry and its gateway decide, on the entries an update adds or changes (every entry when the object moves to another gateway), and names the field. The operator validates every render, Enterprise included, with the embedded CE `krakend` binary, so these checks also refuse features only the Enterprise binary accepts (`{input_headers.X}` and `{input_query_strings.x}` placeholders, reserved-path variants).
+
+- A path equal to or under `/__debug`, `/__echo` or `/__health` is reserved by KrakenD.
+- `GET` on the gateway's health path is rejected. The path follows the route check (`renderer.ParseRouterOptions`): a `router` block in `spec.config.extraConfig` replaces the typed `spec.config.router`, `disable_health` frees the path, and a block that does not decode reads as the defaults.
+- The root wildcard `/*` is rejected in both editions. `/prefix/*` wildcards need an EE gateway and are rejected on CE.
+- Every backend `urlPattern` placeholder must be a parameter of the endpoint path, `respN_...` or `JWT....`.
+- On a CE gateway, what a CE render drops from an entry's or backend's `extraConfig` is rejected (`renderer.CEDrops`): an Enterprise-only namespace, or the Enterprise-only keys of `backend/http/client` (CE honors `send_body_on_redirect`). KrakenD CE passes `krakend check` and drops them silently. An entry's `documentation/openapi` is not on the list: AutoConfig generates it on every endpoint and a CE render drops it.
+
+Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[].backends`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. CEL evaluation errors are never ratcheted either: a stored duration that matches the pattern but overflows (for example `2562048h`) fails its parse rule on every update to that object until it is corrected. On the gateway's string durations the parse rule applies only to pattern-valid values, so a stored value that breaks the pattern still ratchets. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
 
 ### 3.3 KrakenDBackendPolicy
 
@@ -533,14 +564,20 @@ spec:
   raw: {}
 
 status:
+  observedGeneration: 1
   referencedBy: 3
   conditions:
-    - type: Valid
+    - type: Ready
       status: "True"
+      observedGeneration: 1
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: PolicyValid
-      message: "All fields within valid ranges"
+      reason: Ready
+      message: "Policy configuration is valid"
 ```
+
+**Admission.** A policy write is rendered, not only range-checked: on its own, and in every gateway whose endpoints reference it. A change that makes an endpoint fail that passed with the stored policy is refused with `breaks gateway <namespace>/<name>`, naming the endpoints and quoting none of their output. A new or changed `raw` with Enterprise-only namespaces is refused while a CE gateway uses the policy, because KrakenD CE accepts it in `krakend check` and then ignores it. See the admission rules in the webhook section below.
+
+**Deletion.** The policy controller puts the finalizer `gateway.krakend.io/policy-protection` on every policy that is not being deleted (an `Update` of the object, so RBAC needs `update` on `krakendbackendpolicies`). A `kubectl delete` is always accepted: the policy webhook is not registered for DELETE. While any KrakenDEndpoint references a terminating policy, the controller keeps it, keeps reporting `referencedBy`, and emits a `DeletionBlocked` warning event that names up to five of the endpoints; the policy stays rendered in its gateways. A new reference to a terminating policy is rejected at admission. The endpoint watch (creates, deletes and spec changes, old and new references) enqueues the policy when its last reference goes, and the controller then removes the finalizer. The cache can lag a reference created just before, so the controller lists the endpoints uncached (`APIReader`, since a field index exists only in the cache) before it releases a policy its cache shows unreferenced. A version without this finalizer cannot remove it, so a downgrade removes it first (see the upgrade guide, Rollback).
 
 ### 3.4 KrakenDAutoConfig
 
@@ -621,20 +658,25 @@ erDiagram
 | Resource | Owner | Lifecycle |
 |---|---|---|
 | **KrakenDGateway** | User | User creates/updates/deletes |
-| **KrakenDEndpoint** | User (teams) or KrakenDAutoConfig | User creates/updates/deletes; or auto-generated by autoconfig controller with ownerReference to KrakenDAutoConfig |
+| **KrakenDEndpoint** | User (teams) or KrakenDAutoConfig | User creates/updates/deletes; or auto-generated by autoconfig controller with a controller ownerReference to KrakenDAutoConfig |
 | **KrakenDBackendPolicy** | User (platform team) | User creates/updates/deletes |
 | **KrakenDAutoConfig** | User | User creates/updates/deletes; owns generated KrakenDEndpoints via ownerReference |
 | **Deployment** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **Service** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **ConfigMap** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
-| **ServiceAccount** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
-| **HorizontalPodAutoscaler** | KrakenDGateway | Operator-managed (when `autoscaling.enabled=true`); `spec.replicas` omitted from Deployment when HPA is active |
+| **ServiceAccount** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference. An existing same-named one is taken over only if it has no controller and carries its kind's consent labels, see below |
+| **HorizontalPodAutoscaler** | KrakenDGateway | Operator-managed (when `autoscaling` is set); the operator sets Deployment `spec.replicas` only when creating it (to `minReplicas`) |
 | **PodDisruptionBudget** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **Dragonfly CR** | KrakenDGateway | Operator-managed (when `dragonfly.enabled=true`); Dragonfly Operator reconciles into StatefulSet, Service, PVC |
 | **ExternalSecret** | KrakenDGateway | Operator-managed (when `license.externalSecret.enabled=true`) |
 | **Secret (LICENSE)** | ExternalSecret / User | External Secrets Operator, or user-managed |
 | **Istio VirtualService** | KrakenDGateway | Operator-managed (when `istio.enabled=true`) |
 | **Istio Gateway** | **User** | **NOT managed by operator** — referenced only |
+
+When a feature is disabled, the gateway deletes the child it created for it
+(HPA, Dragonfly, ExternalSecret, VirtualService) under its deterministic
+name, only if the gateway is its controller, and removes that feature's
+conditions.
 
 ---
 
@@ -658,96 +700,104 @@ sequenceDiagram
     Op->>K8s: Get KrakenDGateway spec
 
     Note over Op: Render Pipeline
-    Op->>Op: 1. Detect endpoint path+method conflicts
+    Op->>Op: 1. Detect route conflicts (method and route shape)
 
     opt Conflicts found
-        Op->>K8s: Update newer conflicting KrakenDEndpoint status → Conflicted
-        Op->>K8s: Emit Warning Event with conflict details
-        Note over Op: Conflicted endpoints excluded from render.<br/>Older endpoint (by creationTimestamp) wins.<br/>Equal timestamps: lower lexicographic name wins.<br/>When a conflict is detected, the entire<br/>KrakenDEndpoint resource is marked Conflicted<br/>and all its endpoints[] entries are excluded.
+        Note over Op: Conflicting entries are excluded from render.<br/>Older endpoint (by creationTimestamp) wins.<br/>Equal timestamps: lower lexicographic name wins.<br/>The losing KrakenDEndpoint's other entries are still rendered,<br/>and status.conflicts names what it lost.
     end
 
     Op->>Op: 2. Merge gateway config + non-conflicted endpoints
     Op->>Op: 3. Resolve backend policy references
 
     opt Missing policyRef
-        Op->>K8s: Update affected KrakenDEndpoint status → Invalid
-        Op->>K8s: Emit Warning Event (missing BackendPolicy)
-        Note over Op: Invalid endpoints excluded from render.
+        Note over Op: The endpoint is excluded from render.<br/>The endpoint controller reports ResolvedRefs=False (PolicyNotFound).
     end
 
     Op->>Op: 4. Build krakend.json via template engine
     Op->>Op: 5. Compute SHA-256 of rendered config
 
-    alt Checksum unchanged
-        alt Desired image ≠ current Deployment image
-            Op->>K8s: Update KrakenDGateway phase → Deploying
-            Op->>K8s: Set Progressing=True on KrakenDGateway
+    alt Checksum and edition match the applied config
+        alt Applied image ≠ current Deployment image
+            Op->>K8s: Report the rollout, Progressing=True follows the Deployment write (phase Deploying is derived)
             Op->>Dep: Patch Deployment container image + checksum/plugins if changed
-            Note over Op: Image-only change (e.g., CE↔EE transition<br/>with no config diff). Triggers rolling update.
+            Note over Op: Image-only change (e.g., a version bump).<br/>The image follows the applied config's edition,<br/>so a CE↔EE change is a config change, validated as the new edition.<br/>Version and custom-image changes wait while the applied edition differs<br/>from the current one, and apply once a render is validated for it.
         else Image unchanged
             alt Plugin checksum changed
-                Op->>K8s: Update KrakenDGateway phase → Deploying
-                Op->>K8s: Set Progressing=True on KrakenDGateway
+                Op->>K8s: Report the rollout, Progressing=True follows the Deployment write (phase Deploying is derived)
                 Op->>Dep: Patch pod annotation: checksum/plugins
                 Note over Op: Plugin-only change. Triggers rolling update.
             else No drift detected
                 Note over Op: No-op — config, image, and plugins<br/>all identical to current state.
-                opt Phase at start of reconcile was not Degraded, Error, or Deploying
-                    Op->>K8s: Update KrakenDGateway phase → Running
+                Op->>K8s: Set ConfigValid=True (ConfigApplied), derive Ready and phase
+            end
+        end
+    else Not the applied config (new checksum or edition)
+        Op->>Op: 6. Validate as the render's edition<br/>(EE: apply the wildcard route rule, rewrite /p/* to /p/{Wildcard}),<br/>the gateway root alone, then the whole render via the route check and krakend check -t -n -c
+        alt Root fails alone
+            Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
+            Op->>K8s: Set Ready=False (GatewayRootInvalid), phase Error
+            Op->>K8s: Emit Warning Event (when the verdict changes)
+            Note over Op: No endpoint is judged. The rejected config is not applied: the last applied config keeps serving.<br/>Image, version and plugin changes still roll (the infrastructure stage runs),<br/>except an image held while the applied edition differs from the current one, and everything held while a plugin ConfigMap is missing
+        else Validator unavailable (binary missing, timeout, killed, I/O error)
+            Op->>K8s: Update KrakenDGateway condition → ConfigValid=Unknown<br/>(reason ValidatorUnavailable)
+            Op->>K8s: Emit one Warning Event (ValidatorUnavailable)
+            Note over Op: Ready=Unknown, serving phase and applied config kept — return the error,<br/>controller-runtime retries with backoff
+        else The root passes
+            Op->>Op: Judge each endpoint alone (all on failure, those that lost an entry on success), exclude failures (Accepted=False EndpointInvalid/PolicyInvalid), render the rest, full check
+            alt The endpoints that pass on their own fail together (those that fail alone are excluded first)
+                Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
+                Op->>K8s: Set Ready=False (CombinedConfigInvalid), phase Error
+                Op->>K8s: Emit Warning Event (when the verdict changes)
+                Note over Op: The last applied config keeps serving. The output is only in the operator log
+            else Validation passes but the ConfigMap cannot be published
+                Op->>K8s: Update KrakenDGateway condition → ConfigValid=Unknown<br/>(reason ConfigPublishFailed)
+                Op->>K8s: Emit one Warning Event (ConfigPublishFailed), on a change of reason
+                Note over Op: Ready=Unknown, serving phase and applied config kept — return the error,<br/>controller-runtime retries with backoff
+            else The render, less the excluded endpoints, passes
+                Op->>K8s: Update KrakenDGateway condition → ConfigValid=True (ConfigApplied)
+                Op->>K8s: Report the rollout, Progressing=True follows the Deployment write (phase Deploying is derived)
+                Op->>CM: Create the immutable ConfigMap gateway-config-hash with the new krakend.json
+                Op->>K8s: Write status.configChecksum = newChecksum (at once, before acceptance and the Deployment step; a failed write keeps the stored config and returns the error)
+                Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
+                Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted, PartiallyAccepted or SchemaNameConflict), False (EndpointConflict, EndpointInvalid or PolicyInvalid), EEFeaturesStripped in a CE fallback, or removed (missing policy), plus status.conflicts
+                Note over Op: Requeue: wait for Deployment rollout
+                Dep->>Pod: Rolling update (new pods with new config)
+                Pod->>Pod: KrakenD starts, loads config
+                Note over Op: Deployment status watch triggers:
+
+                alt Rollout converges (generation observed, applied checksum on the pod template,<br/>all replicas updated and available)
+                    Op->>K8s: Update replicas/readyReplicas
+                    Op->>K8s: Set Progressing=False, Available=True (Ready=True, phase Running)
+                else ProgressDeadlineExceeded
+                    Op->>K8s: Set Progressing=False, Available=False (reason: RolloutFailed), Ready=False, phase Error
+                    Op->>K8s: Emit Warning Event (RolloutFailed)
+                    Note over Op: ConfigValid remains True (config passed validation).<br/>Leave existing pods running.<br/>Requeue for user correction.
                 end
             end
         end
-    else Checksum changed
-        Op->>K8s: Update KrakenDGateway phase → Rendering
-        Op->>K8s: Update KrakenDGateway phase → Validating
-        Op->>Op: 6. Create validation copy<br/>(strip wildcard endpoints if edition=EE<br/>and CE fallback not active),<br/>validate via krakend check -tlc
-
-        alt Validation fails
-            Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
-            Op->>K8s: Update KrakenDGateway phase → Error
-            Op->>K8s: Emit Warning Event
-            Note over Op: STOP — do not deploy invalid config
-        else Validation passes
-            Op->>K8s: Update KrakenDGateway condition → ConfigValid=True
-            Op->>K8s: Update KrakenDGateway phase → Deploying
-            Op->>K8s: Set Progressing=True on KrakenDGateway
-            Op->>CM: Update ConfigMap with new krakend.json
-            Op->>K8s: Write status.configChecksum = newChecksum
-            Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
-            Op->>K8s: Update KrakenDEndpoint status:<br/>phase=Active, Accepted=True, Valid=True
-            Note over Op: Requeue: wait for Deployment rollout
-            Dep->>Pod: Rolling update (new pods with new config)
-            Pod->>Pod: KrakenD starts, loads config
-            Note over Op: Deployment status watch triggers:
-
-            alt Rollout converges
-                Op->>K8s: Update replicas/readyReplicas,<br/>set Progressing=False, Available=True
-                Op->>K8s: Update KrakenDGateway phase → Running
-            else ProgressDeadlineExceeded
-                Op->>K8s: Set phase=Error, Progressing=False, Available=False (reason: ProgressDeadlineExceeded)
-                Op->>K8s: Emit Warning Event (RolloutFailed)
-                Note over Op: ConfigValid remains True (config passed validation).<br/>Leave existing pods running.<br/>Requeue for user correction.
-            end
-        end
     end
+    Note over Op: Accepted is written for every endpoint whenever the render equals the applied configuration (validated now, or unchanged since). After a pass that applies nothing, only an endpoint that fails on its own gets Accepted=False (EndpointInvalid or PolicyInvalid), worded as not served once the gateway next applies its config.
 ```
 
 ### Reconciliation Triggers
 
 | Event | Controller | Action |
 |---|---|---|
-| KrakenDGateway created | Gateway controller | Set initial phase to `Pending`. Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Re-attach any KrakenDEndpoints in `Detached` phase with matching `gatewayRef`; trigger config render. |
+| KrakenDGateway created | Gateway controller | The first reconcile writes one status with the derived phase (no separate `Pending` write). The config stage renders, validates and publishes the first config ConfigMap (`<gateway>-config-<hash>`); the infrastructure stage creates the ServiceAccount, Service and PDB, the Deployment once a config has been applied, and, when configured, the HPA, post-restart Job, Dragonfly CR, VirtualService and ExternalSecret. The endpoint controller's gateway watch re-resolves the references of endpoints with a matching `gatewayRef`, which re-attaches `Detached` endpoints. |
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
-| KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources |
-| KrakenDEndpoint created/updated/deleted | Endpoint controller | Set initial phase to `Pending` on creation. Re-render config for the target gateway, validate, rolling restart. Conflict detection re-evaluates all endpoints; previously `Conflicted` endpoints may be promoted to `Active` if the conflict is resolved. |
-| KrakenDBackendPolicy created/updated/deleted | Policy controller | Re-render config for all gateways with endpoints referencing this policy. If deleted while referenced, affected endpoints are marked `Invalid` (defense-in-depth: the admission webhook rejects such deletions, but this path handles cases where the webhook is in `failurePolicy: Ignore` mode, is temporarily unavailable, or is not deployed). |
-| KrakenDAutoConfig created/updated/deleted | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, generate/update/delete owned KrakenDEndpoint resources. Generated endpoints trigger the endpoint controller watch → gateway reconciler. On deletion, all owned KrakenDEndpoints are garbage-collected via ownerReference. |
-| AutoConfig periodic timer | AutoConfig controller | When `trigger: Periodic`, re-fetch the OpenAPI spec on the configured `periodic.interval`. Compare spec checksum against `status.specChecksum`; if unchanged, no-op. If changed, regenerate endpoints as in the create/update path. |
-| KrakenDGateway deleted | Endpoint controller | Orphaned KrakenDEndpoints (no ownerReference) are set to `Detached` phase. They remain in the cluster but are excluded from all rendering. Re-attachment occurs automatically if a new KrakenDGateway with the same name is created. |
-| Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
-| Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
-| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. When rollout converges (`updatedReplicas == status.replicas AND availableReplicas == status.replicas`), set `Progressing=False` and transition gateway phase from `Deploying` to `Running`. If the Deployment reports `ProgressDeadlineExceeded`, set `phase=Error`, `Progressing=False`, `Available=False` (reason: `ProgressDeadlineExceeded`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
-| License approaching expiry | License monitor (periodic) | Emit warning events; if within the expiry warning window (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=False` (reason: `ExpiringSoon`) and emit `LicenseExpiringSoon` Warning event (rate-limited to once per 24h). If `expiry > now+1h` AND currently Degraded or Error (license-caused only), trigger EE recovery (even within the warning window). If PreExpiry (`now < expiry ≤ now+1h`) AND `fallbackToCE=true`, switch to CE image. If expired AND `fallbackToCE=true`, switch to CE image. If PreExpiry AND `fallbackToCE=false`, set `phase=Error`, `LicenseValid=False` (reason: `LicensePreExpiry`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If expired AND `fallbackToCE=false`, set `phase=Error`, `LicenseValid=False` (reason: `LicenseExpired`), `LicenseExpired=True`, and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If license is healthy (`expiry > now+warningDays`), set `LicenseValid=True`; if currently Degraded or Error (license-caused only), trigger EE recovery. |
+| KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
+| KrakenDEndpoint created, spec changed, or its `Accepted` changed | Endpoint controller | Resolve gateway and policy references into `ResolvedRefs`; derive `Ready` and `phase` from `ResolvedRefs` and `Accepted`; patch status (optimistic lock) only when it changed. The gateway controller re-renders the target gateway on spec changes and records `Accepted` on every endpoint of an applied render. A resolved conflict flips `Accepted` back to `True`. |
+| KrakenDBackendPolicy created/updated/deleted | Policy controller | Set `Ready` from the policy's fields and `observedGeneration`: `False` (`InvalidCircuitBreaker`, `InvalidRateLimit`) for a field out of range; otherwise the policy is rendered alone and checked with `krakend check`: `False` (`PolicyInvalid`, quoting the policy's own output, which its owner may read) when it fails, `Unknown` (`ValidatorUnavailable`, retried with backoff, no event) when the check cannot run, `True` when it passes. The verdict is memoized by the policy's content, so reconciles of unchanged content run no krakend, and the check holds one of the controllers' check slots (shared with the AutoConfig controller). The gateway controller re-renders every gateway with endpoints referencing the policy. The endpoint controller re-resolves references only when the policy is created or deleted. Deleting a policy that endpoints still reference is accepted and held by the protection finalizer (see section 3.3), so a referenced policy keeps rendering; if the finalizer is removed by hand while endpoints still reference the policy, each referencing endpoint gets `ResolvedRefs=False`/`PolicyNotFound` and phase `Invalid`, and the gateway excludes the endpoint from the rendered config and removes its `Accepted` condition. `referencedBy` is recounted when an endpoint is created, deleted, or has its spec changed. |
+| KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
+| KrakenDAutoConfig deleted | Kubernetes GC | All owned KrakenDEndpoints are garbage-collected via ownerReference. The AutoConfig controller doesn't reconcile a terminating AutoConfig, so under foreground deletion it doesn't recreate endpoints as they are collected. |
+| Owned KrakenDEndpoint spec changed, labels changed, deleted, or `Ready` condition changed, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited, relabelled or deleted out of band is restored to the desired spec and labels (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write), and `EndpointsReady` is refreshed, on failure paths too. Endpoints the AutoConfig does not control are not watched, so a label-matched orphan is adopted on the next reconcile. |
+| AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. A spec/CUE/unmatched- or ambiguous-override/scope failure — including a failed external `$ref` fetch/decode, which now fails closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` (`Periodic`) or via exponential backoff capped at 5 minutes (`OnChange`); a transient endpoint write failure (`EndpointReconcileFailed`) or an unavailable config check (`ValidatorUnavailable`) always retries with backoff, on either trigger; held operations (`OperationsFailed`) are not errors and wait for the resync interval or an input change; a status or endpoint write `Conflict` (this reconcile read a stale cache) requeues quietly a second later with no error, event, or status change. |
+| KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
+| Secret (LICENSE) created or updated | Gateway controller | Re-evaluate the license inside the reconcile: re-parse X.509 `notAfter` from the Secret and set the `License*` conditions for its stage (below). A renewed license that clears `LicenseExpired`/`LicenseDegraded` re-renders EE and rolls the Deployment back to the EE image; a changed license (any change to the bytes in the Secret, whether or not `notAfter` moves) also changes the pod template's `krakend.io/checksum-license` annotation, so the Deployment rolls and every pod starts with the new license file; an unchanged license rolls nothing. |
+| Dragonfly, ExternalSecret or VirtualService owned by a gateway changed or deleted | Gateway controller | Re-run the gateway reconcile, which restores the object and refreshes `DragonflyReady`/`IstioConfigured`. Watched, as metadata only, for kinds whose CRD existed at operator startup; restart the operator after installing one later. |
+| Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses. Watched when the Dragonfly CRD existed at operator startup. |
+| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway, from the Deployment the reconcile just wrote (the object CreateOrUpdate returns, not the cache; a pass whose Deployment step failed, such as a stale-object Conflict, leaves `Available` untouched, and raises `Progressing` only while the Deployment does not mount the applied config, never for a refused Deployment) or, on a pass that holds the Deployment, from the cached one. `Progressing=True` while the pass created the Deployment, its write changed the pod template, the template is not the wanted one, or old pods remain beside updated ones; a bare generation the Deployment controller has not observed (an HPA scale) does not raise it. The rollout counts as converged only when the Deployment has observed its latest generation (`observedGeneration >= generation`), its pod template carries the applied config checksum, image, plugin checksum and license checksum and mounts the applied config's ConfigMap, and `replicas == updatedReplicas == availableReplicas ==` the desired count; then `Progressing=False`, `Available=True`, and the derived phase becomes `Running`. Until then `Ready` stays `False`, because the cached Deployment can still describe the previous ReplicaSet. If the Deployment reports `Available=False` (for example `MinimumReplicasUnavailable`) and no rollout is in flight, that condition is mirrored into the gateway's `Available`, so `Ready` goes `False` with phase `Error`. If the Deployment reports `ProgressDeadlineExceeded` for the generation it has observed and the wanted template, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event; a deadline on an older generation or template is ignored and the `Available=False`/`RolloutFailed` it caused is reset. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
+| License stage boundary | Gateway controller (requeued at the license's next boundary, at least every 5 min) | The reconcile evaluates the license stage on every run, and requeues itself at the next boundary (start of the warning window, start of the 1 h safety buffer, expiry). Stage `LicenseExpiringSoon` (`now+1h < expiry ≤ now+warningDays`): `LicenseValid=True` (reason: `LicenseExpiringSoon`) and one `LicenseExpiringSoon` Warning event on entering the window. Stage `LicensePreExpiry` (`now < expiry ≤ now+1h`) or expired: `LicenseValid=False` and `LicenseExpired=True` (reason: `LicensePreExpiry` or `LicenseExpired`). With `fallbackToCE=true` it also sets `LicenseDegraded=True` (reason: `LicenseFallbackCE`) and emits one `LicenseFallbackCE` Warning event. The CE render is validated as CE, and the image switches to CE once that render is applied; the gateway controller derives phase `Degraded`. With `fallbackToCE=false` it emits one `LicenseExpiredNoFallback` Warning event and leaves the Deployment running; the gateway controller derives phase `Error` from `LicenseExpired=True` without `LicenseDegraded`. Healthy (`expiry > now+warningDays`): `LicenseValid=True` (reason: `LicenseOK`). Back in a healthy or warning stage while `LicenseExpired` or `LicenseDegraded` is True, both become `False` (reason: `LicenseRestored`), one `LicenseRestored` event is emitted, and the EE render is validated as EE and the EE image returns once it is applied. Events fire on condition transitions only, so a steady state repeats nothing. |
 
 ### Reconciliation Queueing
 
@@ -807,10 +857,7 @@ spec:
       resources:
         requests:
           storage: "10Gi"
-  authentication:
-    passwordFromSecret:
-      name: dragonfly-auth
-      key: password
+  # authentication is omitted: a gateway that renders KrakenD's EE pool cannot set passwordFromSecret
   args: []                             # populated from spec.dragonfly.args
 ```
 
@@ -858,17 +905,17 @@ graph TB
 
 ### Auto-Configuration
 
-When `dragonfly.enabled=true` and `edition=EE` (and not CE fallback active), the operator:
+When `dragonfly.enabled=true`, the operator:
 
 1. Renders a `Dragonfly` CR (`dragonflydb.io/v1alpha1`) with an `ownerReference` to the KrakenDGateway
 2. Sets the Dragonfly service DNS as `{gateway-name}-dragonfly.{namespace}.svc.cluster.local:6379`
 3. Derives `redis.connectionPool.addresses` from the Dragonfly Service DNS convention (users should leave `redis.connectionPool.addresses` empty)
-4. Injects the `redis` namespace into the rendered `krakend.json` `extra_config`. The Dragonfly authentication password is **not** embedded in the ConfigMap; instead, the operator injects it via a Secret-backed environment variable (e.g., `REDIS_PASSWORD`) and uses KrakenD's `$ENV_VAR` substitution in the rendered config. This ensures the password stays in a Kubernetes Secret and is never stored in plaintext in the ConfigMap
+4. Injects the EE service-level `redis` namespace: one `connection_pools` entry named `default` (a single address) or one `clusters` entry named `default` (several addresses), which EE components reference with `"connection_name": "default"`.
 5. Watches the `Dragonfly` CR status and reports `DragonflyReady` on the KrakenDGateway when the Dragonfly Operator reports the instance as `ready`
 
-> **Note:** Steps 3–4 (redis address derivation and `extra_config` injection) apply only when `edition=EE` and CE fallback is not active. Steps 1, 2, and 5 apply whenever `dragonfly.enabled=true`, regardless of edition or CE fallback state, so the Dragonfly instance is available when EE is restored.
+> **Note:** Steps 3–4 (redis address derivation and `extra_config` injection) apply whenever the config is rendered, but only an EE binary uses the `redis` namespace: a CE-edition gateway renders it and KrakenD CE ignores it, and a CE fallback strips it and lists it as a dropped feature. Steps 1, 2, and 5 apply whenever `dragonfly.enabled=true`, regardless of edition or CE fallback state, so the Dragonfly instance is available when EE is restored.
 
-> **Password handling:** When `dragonfly.enabled=true`, the password is derived from `dragonfly.authentication.passwordFromSecret` and the `redis.connectionPool.password` field is ignored. When `dragonfly.enabled=false` (external Redis/Dragonfly), use `redis.connectionPool.addresses` and `redis.connectionPool.password.secretRef` to configure the connection.
+> **Password and TLS:** rejected when set or changed (`passwordFromSecret` on EE gateways only), because they were never rendered. KrakenD's redis pool is rendered without a password or TLS settings, and Dragonfly requires its password, so KrakenD's connections to it would be refused (NOAUTH). A value stored before the rule keeps being accepted on unrelated updates, and the gateway webhook warns about it.
 
 ### Dragonfly Unavailability Behavior
 
@@ -905,81 +952,47 @@ sequenceDiagram
     Vault-->>ESO: Return license content
     ESO->>K8s: Create/Update Secret<br/>"production-gateway-license"
 
-    Op->>K8s: Wait for Secret to exist
-    Op->>K8s: Check ExternalSecret status conditions
-    alt ExternalSecret Ready=False
-        Op->>K8s: Set condition LicenseSecretUnavailable=True
-        Op->>K8s: Emit Warning Event (ESO sync error)
-        Note over Op: Re-queue reconciliation.
-        Note over Op: STOP — do not create Deployment without license.
-    else ExternalSecret Ready=True
-        Op->>K8s: Read Secret, parse X.509 notAfter
-        Op->>Op: Run license validation (§9 ValidateLicense)
-        alt EERunning (expiry > now+warningDays)
-            Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using EE image
+    Note over Op: Every gateway reconcile reads the license Secret.<br/>It never waits for it and never reads the ExternalSecret status.
+    Op->>K8s: Read Secret, parse X.509 notAfter
+    alt Secret, key or certificate unusable
+        Op->>K8s: Set LicenseSecretUnavailable=True (reason=LicenseSecretMissing)
+        Op->>K8s: Emit Warning event (on the transition only)
+        Op->>K8s: Set LicenseValid=Unknown, unless the last known expiry<br/>is inside the safety buffer or past (then that stage applies)
+        Note over Op: The reconcile goes on: the config is rendered and applied,<br/>and the Deployment is created or updated, with the fallback decision<br/>recorded last. Its pods wait for the Secret mount.<br/>The gateway is requeued within 5 minutes.
+    else Secret read
+        Op->>K8s: Set LicenseSecretUnavailable=False
+        alt Valid (expiry > now+warningDays)
             Op->>K8s: Set condition LicenseValid=True (reason=LicenseOK)
-        else EEWarning (now+1h < expiry ≤ now+warningDays)
-            Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using EE image
-            Op->>K8s: Set condition LicenseValid=False (reason=ExpiringSoon)
-            Op->>K8s: Emit LicenseExpiringSoon Warning event
+            opt LicenseExpired or LicenseDegraded is True
+                Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
+                Op->>K8s: Emit LicenseRestored
+                Op->>Op: Render EE again, validate it as EE
+                Op->>K8s: Switch Deployment image to EE once the EE render is applied
+            end
+        else ExpiringSoon (now+1h < expiry ≤ now+warningDays)
+            Op->>K8s: Set condition LicenseValid=True (reason=LicenseExpiringSoon)
+            Op->>K8s: Emit LicenseExpiringSoon Warning event (once, on entering the stage)
+            opt LicenseExpired or LicenseDegraded is True
+                Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
+                Op->>K8s: Emit LicenseRestored
+                Op->>Op: Render EE again, validate it as EE
+                Op->>K8s: Switch Deployment image to EE once the EE render is applied
+            end
         else PreExpiry or Expired AND fallbackToCE=true
-            Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using CE image (ceImage or krakend/krakend:version)
-            Op->>K8s: Set condition LicenseValid=False (reason per entry path: LicensePreExpiry or LicenseExpired)
-            Op->>K8s: Set condition LicenseDegraded=True (reason per entry path: LicensePreExpiry or LicenseExpired)
-            Op->>K8s: Update KrakenDGateway phase → Degraded
-            Op->>K8s: Emit LicenseFallbackCE Warning Event
-            Note over Op: CE fallback on cold start —<br/>no intermediate EE Deployment created.
-        else PreExpiry AND fallbackToCE=false
-            Op->>K8s: Set phase=Error, LicenseValid=False (reason=LicensePreExpiry)
-            Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-            Note over Op: STOP — license within pre-expiry safety window,<br/>no fallback configured.
-        else Expired AND fallbackToCE=false
-            Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-            Op->>K8s: Set phase=Error, LicenseExpired=True
-            Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-            Note over Op: STOP — license expired, no fallback configured.
+            Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason per stage: LicensePreExpiry or LicenseExpired)
+            Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseFallbackCE)
+            Op->>K8s: Emit LicenseFallbackCE Warning Event (once)
+            Op->>Op: Render CE (Enterprise-only features stripped), validate it as CE
+            Op->>K8s: Create the Deployment, or switch its image, to CE (ceImage or krakend:version)<br/>once the CE render is applied
+        else PreExpiry or Expired AND fallbackToCE=false
+            Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason per stage: LicensePreExpiry or LicenseExpired)<br/>(the gateway controller derives phase Error from LicenseExpired=True)
+            Op->>K8s: Emit LicenseExpiredNoFallback Warning Event (once)
+            Note over Op: The license changes neither the EE render nor the Deployment,<br/>EE pods stop at the actual expiry.
         end
     end
 
     Note over Op: /etc/krakend is KrakenD's default working<br/>directory. LICENSE at this path is the default<br/>lookup location. No KRAKEND_LICENSE_PATH needed.
-
-    Note over Op: Periodic license check
-    Op->>K8s: Read Secret, parse X.509 notAfter
-    alt now < expiry ≤ now+1h (PreExpiry) AND fallbackToCE=true
-        Op->>Op: Strip wildcard endpoints from rendered config
-        Op->>K8s: Switch Deployment image to CE (ceImage or krakend/krakend:version)
-        Op->>K8s: Set condition LicenseValid=False (reason=LicensePreExpiry)
-        Op->>K8s: Set condition LicenseDegraded=True (reason=LicensePreExpiry)
-        Op->>K8s: Emit LicenseFallbackCE Warning Event
-    else now < expiry ≤ now+1h (PreExpiry) AND fallbackToCE=false
-        Op->>K8s: Set phase=Error, LicenseValid=False (reason=LicensePreExpiry)
-        Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-    else now+1h < expiry AND expiry ≤ now+warningDays (EEWarning)
-        Op->>K8s: Set condition LicenseValid=False (reason=ExpiringSoon)
-        Op->>K8s: Emit LicenseExpiringSoon Warning event (rate-limited to once per 24h)
-        opt Currently in Degraded or Error state (license-caused only)
-            Op->>Op: Trigger EE Recovery (re-render, switch to EE image)
-            Op->>K8s: Clear LicenseDegraded (if set), set LicenseExpired=False (if set)
-            Op->>K8s: Emit LicenseRestored
-        end
-    else expiry ≤ now AND fallbackToCE=true
-        Op->>Op: Strip wildcard endpoints from rendered config
-        Op->>K8s: Switch Deployment image to CE (ceImage or krakend/krakend:version)
-        Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-        Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseExpired)
-        Op->>K8s: Emit LicenseFallbackCE Warning Event
-    else expiry ≤ now AND fallbackToCE=false
-        Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-        Op->>K8s: Set phase=Error, LicenseExpired=True
-        Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-    else expiry > now+warningDays (EERunning — license healthy)
-        Op->>K8s: Set condition LicenseValid=True, reason=LicenseOK
-        opt Currently in Degraded or Error state (license-caused only)
-            Op->>Op: Trigger EE Recovery (re-render, switch to EE image)
-            Op->>K8s: Clear LicenseDegraded (if set), set LicenseExpired=False (if set)
-            Op->>K8s: Emit LicenseRestored
-        end
-    end
+    Note over Op: The gateway is requeued at the next stage boundary,<br/>at most 5 minutes later, and the watched Secret triggers a reconcile.
 ```
 
 ### Generated ExternalSecret
@@ -1018,7 +1031,7 @@ spec:
 
 ### Alternative: Pre-Existing Secret
 
-When `license.secretRef` is used instead of `externalSecret`, the operator skips ExternalSecret creation and directly mounts the referenced Secret. The user is responsible for managing rotation. If the referenced Secret does not exist, the operator sets `LicenseSecretUnavailable=True`, emits a `LicenseSecretMissing` Warning event, sets the gateway phase to `Error`, and requeues the reconciliation. The operator resumes normal license processing once the Secret becomes available.
+When `license.secretRef` is used instead of `externalSecret`, the operator skips ExternalSecret creation and directly mounts the referenced Secret. The user is responsible for managing rotation. If the referenced Secret does not exist, the operator sets `LicenseSecretUnavailable=True`, emits a `LicenseSecretMissing` Warning event (once), sets `LicenseValid=Unknown` and requeues within 5 minutes. The gateway phase is not set to `Error` for the missing Secret alone (if the last known expiry has passed and `fallbackToCE` is off, `LicenseExpired=True` still gives phase `Error`): the Deployment and its last fallback decision are kept, and the pods keep the license checksum they already carry, so a missing Secret never rolls them. If the last known expiry (`status.licenseExpiry`) is already inside the 1 h safety buffer or past, the stage verdict applies instead of `Unknown` (`LicenseValid=False`, reason `LicensePreExpiry` or `LicenseExpired`, and the CE fallback when `fallbackToCE` is set). The operator resumes normal license processing once the Secret becomes available.
 
 ---
 
@@ -1116,6 +1129,7 @@ graph TB
 3. **`ssl_proxy_headers` is configured** — `{"X-Forwarded-Proto": "https"}` tells KrakenD the original client connection was HTTPS
 4. **No `tls` block in KrakenD config** — The operator omits the root-level `tls` key entirely
 5. **VirtualService references existing Gateway(s)** — from `spec.istio.virtualService.gateways[]`
+6. **The VirtualService is watched when its CRD exists at operator startup**, so edits and deletions are corrected at once. If Istio is installed after the operator, restart the operator.
 
 ### Generated VirtualService
 
@@ -1204,50 +1218,68 @@ stateDiagram-v2
 **State behavior notes:**
 
 - **PreExpiry** takes precedence over EEWarning when `expiry ≤ now+1h`.
-- **EERunning** — Sets `LicenseValid=True` (reason: `LicenseOK`). If currently Degraded or Error (license-caused only): triggers EE recovery (re-renders EE config, switches to EE image). From Degraded: clears `LicenseDegraded`. From Error: sets `LicenseExpired=False` (if previously set). Emits `LicenseRestored`.
-- **EEWarning** — Sets `LicenseValid=False` (reason: `ExpiringSoon`). Emits `LicenseExpiringSoon` Warning event, rate-limited to once per 24h. If currently Degraded or Error (license-caused only): triggers EE recovery (re-renders EE config, switches to EE image). From Degraded: clears `LicenseDegraded`. From Error: sets `LicenseExpired=False` (if previously set). Emits `LicenseRestored`.
+- **EERunning** — Sets `LicenseValid=True` (reason: `LicenseOK`). If `LicenseExpired` or `LicenseDegraded` is True (license-caused only): triggers EE recovery (re-renders EE config, switches to EE image), sets both to `False` (reason: `LicenseRestored`) and emits `LicenseRestored`.
+- **EEWarning** — Sets `LicenseValid=True` (reason: `LicenseExpiringSoon`). Emits one `LicenseExpiringSoon` Warning event when the license enters the warning window; later reconciles in the window emit nothing. Recovery is the same as for EERunning.
 - **FallbackCE → StripEEFeatures → DeployCE** — CE fallback is executed via the §10 rendering pipeline. The checksum comparison and image-drift check (§10) prevent redundant rolling restarts when config and image are already at the desired CE state. Periodic rechecks that re-enter FallbackCE while the gateway is already running CE are no-ops.
-- **DeployCE → Degraded** — Sets `LicenseValid=False`, `LicenseDegraded=True` (reason per entry path: `LicensePreExpiry` or `LicenseExpired`).
+- **DeployCE → Degraded** — Sets `LicenseValid=False` and `LicenseExpired=True` (reason per entry path: `LicensePreExpiry` or `LicenseExpired`) and `LicenseDegraded=True` (reason: `LicenseFallbackCE`).
 
 ### License Check Frequency and Safety Buffer
 
-The license monitor runs on a **5-minute period** independent of the main reconciliation loop. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate.
+License evaluation runs inside the gateway reconcile, so gateway status has a single writer. The reconcile requeues itself at the license's next stage boundary (warning window, safety buffer, expiry) and at least every **5 minutes**, and the watched license Secret triggers it on change. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate. The reconcile writes the License* conditions, `status.licenseExpiry` and the `krakend_operator_license_expiry_seconds` metric, and nothing on the user's KrakenDGateway object; the metric series is removed when the gateway is deleted or terminating.
 
-> **Note:** In steady-state operation, `PreExpiry` fires first (1 hour before T-0). The `LicenseExpired` state is most commonly reached on cold-start (e.g., the operator is deployed into a cluster where the license has already expired), but is also reachable via the `Error → CheckLicense → WaitForSecret → ValidateLicense` recheck path if the monitor was in `Error` state when T-0 passed.
+> **Note:** In steady-state operation, `PreExpiry` fires first (1 hour before T-0). The `LicenseExpired` state is most commonly reached on cold-start (e.g., the operator is deployed into a cluster where the license has already expired), but is also reachable via the `Error → CheckLicense → WaitForSecret → ValidateLicense` recheck path if the gateway was in `Error` state when T-0 passed.
 
 ### Error State Behavior
 
 When `fallbackToCE=false` and the license is expired or approaching expiry, the operator transitions to the `Error` state:
 
-1. **Set KrakenDGateway phase to `Error`** — set `LicenseValid=False`; if `expiry ≤ now`, also set `LicenseExpired=True` (reason: `LicenseExpired`); otherwise (PreExpiry path) set reason `LicensePreExpiry`. Emit `LicenseExpiredNoFallback` Warning event
+1. **Record the failed license** — set `LicenseValid=False` and `LicenseExpired=True` with reason `LicenseExpired` (`expiry ≤ now`) or `LicensePreExpiry` (PreExpiry path). Emit one `LicenseExpiredNoFallback` Warning event, on the transition only. The gateway controller derives phase `Error` from `LicenseExpired=True`
 2. **Leave the existing Deployment running** — the operator does not scale down or delete the Deployment. EE pods will self-terminate at the actual license expiry time (T-0), entering `CrashLoopBackOff` as KrakenD refuses to start without a valid license
-3. **Continuously re-check** — the license monitor continues its 5-minute periodic recheck. If a renewed license becomes available, the operator transitions through `CheckLicense` back to `ValidateLicense` and recovers normally
+3. **Continuously re-check** — each reconcile re-evaluates the license, and the gateway is requeued at least every 5 minutes. If a renewed license becomes available, the operator transitions through `CheckLicense` back to `ValidateLicense` and recovers normally
 
 This is a conscious design choice: the operator provides maximum observability (error phase + events + metrics) without destructively interfering with a running workload. Cluster operators are expected to monitor `LicenseExpiredNoFallback` events and take corrective action.
 
-> **Cold-start without an existing Deployment (`fallbackToCE=false`):** If no Deployment exists yet and `fallbackToCE=false`, the operator skips Deployment creation and halts in `Error` phase in both the **expired** (`expiry ≤ now`) and **pre-expiry** (`now < expiry ≤ now+1h`) scenarios, until a valid license is available. When `fallbackToCE=true`, the operator deploys CE immediately in either case, transitioning to `Degraded` phase.
+> **Cold start without an existing Deployment:** The license stage never holds the Deployment. Once a config has been validated and applied, the Deployment is created whatever the license says. With `fallbackToCE=true` and an expired or pre-expiry license, it runs the CE render and image from the start and the phase is `Degraded`. With `fallbackToCE=false` it is created from the EE render, the phase is `Error` (`LicenseExpired=True` without `LicenseDegraded`), and its EE pods stop at, or refuse to start after, the license's expiry; a license that cannot be read leaves `LicenseSecretUnavailable=True` and the pods wait for the Secret mount.
 
 ### CE Fallback Behavior
 
 When falling back from EE to CE:
 
-1. **Strip structural EE features** — remove wildcard endpoints (`/*`) which CE's router rejects
-2. **Switch container image** — use `spec.ceImage` if set; otherwise fall back to `krakend/krakend:{spec.version}`. The `spec.image` field (EE override) is ignored during CE fallback
-3. **Keep EE `extra_config` namespaces** — CE silently ignores unknown namespaces like `security/policies`, `auth/api-keys`, etc.
-4. **Disable Dragonfly-dependent features** — cluster rate limiting, quota, and token revocation won't function without the EE binary, even with Redis available
-5. **Set `LicenseValid=False`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
-6. **Set status condition** — `LicenseDegraded=True` (reason: `LicensePreExpiry` or `LicenseExpired`) with message explaining the degradation
-7. **Emit Kubernetes event** — `Warning` event on the KrakenDGateway for alerting
+1. **Strip every Enterprise-only feature and list it.** The CE
+   render drops EE wildcard endpoints (`/prefix/*`) and every Enterprise-only
+   `extra_config` namespace at service, endpoint and backend level. The list
+   is taken from the KrakenD 2.13 Enterprise documentation, because the CE
+   and EE 2.13 binaries embed the same schema and CE lint accepts them all.
+   The gateway reports `CEFallbackApplied=True/EEFeaturesStripped` listing
+   each removal, and each affected endpoint reports `Accepted` reason
+   `EEFeaturesStripped`; docs-only namespaces are dropped without being listed
+   on the endpoints, so they never make an endpoint not Ready. On every CE
+   render (CE edition or CE fallback) the OpenAPI export init container and
+   sidecar are omitted, because the CE binary has no `openapi` command.
+2. **Switch container image — only once the CE render is applied.** The CE
+   render is validated as CE: verdicts are keyed on (checksum, edition), and
+   `status.configEdition` records the edition of the applied config. The
+   image follows the applied edition, so while a CE render is rejected the
+   pods stay on EE with the EE-validated config. The CE image is
+   `spec.ceImage` if set, otherwise `krakend:{spec.version}`;
+   `spec.image` (EE override) is ignored during CE fallback. While the
+   applied edition differs from the current one (a CE fallback whose render is
+   rejected), version and custom-image changes wait too, and take effect once a
+   render is validated for the new edition.
+3. **Disable Dragonfly-dependent features** — cluster rate limiting, quota, and token revocation won't function without the EE binary, even with Redis available
+4. **Set `LicenseValid=False` and `LicenseExpired=True`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
+5. **Set status condition** — `LicenseDegraded=True` (reason: `LicenseFallbackCE`) with message explaining the degradation
+6. **Emit Kubernetes event** — `Warning` event on the KrakenDGateway for alerting
 
 ### EE Recovery (from Degraded or Error back to EE)
 
 When a valid license becomes available again (e.g., Secret updated by ESO with a renewed certificate):
 
-1. **License monitor detects valid license** — reads the Secret, parses X.509 `notAfter`, confirms validity
+1. **The gateway reconcile detects a valid license** — reads the Secret, parses X.509 `notAfter`, confirms validity
 2. **Re-render config from original CRD spec** — the KrakenDGateway and KrakenDEndpoint CRDs retain the full EE configuration (including wildcard endpoints); re-render restores all EE features
-3. **Switch container image back to EE** — restore `spec.image` if set (user override); otherwise use `krakend/krakend-ee:{spec.version}`
-4. **Rolling deployment** — new EE pods start with the full config and valid license (if recovering from `Error` with no existing Deployment, create the Deployment)
-5. **Clear `LicenseDegraded` condition** — set `LicenseDegraded=False` (only applicable when recovering from `Degraded`). If recovering to `EERunning` state (`expiry > now+warningDays`), set `LicenseValid=True` (reason: `LicenseOK`). If recovering to `EEWarning` state (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=False` (reason: `ExpiringSoon`) — the license is still approaching expiry, so the reason is updated from the prior fallback reason to `ExpiringSoon`. If recovering from `Error`, set `LicenseExpired` to `False` (if previously set) and set `LicenseValid` per the applicable state
+3. **Switch container image back to EE** — once the EE render is validated as EE and applied, restore `spec.image` if set (user override); otherwise use `krakend/krakend-ee:{spec.version}`
+4. **Rolling deployment** — new EE pods start with the full config and valid license
+5. **Clear `LicenseDegraded` and `LicenseExpired`** — set both to `False` (reason: `LicenseRestored`). If recovering to `EERunning` state (`expiry > now+warningDays`), set `LicenseValid=True` (reason: `LicenseOK`). If recovering to `EEWarning` state (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=True` (reason: `LicenseExpiringSoon`) — the license is still approaching expiry
 6. **Emit Normal event** — `LicenseRestored` on the KrakenDGateway
 
 ---
@@ -1259,61 +1291,191 @@ The operator renders the final `krakend.json` from CRD state through a determini
 ```mermaid
 flowchart TD
     A[Collect KrakenDGateway spec] --> B[List all KrakenDEndpoints<br/>matching gatewayRef]
-    B --> BA[Detect endpoint path+method<br/>conflicts across all endpoints]
+    B --> BA[Detect route conflicts<br/>keyed on method and route shape]
     BA --> BB{conflicts?}
-    BB -->|Yes| BC[Mark conflicting endpoints<br/>as Conflicted<br/>Emit Warning Events]
+    BB -->|Yes| BC[Record each lost entry<br/>PartiallyAccepted or EndpointConflict<br/>Emit Warning Events]
     BB -->|No| C
     BC --> C[Resolve KrakenDBackendPolicy<br/>references]
     C --> CA{Missing policyRef?}
-    CA -->|Yes| CB[Mark affected endpoints<br/>as Invalid]
+    CA -->|Yes| CB[Exclude the endpoint and drop its Accepted<br/>the endpoint controller reports ResolvedRefs=False]
     CA -->|No| D
-    CB --> D[Build internal config model<br/>excluding Conflicted and Invalid endpoints]
+    CB --> D[Build internal config model<br/>without the lost entries and the<br/>endpoints with a missing policy]
 
-    D --> DA{CE fallback active?}
-    DA -->|Yes| DB[Strip wildcard endpoints<br/>from deployed config]
-    DA -->|No| E
-    DB --> E
-    E{edition == EE<br/>and not CE fallback?}
-    E -->|Yes| EA{dragonfly.enabled?}
-    EA -->|true| F[Derive redis connection pool<br/>from Dragonfly Service DNS convention]
-    EA -->|false| FB[Use user-provided<br/>redis.connectionPool.addresses]
-    E -->|No| G[Skip EE service-level<br/>namespace injection]
+    D --> E{dragonfly.enabled?}
+    E -->|true| F[Derive redis connection pool<br/>from Dragonfly Service DNS convention]
+    E -->|false| FB[Use user-provided<br/>redis.connectionPool.addresses]
     F --> H[Merge service-level extra_config]
     FB --> H
-    G --> H
 
-    H --> I[Build endpoints array<br/>from non-conflicted KrakenDEndpoints]
+    H --> I[Build endpoints array<br/>from the entries that won their route]
     I --> J[Apply backend policies<br/>merge extraConfig + policyRef<br/>inline extraConfig takes precedence on key collision]
     J --> K[Inject TLS config<br/>if tls.enabled and NOT istio]
     K --> K1[Inject plugin block<br/>if plugins configured]
-    K1 --> K2[Select container image:<br/>if CE fallback: use ceImage or<br/>krakend/krakend:version<br/>else: use image or edition default]
-    K2 --> L[Serialize to JSON<br/>— this is the deploy config]
+    K1 --> KA{CE fallback active?}
+    KA -->|Yes| KB[Strip wildcard endpoints and Enterprise-only<br/>extra_config, listing each removal]
+    KA -->|No| L
+    KB --> L[Serialize to JSON<br/>— this is the deploy config]
     L --> M[Compute SHA-256 checksum]
-    M --> N{checksum changed?}
+    M --> N{checksum and edition<br/>match the applied config?}
 
-    N -->|No| N1{Desired image ≠<br/>current Deployment image?}
+    N -->|Yes| N1{Applied image ≠<br/>current Deployment image?}
     N1 -->|No| N3{checksum/plugins<br/>changed?}
-    N3 -->|No| O[No-op: skip deployment<br/>Set phase=Running if phase<br/>at start of reconcile was not<br/>Degraded, Error, or Deploying]
-    N3 -->|Yes| N4[Set phase=Deploying<br/>Set Progressing=True<br/>Patch pod annotation: checksum/plugins]
+    N3 -->|No| O[No new config: republish the ConfigMap if it is missing<br/>or its payload does not hash to the checksum<br/>Then set ConfigValid=True, or ConfigPublishFailed if that fails<br/>Derive Ready and phase]
+    N3 -->|Yes| N4[Patch pod annotation: checksum/plugins<br/>Progressing=True follows the Deployment write]
     N4 --> U
-    N1 -->|Yes| N2[Set phase=Deploying<br/>Set Progressing=True<br/>Patch Deployment container image +<br/>checksum/plugins if changed]
+    N1 -->|Yes| N2[Patch Deployment container image +<br/>checksum/plugins if changed<br/>Progressing=True follows the Deployment write]
     N2 --> U
-    N -->|Yes| D0[Set phase=Rendering]
-    D0 --> N0[Set phase=Validating]
-    N0 --> PW[Create validation copy:<br/>strip wildcard endpoints<br/>if edition=EE AND CE fallback not active]
-    PW --> P[Run krakend check -tlc<br/>on validation copy]
+    N -->|No| RJ{Same render and edition<br/>already rejected?}
+    RJ -->|Yes| S
+    RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rules and the route check in Go,<br/>then krakend check -t -n -c on the copy]
 
-    P --> Q{Valid?}
-    Q -->|Yes| R[Set ConfigValid=True<br/>Set phase=Deploying<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
-    Q -->|No| S[Set ConfigValid=False<br/>Set phase=Error<br/>Emit Warning Event<br/>STOP]
+    P --> Q{Verdict?}
+    Q -->|Yes| Q2{Publish ConfigMap gw-config-hash:<br/>created, or the existing one<br/>verified by its payload hash?}
+    Q2 -->|Published| R[Set ConfigValid=True<br/>Write status.configChecksum and configEdition at once,<br/>before acceptance and the Deployment step]
+    Q2 -->|Failed| W[Set ConfigValid=Unknown<br/>reason ConfigPublishFailed<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event, on a change of reason<br/>Continue with the infrastructure stage,<br/>then return the error: retry with backoff]
+    Q -->|No| S[Set ConfigValid=False<br/>Keep the applied config<br/>Emit a Warning Event only if the verdict changed<br/>Continue with the infrastructure stage]
+    Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event, on entering the state<br/>Continue with the infrastructure stage,<br/>then return the error: retry with backoff]
 
-    R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + container image]
+    R --> T[Patch Deployment: mount the new ConfigMap,<br/>pod annotation: checksum/config +<br/>checksum/plugins + checksum/license + container image]
     T --> U[Kubernetes Rolling Update]
 
     style S fill:#f66,stroke:#333
+    style V fill:#fc6,stroke:#333
+    style W fill:#fc6,stroke:#333
     style U fill:#6f6,stroke:#333
     style BC fill:#ff6,stroke:#333
 ```
+
+### Config stage and infrastructure stage
+
+Each reconcile runs two stages. The config stage (render → validate →
+publish) is the only code that decides the applied config
+(`status.configChecksum`, with the edition it was validated for in
+`status.configEdition`) or writes config content. The infrastructure stage
+then always runs. It converges the ServiceAccount, Service, PDB, Deployment,
+HPA, post-restart Job and optional resources on the *applied* config, so a
+rejected or unjudged render never stops drift correction. The Deployment is
+created only once a config has been applied, and is left as it is while no
+ConfigMap holds the applied config, a plugin ConfigMap is missing, or the
+gateway does not control its ServiceAccount (see *Taking over existing
+objects*). The rest of the gateway status is written once, after both stages.
+
+The applied config is recorded before anything acts on it. Right after a
+render is published, the config stage writes `status.configChecksum` and
+`status.configEdition` (with `ConfigValid`) to the status, before endpoint
+acceptance and before the Deployment is pointed at the new ConfigMap. A pass
+that cannot apply its render keeps the stored config and re-points the
+Deployment to it, so pods must never be ahead of that record. When the write
+fails (typically a conflict because the gateway changed during the pass) the
+in-memory apply is undone: no endpoint is accepted against the new config, the
+Deployment is not moved, and the error is returned so the next pass, reading a
+fresh gateway, applies it. A pass that applies the config already stored
+writes nothing extra, so the record costs one status write per newly applied
+config. Until the Deployment moves on, that stored status reads as a rollout
+under way (`Progressing=True`, reason `ConfigDeployed`), so `Ready` is not
+`True` beside the new checksum. It reads `False` and `Deploying`, or whichever
+higher-ranked condition applies (for example `Degraded` on a CE fallback, or
+`Error` for `Available=False`, a missing plugin ConfigMap, or a refused
+ServiceAccount or Deployment). A pass whose Deployment step or ServiceAccount
+step fails without a refusal keeps `Ready` not `True` for as long as the
+Deployment is missing or mounts the older config; the reason can change to
+`DeploymentUpdated` when an image, plugin or license change is also pending.
+If the Deployment loses its availability only after that record was stored,
+the gateway keeps reading `Deploying` until the failing step recovers; `Ready`
+is never `True`. The end of a pass raises no `Progressing` for a refused
+Deployment: nothing rolls it, and `ResourcesControlled=False` reports it.
+
+A pass that applies nothing also guards the other direction. When the
+Deployment carries a config checksum other than the cached gateway's, it reads
+the stored checksum through the uncached reader before re-pointing the
+Deployment. If the cache is behind (the stored checksum differs from the cached
+one) the pass changes nothing and is retried; if it matches, the Deployment is
+re-pointed to the stored config, which also reverts a `kubectl rollout undo`.
+
+### Taking over existing objects
+
+The gateway writes its children by name, so an object with that name may
+already exist. `applyOwned` (and the Deployment write) decide on the object as
+fetched, inside the `CreateOrUpdate` mutate function and before the builder
+rewrites its labels: the gateway writes it only if it already controls it, or
+it has no controller and carries the instance and managed-by labels the
+operator's own builder stamps on that kind
+(`app.kubernetes.io/instance=<gateway>` for every kind but the Dragonfly,
+whose instance is `<gateway>-dragonfly`, and
+`app.kubernetes.io/managed-by=krakend-operator`). Each call site passes its
+kind's pair, and the `notControlledError` carries it into the condition's
+message. Those labels are the hand-over, since only someone who can write the
+object can set them, and an object left by `kubectl delete --cascade=orphan`
+still carries them. Anything else is refused with a `notControlledError` and
+not written: an object another controller owns, and an unlabelled object
+nothing owns. The pods run as the ServiceAccount named like the gateway, so a
+refused ServiceAccount holds the Deployment and the post-restart Job. The
+infrastructure stage turns the refusals of a pass into the
+`ResourcesControlled` condition (`False` with reason `ResourceNotControlled`,
+naming each object, its controller and the remedy), which `Ready` folds in the
+way it folds `PluginsResolved`. The decision is made on the exact version the
+write would replace, so a stale cache read cannot bypass it: a missed object
+fails the create with `AlreadyExists`, and a stale controlled or labelled read
+fails the update on its `resourceVersion` whenever the write changes anything.
+
+Two children name a sibling, and follow its control. The HPA scales the
+Deployment named like the gateway: while the gateway may not take that
+Deployment over, the HPA is not written, and one the gateway controls is
+deleted. The Deployment step's refusal decides when the step runs. On a hold,
+where it does not (no config applied yet, no ConfigMap holding it, a missing
+plugin ConfigMap, or a ServiceAccount the gateway does not control), the
+pass's read of the Deployment decides; `ResourcesControlled` names that
+Deployment only once a pass runs the step and refuses it. The VirtualService
+routes to the Service named like the gateway, and the Service step runs on
+every pass: while it refuses that Service, the VirtualService is not written,
+one the gateway controls is deleted, and `IstioConfigured` is `False` with
+reason `ResourceNotControlled`. A refused Deployment raises no `Progressing`,
+and config ConfigMaps are still collected beside it, since the config stage
+keeps publishing one per applied config while the refusal lasts.
+`detectDragonflyState` applies the same rule to the Dragonfly it reads before
+the render: a refused one reads `DragonflyReady=False`
+(`ResourceNotControlled`), its address is not published in
+`status.dragonflyAddress`, and the render points no Redis pool at it, falling
+back to `spec.redis` as when the CRD is missing. That changes the rendered
+config and its checksum.
+
+### Conflict reporting
+
+Conflicts are resolved per route entry, keyed on the method and the route
+shape (`renderer.ConflictKey`: parameter names erased and the path cleaned),
+not the literal path, so `/users/{id}` and `/users/{name}` are one route. The
+oldest KrakenDEndpoint's entry is rendered, and between two entries of one
+KrakenDEndpoint the earlier spec entry is (the winner is then the endpoint
+itself). A KrakenDEndpoint that lost some but not
+all of its entries is `Accepted=True/PartiallyAccepted`; one that lost all of
+them is `Accepted=False/EndpointConflict`. In both cases `status.conflicts`
+lists each lost entry once for every KrakenDEndpoint it loses to (the winner:
+an older endpoint, or this one when an earlier entry of it won), and the
+winner's entry may itself be left out. The gateway
+writes it in the same optimistic-lock status patch as `Accepted`.
+
+Admission stops new conflicts before the renderer sees them. The
+KrakenDEndpoint webhook rejects each changed entry whose method and route
+shape another entry on the same gateway already has (`Duplicate value`,
+naming the owner and the clashing path; it names the endpoint the renderer
+serves). Against other KrakenDEndpoints it checks only routes new to the
+stored object, so a stored conflict never blocks an edit to the body of the
+entry that is served. Same-shape entries inside one KrakenDEndpoint are always
+checked when an entry changes. Endpoints with the same controller (two
+endpoints one KrakenDAutoConfig generated while it renames an operation) are
+exempt: the
+renderer serves the older one until the AutoConfig deletes it, so same-shape
+entries of one AutoConfig are caught by no admission rule. The AutoConfig
+controller itself holds all but the one the renderer serves among its
+desired endpoints, written or not (see §16, *Per-Operation Failures and
+Status*). Oldest-wins
+stays as the fallback for concurrent applies and for conflicts stored before
+the rule. Router clashes and EE wildcard overlaps between two endpoints are reported the same way: the newer endpoint's entry is left out, and `EntryConflict.Detail` carries the router's
+refusal. The newer entry stays out while any older entry it clashes with exists,
+served or not, and it is recorded once for every older endpoint it clashes with. Routes that share a parameterized prefix (`/users/{id}` and
+`/users/{id}/orders`) must name the parameter alike. When they live in
+different KrakenDEndpoints no intermediate state is valid, so keep them in one
+KrakenDEndpoint and rename them in one apply.
 
 ### Deterministic Ordering
 
@@ -1324,11 +1486,55 @@ To ensure consistent JSON output (and avoid unnecessary rolling restarts from no
 - Sorts backend `host` arrays alphabetically
 - Uses canonical JSON serialization (no trailing commas, consistent indentation)
 
+Status is written only when it changes, so a reconcile with nothing to do makes no API write, and a gateway whose config stays rejected settles instead of re-validating on every event. The operator remembers, in memory, per gateway and per check unit, every verdict of its last pass, acceptances included, keyed by content (the render's checksum, the edition and the check); it checks again when the content changes (any input, or a switch to or from CE fallback) and once after an operator restart.
+
 ### Validation Strategy
 
-The operator runs `krakend check -tlc` against the rendered configuration before deploying. The KrakenD CE binary must be embedded in the operator's container image (via multi-stage Docker build). Validation is executed by invoking the binary as a subprocess against the rendered JSON file.
+The operator runs `krakend check -t -n -c` against the rendered configuration before deploying. The KrakenD CE binary must be embedded in the operator's container image (via multi-stage Docker build). Validation is executed by invoking the binary as a subprocess against the rendered JSON file.
 
-> **EE wildcard endpoints and CE validation:** The CE binary's router rejects wildcard endpoint patterns (`/*`). To validate EE configurations containing wildcards (when CE fallback is not active), the operator **strips wildcard endpoints from the validation copy** before running `krakend check -tlc`, then includes them in the final deployed ConfigMap. When CE fallback is active, wildcards are already stripped from the deployed config itself (the "Strip wildcard endpoints from deployed config" step earlier in the pipeline), so the validation copy inherits this stripped state. The CE validator thus validates all non-wildcard structural and semantic aspects. Wildcard routing correctness is only fully validated at EE runtime. This approach avoids requiring an EE license in the operator image.
+The gateway controller does not gather and validate on its own: it uses the same `configcheck.Checker` the admission webhooks use. It reads the gateway's endpoints and their policies through `Checker.Gather`, replaces the CE fallback `Gather` read from status with the verdict of its own license evaluation in the same reconcile, renders, and validates the whole render through `CheckRendered` (the route check, then `krakend check -t -n`); it lints the root and each endpoint on its own with `krakend check -n`, as admission does for the objects it judges. One pod-wide pool of 3 validation slots serves both, so at most three krakend processes run at once; that is why the operator's memory limit is 512Mi.
+
+> **EE wildcard endpoints and CE validation:** The operator validates with
+> the embedded CE binary, whose router refuses unnamed wildcards and cannot
+> model EE's. The EE router registers `/p/*` as the catch-all `/p/*Wildcard`
+> in its method's tree, so no other route of that method may start with
+> `/p/`. For an EE render the validator therefore does two things:
+> 1. It applies that rule in Go. A conflict is reported as two
+>    `/endpoints/<i>` findings, one per endpoint. Like the route check
+>    below, it stops after 21 conflicts with a notice line, so nested
+>    wildcards over many routes cannot grow the findings or the work
+>    without bound.
+> 2. It checks, with the CE binary, a copy in which each wildcard's trailing
+>    `*` is rewritten to the path parameter `{Wildcard}`. This only models the
+>    route: EE has no such parameter, so a backend `url_pattern` that
+>    references `{Wildcard}` on a wildcard endpoint is rejected.
+>
+> The copy keeps every endpoint at its index. Between two endpoints the same rule
+> is applied at render time, oldest first (below). A root `/*` is left as is and refused by the route check below, as EE
+> does. No EE license is needed in the operator image.
+
+After those rules, and before `krakend check`, the validator registers every
+route of the edition's copy in an in-process gin engine (the gin version
+KrakenD 2.13 embeds), in the order the KrakenD runtime registers them. That
+reproduces what `krakend check -t` catches, and adds the routes `-t` never
+registers and the runtime panics on: the gateway's health endpoint (a custom
+`health_path`) and the per-path `OPTIONS` routes `router.auto_options` adds. A
+refused route is a verdict on what was checked, and `krakend check` is not run. The check runs for both `Validate`
+(`krakend check -t -n`) and `Lint` (`krakend check -n`). Its cost is bounded: it
+stops after 21 refused routes with a notice line (a refusal rebuilds the engine,
+so unbounded refusals would cost refusals times routes), and it, like the EE
+wildcard rules, ends with the context's error, not a verdict, when the request's
+context ends, so a config cannot hold a validation slot past the admission
+budget.
+
+The embedded binary is pinned by digest (`KRAKEND_IMAGE` in the operator's
+`Dockerfile`, KrakenD CE 2.13.11), and `configcheck.ValidatorVersion` names its
+minor version, 2.13. Admission and the gateway controller validate every gateway
+with that binary, whatever its `spec.version`; admission warns when a gateway's
+`spec.version` is another minor. An integration test runs the
+pinned binary against the route check, including that the gin version in the
+binary equals the one in `go.mod`, so the pin, `ValidatorVersion` and gin change
+together.
 
 Alternatively, for environments where embedding the binary is impractical:
 
@@ -1337,7 +1543,201 @@ Alternatively, for environments where embedding the binary is impractical:
 
 The embedded-binary approach is preferred for latency and simplicity.
 
-> **Note:** The CE validator's `-l` (lint) flag validates against the CE JSON schema. EE-only `extra_config` namespaces (e.g., `governance/quota`, `security/policies`) pass lint if structurally valid JSON but are not semantically validated. EE-specific configuration errors may only surface at runtime. This is an accepted limitation — the CE validator still catches structural errors, unknown root keys, and router conflicts.
+> **Note:** The `-n` flag lints against the JSON schema built into the embedded binary, so validation needs no network access and its verdict changes only with an operator upgrade. EE-only `extra_config` namespaces (e.g., `governance/quota`, `security/policies`) pass lint if structurally valid JSON but are not semantically validated. EE-specific configuration errors may only surface at runtime. This is an accepted limitation — the CE validator still catches structural errors, unknown root keys, and router conflicts.
+
+Each run is limited to 30 seconds. Only a run that completes and exits non-zero is a verdict ("the config is invalid"); a missing binary, a timeout or a killed process means the config was not judged, and the controller retries.
+
+**Each object is judged on its own.** `configcheck.Checker` has one check per
+unit, and every caller (admission, the gateway controller, the AutoConfig
+precheck) uses the same ones, so all of them blame the same object:
+
+| Unit | Rendered | Check | Its output goes to |
+|---|---|---|---|
+| root | the gateway with no endpoint (the controller adds the Dragonfly Redis address; admission renders none) | `krakend check -n` after the EE and route rules | the gateway (ConfigValid, gateway admission) |
+| policy | a synthetic CE gateway whose one backend references it | `-n` | policy admission only |
+| endpoint | root + the endpoint + its policies, each policy checked alone first; when it fails and references a policy of another namespace, again with that policy rendered empty | `-n` | the endpoint (Accepted, endpoint admission) and, in a hold, the AutoConfig operation |
+| group | root + a set of endpoints (+ one policy override) | `-n` | nobody: a pass vouches for each endpoint that lost no entry in it |
+| full | the controller's render | `-t -n` | the operator log only |
+
+krakend check's output is never parsed to decide blame. Rules that span
+objects are decided in Go by identity:
+- route uniqueness: oldest wins, by creation time and then namespace/name;
+- router clashes and EE wildcard overlaps between two endpoints: oldest wins,
+  at render time, entry by entry. `RenderOutput.EntryConflicts` gets the
+  losing entry once for every older endpoint it clashes with (the winner, which
+  may itself be left out), with the router's refusal in `Detail`. A newer entry loses to
+  any older entry it clashes with, whether or not that older entry is served,
+  so a delete can only bring entries back, and a write can push an entry out
+  only through a clash its own entries take part in. Entries that the router refuses on their own, that clash only
+  with their own endpoint's entries, or that clash with the gateway's own
+  routes, are left in for that endpoint's own check, as is an entry whose
+  clash needs several older routes together. After 21 entries the router
+  refuses next to older ones (the left-in clash of several routes counts too) the render stops resolving
+  (`RenderOutput.RouteResolutionCapped`), and every consumer then fails closed:
+  endpoint admission denies, gateway admission denies an update that changes the
+  config (a create or a `SameConfig` update is not refused), the AutoConfig
+  precheck holds every write;
+- missing policies and Enterprise features on CE: unchanged.
+
+Admission and the AutoConfig controller refuse a write that would create a new
+router clash in either direction (`configcheck.NewClashes`, which compares
+clashes by loser, winner, method and path).
+
+A passing group or full check vouches only for the entries it rendered. An
+endpoint that lost an entry in it (`configcheck.MaskedEndpoints`) is judged on
+its own as well, so a stored endpoint whose losing entry fails on its own is
+excluded however the rest of the gateway fares, and endpoint admission and the
+gateway controller give it the same verdict.
+
+**The gateway controller** applies a new render in this order: the root alone;
+the whole render (`-t -n`); each endpoint alone, for every endpoint when the
+whole render fails and for each endpoint that lost an entry in it when it
+passes; then the render without the endpoints that fail, `-t -n` again (not
+run when that render is the config the gateway already applies). When
+the render equals the applied config, the root and whole-render checks are
+skipped, but the endpoints that lost an entry are still judged first, from the
+memo when their content is unchanged. If one of them fails, the controller goes
+on to the root, the whole render, each endpoint and the safety re-check, and then
+publishes. The checks also run whenever the memo misses, for example after a
+restart, or after an edit of a left-out entry (it does not change the render's
+checksum).
+- An endpoint that fails on its own is excluded with `Accepted=False`
+  (`EndpointInvalid`, or `PolicyInvalid` naming the policy), and the rest is
+  applied. Its message says it is not served, or, when the pass applies
+  nothing, that it will not be served when the gateway next applies its config.
+- A root that fails alone (`GatewayRootInvalid`) or a failure that needs
+  several endpoints together (`CombinedConfigInvalid`) keeps the last applied
+  config and blames no endpoint. The latter's message quotes nothing; the
+  output is logged (cut at 16 KiB). The endpoints that pass on their own fail
+  together, and any that fail on their own were excluded first, so the safety
+  re-check can return it after exclusions.
+- An unavailable validator excludes nothing and lifts no exclusion: each endpoint keeps its verdict. The exception is a gateway that has never applied a config: a pass that applies nothing removes every `Accepted`, outage included.
+- `EndpointsExcluded` and `krakend_operator_gateway_excluded_endpoints` are
+  derived from the endpoints' `Accepted` reasons by every pass that reaches
+  the report; an early return skips it, so after a restart the gauge returns
+  with the first pass that gets that far. A Warning event `InvalidEndpointsExcluded`
+  marks the condition appearing or its message changing.
+- `config_validation_failures_total` counts the gateway controller's fresh
+  rejections of the root, of a policy alone and of an endpoint alone, once per
+  change of what it checks; the full checks, the AutoConfig precheck and
+  admission do not count.
+
+**Policy and gateway admission** check every gateway first (its root, then its
+endpoints together), and name afterwards. When the endpoints fail together, or
+some lost an entry, each such endpoint is checked with the new object and,
+when it fails, with the stored one. A write is denied when any endpoint fails
+with it and passed before, whatever other endpoints already fail; it draws only
+a warning when every failing endpoint already failed. A gateway update whose
+stored root fails on its own compares nothing for the endpoints its last
+applied config served (`Accepted` True or `PartiallyAccepted` for their
+current generation), since every stored check fails with that root: one of
+them failing with the new root is denied, and any other endpoint only draws the
+warning. The stored group is not compared either, so a failure that appears
+only with the endpoints together is denied. On a policy create
+nothing was stored, so the baseline is the policy with its name and namespace
+and no content: an endpoint that fails anyway only draws a warning, and a
+failure that appears only with the endpoints together is still denied. Naming
+stops at 20 endpoints or at the 12 s admission budget; a denial found by then
+stands, and the names are bounded by bytes, with the not-checked counts always
+kept. When the group of the endpoints with the write fails, the stored group
+(the stored object, or the policy rendered empty on a policy create) is
+checked before the endpoints are scanned, and so are the endpoints it lost an
+entry in and those that use a policy failing `krakend check` on its own (each
+distinct policy is checked as stored, which no group check does). If the group
+passes and none of those fails both ways, the write is the cause of the
+failure whichever endpoints the scan reaches, so the write is refused with a
+`422` even when the budget ends before the scan has named an endpoint it
+breaks (`(N not checked within the admission time)`): the scan changes only
+how many endpoints are named, never the verdict. Nothing is decided in advance
+when the stored group fails too, when one of those endpoints fails both ways
+(the decision is withdrawn when any endpoint does), when the stored root fails
+on its own (a gateway update), or when a check cannot run. Then no denial and
+an unfinished scan is a `500` (a gateway create only warns), which a large
+gateway with many failing, not yet recorded endpoints can return until the
+controller records their exclusions.
+
+Both check an endpoint that already fails on its own before they check the
+endpoints together. While such an endpoint is not yet recorded as excluded, a
+write that makes the other endpoints fail only together is therefore admitted
+with a warning, and the gateway then reports `CombinedConfigInvalid`.
+
+**Memos.** Every check is keyed by content: `<sha256 of the render>/<edition>/<lint|validate>`.
+- Per gateway, and per AutoConfig: the verdicts of the last pass. A failed pass
+  keeps the earlier ones too. The memo is dropped with its owner, so an
+  unchanged gateway runs no check, even while it excludes endpoints.
+- Admission: the 256 most recent verdicts, shared by the pod.
+- A remembered verdict keeps at most 16 KiB of krakend output. A memo is
+  untrusted: an entry that is not exactly one of an acceptance and a
+  rejection is a miss, and the check runs again.
+
+Messages that carry krakend output are bounded: `ConfigValid`, its event and an
+endpoint's `Accepted` carry at most 4 KiB. The gateway controller logs krakend
+output only for a failure that needs the endpoints together, and then only the
+copy cut at 16 KiB; a root failure goes only into `ConfigValid` and its event,
+and an endpoint failure only into its `Accepted` message.
+
+**Cost** (krakend runs; each holds one of the pod's 3 slots; M is the number
+of endpoints that lost an entry, P the policies, N the endpoints):
+
+| Path | Runs |
+|---|---|
+| gateway, render applied | M endpoints, usually remembered; when one fails, as in the next two rows |
+| gateway, new render passes | ≤ 2 (root, full) + M endpoints; + 1 safety re-check when one of them is excluded |
+| gateway, new render fails | ≤ 2 + P policies + N endpoints + 1, minus what the memo knows |
+| AutoConfig sync with C candidates | ≤ 2 (root, group) + the candidates that lost an entry; + P + C when the group fails |
+| policy reconcile | 1 per distinct policy content, remembered for the 256 most recent (a restart checks each policy once again) |
+| endpoint write | ≤ 2 + P (root, its policies alone, unit); + 1 stub, + the stored version's, on failure |
+| policy write over G gateways | 1 + 2G; + 1 per endpoint judged on its own (all of a gateway's endpoints that use it when its group fails, else M) and 1 more for each that fails; + 1 stored group (on a create, with the policy empty) when the group fails, and, when that passes, 1 per distinct policy its endpoints use. An endpoint check runs each referenced policy alone, the endpoint, and, when it fails and references a policy of another namespace, again with that policy emptied; the stored baseline repeats these |
+| gateway write | 2; + 1 stored root when the root fails or endpoints are judged on their own; + the endpoint checks as for a policy write; + 1 stored group when the group fails and the stored root passes, and, when that passes, 1 per distinct policy its endpoints use |
+
+On the pinned binary (KrakenD CE 2.13.11) one run takes:
+
+| Check | Unthrottled | At the chart's 500m CPU limit |
+|---|---|---|
+| `krakend check -n`, root + 1 endpoint | 0.05 s | 0.10 s |
+| `krakend check -n`, 500 endpoints | 0.07 s | 0.17 s |
+| `krakend check -t -n` | about 1.05 s | 1.1–1.2 s |
+
+One endpoint's check costs about 0.1–0.13 s at the 500m limit, and more
+while the controllers compete for the same CPU or a slot is taken. Naming the
+endpoints a write breaks, after a group check that fails, judges each served
+endpoint on its own, one run after another, so it costs about 0.1 s per served
+endpoint, plus one more for each that fails. After the root, the group and the
+stored root and group, the 12 s admission budget covers about 80–110 such
+checks, so a gateway of several hundred served endpoints cannot be named in
+full. Deciding the write costs less: four lints, about 0.5 s at 500m for 500
+endpoints (a group lint grows with the endpoints, about 0.27 s at 1000), plus
+one policy check for each distinct policy the endpoints reference, plus up to
+two endpoint checks for each endpoint it judges first: those the stored render
+masked and those that use a policy failing on its own. That is every endpoint
+that uses the policy when a policy write's stored policy fails on its own, so
+there deciding is not cheaper. So a request whose group passes stays far
+inside the 15 s webhook timeout, and one whose group fails is refused
+within the budget, naming what the scan reached; waiting for a slot can also
+delay it. The memos live in the operator's memory. After a
+restart or a leader failover, or after an edit of a gateway's root or edition,
+a gateway whose whole render fails checks every endpoint once more, one at a
+time on the gateway controller's single worker: about 50–60 s for 500
+endpoints, during which other gateways wait. A gateway whose render passes
+pays its root, its full check and its M endpoints. The units are not split
+into groups to find the failing ones faster, not run in parallel (the
+controllers hold at most 2 of the 3 slots, so admission always has one: the
+gateway controller's worker holds one, and the AutoConfig prechecks and the
+policy controller's checks share the other; and the krakend processes share
+the operator's CPU limit), and not stored in the cluster (that needs a CRD
+change, and a stored verdict is only as trustworthy as the RBAC on the status
+subresource).
+
+**Where admission and the controller can differ.** Both run the same checks,
+with two inputs read differently:
+- CE fallback: admission reads it from the gateway's status
+  (`LicenseDegraded`); the controller decides it from the license in the same
+  reconcile. Around a license change, an endpoint can be admitted and then
+  excluded, or the reverse, until the status catches up.
+- Dragonfly: the controller renders the Redis address Dragonfly provides into
+  the root and each endpoint check; admission renders none. A root that fails
+  only with it is reported by the controller as `GatewayRootInvalid` but not
+  refused by gateway admission.
 
 ---
 
@@ -1368,6 +1768,8 @@ graph TB
     VOL --> KD
 ```
 
+A `configMapRef` source whose ConfigMap does not exist sets `PluginsResolved=False/ConfigMapNotFound` and holds the Deployment until the ConfigMap exists; the plugin ConfigMap watch reconciles the gateway when it appears.
+
 ### Plugin Source Types
 
 | Source | Use Case | Size Limit | Update Mechanism |
@@ -1388,7 +1790,7 @@ The operator assembles the plugin volume mount from all configured sources using
 The operator uses an `emptyDir` volume at the plugin mount path and init containers to assemble all plugin files into it:
 
 1. **ConfigMap sources** — an init container copies `.so` files from each projected ConfigMap volume into the emptyDir
-2. **PVC sources** — an init container copies `.so` files from the PVC mount into the emptyDir (only one PVC source supported per gateway; the admission webhook rejects multiple PVC sources)
+2. **PVC sources** — an init container copies `.so` files from the PVC mount into the emptyDir (only one PVC source supported per gateway; the CRD rejects multiple PVC sources)
 3. **OCI image sources** — an init container pulls the image and copies plugin files into the emptyDir
 
 This strategy avoids the Kubernetes limitation that prevents mounting a `projected` volume and a `persistentVolumeClaim` at the same `mountPath`. KrakenD's plugin loader does not recurse into subdirectories, so all files must be flat in the mount path.
@@ -1429,7 +1831,7 @@ sequenceDiagram
     participant RS2 as New ReplicaSet
     participant SVC as Service
 
-    Op->>Dep: Patch pod template<br/>(checksum annotation)
+    Op->>Dep: Point pod template at the new<br/>immutable ConfigMap <gw>-config-<hash>
     Dep->>RS2: Create new ReplicaSet<br/>(maxSurge: 1)
     RS2->>RS2: Start new Pod
     RS2->>RS2: KrakenD starts, loads new config
@@ -1440,6 +1842,39 @@ sequenceDiagram
 
     Note over SVC: Zero downtime: at least<br/>N replicas always serving
 ```
+
+Each applied config revision is an immutable ConfigMap,
+`<gw>-config-<first 10 hex of the checksum>`, and the pod template mounts it
+by name. The template's `krakend.io/checksum-config` annotation still
+carries the full checksum, and the post-restart Job gate keys on it. A
+rollout therefore changes which ConfigMap new pods mount and never rewrites
+the one old pods mount, so a stalled rollout cannot take down pods that
+restart on the previous ReplicaSet.
+
+The license is mounted with `subPath`, which never receives Secret updates,
+and KrakenD reads its license at startup. The pod template therefore also
+carries `krakend.io/checksum-license`, the SHA-256 of the license bytes the
+operator read. It tracks the mounted license, so it is present for every EE gateway with a readable license, CE fallback or not (the license stays mounted under fallback, so a fallback toggle alone never changes the pod template), and absent on a Community gateway.
+Changing the license in the Secret changes the annotation, rolls the
+Deployment (`Progressing=True`, reason `DeploymentUpdated`, or
+`ConfigDeployed` when a config applied during a plugin ConfigMap hold rolls
+out with it) and holds `Ready` until the new pods are available. When the
+Secret cannot be read, the annotation the Deployment already carries is
+kept, so nothing rolls. The post-restart Job's identity does not include the
+license, so a renewal does not re-run it.
+
+A config ConfigMap is garbage-collected once nothing can mount it. The
+operator keeps the three most recently created revisions, the applied one
+included (revisions created in the same second are ordered by name), and any
+revision a live ReplicaSet (one with or wanting pods) still mounts. While the
+Deployment is held (a plugin ConfigMap is missing, or the gateway does not
+control the ServiceAccount) or refused, collection still runs, and also keeps
+the revision the Deployment's template mounts. ReplicaSets are read uncached,
+and only when there is something to collect.
+Old revisions keep whatever the rendered config embeds, credentials included,
+so a credential embedded in the rendered config outlives its rotation by up to
+two config changes, or for as long as a hold keeps the Deployment on the old
+revision.
 
 ### Deployment Configuration
 
@@ -1594,6 +2029,47 @@ volumeMounts:
     mountPath: /tmp
 ```
 
+### Trusted operator writes
+
+The endpoint webhook skips its render check (and only that check) for a request
+whose `UserInfo.Username` equals `--operator-username` exactly, when the
+endpoint's controller owner reference is a `KrakenDAutoConfig` of this API
+group. Labels never grant it, and no prefix, substring or group match does. The
+username defaults to `system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`,
+built from downward API variables the manifests set. When either is unset, or
+the flag is empty, nobody is trusted. The exemption widens no trust: that
+ServiceAccount can already write these objects, and the AutoConfig controller
+validates the endpoints it is about to write with the shared checker before it
+writes them. The audience rule, the entry rules and the duplicate-route rule
+apply to every writer.
+
+Anyone who can impersonate the operator's ServiceAccount, create its tokens
+(`serviceaccounts/token`), or run a pod as it in the operator namespace gets
+the skip, just as they already get its full RBAC. The impact stays bounded: the
+gateway controller excludes an endpoint that fails on its own and keeps
+serving the rest, and the AutoConfig controller overwrites the spec on its next sync.
+
+### Cross-namespace policy references
+
+A KrakenDEndpoint may reference a KrakenDBackendPolicy of any namespace, and
+the policy's owner is not asked. A policy owner therefore gives every tenant
+that can create endpoints two levers:
+- a policy update that would make a referencing endpoint fail on its own is
+  refused by admission, so a referencing tenant can block the policy's updates;
+- whether the referencing endpoint reports `EndpointInvalid` or
+  `PolicyInvalid` tells its owner whether the policy is what breaks it: one bit
+  about the policy's content.
+
+An endpoint's own check also renders the gateway root with the endpoint, so
+output from a failure that occurs only with a root setting can reveal that
+setting to the endpoint's author.
+
+The policy's content is never quoted to the endpoint's owner: a check that
+fails with another namespace's policy is repeated with that policy rendered
+empty, and only that output is shown. Limiting which namespaces may reference
+a policy needs an API change and is not done; restrict who may create
+KrakenDEndpoints instead.
+
 ### Network Policy (Recommended)
 
 ```yaml
@@ -1628,169 +2104,241 @@ spec:
 
 The operator uses a two-tier RBAC model:
 
-- **`ClusterRole` (cluster-scoped)** — bound via `ClusterRoleBinding` to the operator’s ServiceAccount. Covers: CRD watching/status updates, leader election leases, and cluster-level resources.
-- **Namespaced resources** — the same `ClusterRole` includes permissions for namespaced resources (Deployments, Services, ConfigMaps, etc.). This allows the operator to manage gateways in any namespace. For stricter isolation, a `Role` + `RoleBinding` per gateway namespace can be used instead.
+- **`ClusterRole` (cluster-scoped)** — bound via `ClusterRoleBinding` to the operator’s ServiceAccount. Covers the CRDs, their status subresources, and the namespaced resources the controllers manage (Deployments, Services, ConfigMaps, and so on), so the operator can manage gateways in any namespace. For stricter isolation, a `Role` + `RoleBinding` per gateway namespace can be used instead.
+- **`Role` (namespaced)** — the leader-election Role in the operator's own namespace. Covers the leader-election leases and events; see below.
 
-### Core Resources
+### Manager ClusterRole
 
-```yaml
-# ClusterRole: krakend-operator-manager
-rules:
-  # Manage owned resources
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["services", "configmaps", "serviceaccounts"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch"]    # watch needed for license Secret change detection; scope to gateway namespaces via Role if stricter isolation required
+A verb is granted only when a call site needs it. `get`/`list`/`watch` are needed for every kind the controllers watch (informers list and watch) or read through the client (`get`). Status subresources need only `update`/`patch`: reads go through the main resource. `<kind>/finalizers: update` is kept only for owners that set `blockOwnerDeletion` on a controller reference (`SetControllerReference`), which the `OwnerReferencesPermissionEnforcement` admission plugin checks.
 
-  # Dragonfly CRD (rendered by operator, reconciled by Dragonfly Operator)
-  - apiGroups: ["dragonflydb.io"]
-    resources: ["dragonflies"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["dragonflydb.io"]
-    resources: ["dragonflies/status"]
-    verbs: ["get"]
+| group/resource | verbs | consumer |
+|---|---|---|
+| `""/configmaps` | get list watch create delete | immutable config ConfigMaps via `Create` (never updated); garbage collection of unreferenced config ConfigMaps (delete, label-selected list); plugin ConfigMaps and AutoConfig spec/CUE ConfigMaps (get); metadata watches (list/watch) |
+| `""/secrets` | get list watch | license Secret reads, AutoConfig auth Secret reads (get); the gateway controller's license-Secret metadata watch (list/watch) |
+| `""/serviceaccounts`, `""/services` | get list watch create update delete | gateway `CreateOrUpdate` + `Owns`; `delete` is never called: the `OwnerReferencesPermissionEnforcement` admission plugin requires it on an object whose `ownerReferences` an update changes (adopting a same-named object) |
+| `""/events` | create patch | every `EventRecorder` |
+| `apps/deployments` | get list watch create update delete | gateway `CreateOrUpdate` + `Owns`; `delete` is never called: the `OwnerReferencesPermissionEnforcement` admission plugin requires it on an object whose `ownerReferences` an update changes (adopting a same-named object) |
+| `apps/replicasets` | list | config ConfigMap garbage collection: live ReplicaSets that still mount a config ConfigMap, listed through the uncached `APIReader` (no watch, no cache) |
+| `policy/poddisruptionbudgets` | get list watch create update delete | gateway `CreateOrUpdate` + `Owns` (always built, never deleted); `delete` is never called: the `OwnerReferencesPermissionEnforcement` admission plugin requires it on an object whose `ownerReferences` an update changes (adopting a same-named object) |
+| `autoscaling/horizontalpodautoscalers` | get list watch create update delete | `CreateOrUpdate` + `Owns`; delete when autoscaling is removed |
+| `batch/jobs` | get list watch create delete | post-restart Job `Create`; failed-revision recreate `Delete` |
+| `authorization.k8s.io/subjectaccessreviews` | create | the gateway webhook's check that a requester who sets a post-restart Job's ServiceAccount, Secret references or a relaxed security context may create pods in the namespace |
+| `dragonflydb.io/dragonflies`, `external-secrets.io/externalsecrets`, `networking.istio.io/virtualservices` | get list watch create update delete | `CreateOrUpdate`; watches; delete when the feature is disabled |
+| `gateway.krakend.io/krakendgateways` | get list watch | all controllers read and watch gateways (the operator never writes the user's object) |
+| `gateway.krakend.io/krakendgateways/status` | update | gateway controller `Status().Update`, the only status writer |
+| `gateway.krakend.io/krakendgateways/finalizers` | update | `blockOwnerDeletion` on every gateway child |
+| `gateway.krakend.io/krakendendpoints` | get list watch create update delete | AutoConfig `CreateOrUpdate`, adoption `Update` and stale-endpoint `Delete`; watches |
+| `gateway.krakend.io/krakendendpoints/status` | patch | the gateway controller (`Accepted`) and the endpoint controller (`ResolvedRefs`/`Ready`) each patch their own condition with `Status().Patch` and an optimistic lock; nothing updates endpoint status |
+| `gateway.krakend.io/krakendbackendpolicies` | get list watch update | protection finalizer add/remove |
+| `gateway.krakend.io/krakendbackendpolicies/status` | update | policy controller status |
+| `gateway.krakend.io/krakendautoconfigs` | get list watch | AutoConfig controller |
+| `gateway.krakend.io/krakendautoconfigs/status` | update | AutoConfig controller `Status().Update` |
+| `gateway.krakend.io/krakendautoconfigs/finalizers` | update | `blockOwnerDeletion` on generated endpoints |
 
-  # Watch CRDs
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendgateways", "krakendendpoints", "krakendbackendpolicies", "krakendautoconfigs"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendgateways/status", "krakendendpoints/status", "krakendbackendpolicies/status", "krakendautoconfigs/status"]
-    verbs: ["get", "update", "patch"]
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendgateways/finalizers", "krakendendpoints/finalizers", "krakendbackendpolicies/finalizers", "krakendautoconfigs/finalizers"]
-    verbs: ["update"]                  # kubebuilder convention; finalizers used for pre-deletion cleanup when ownerReference GC is insufficient
+Not granted: `create`/`update`/`patch`/`delete` on the four CRDs' main resources except where listed; `patch` everywhere except events and the endpoint status subresource; `update` on configmaps and on the endpoint status subresource; `get` on every status subresource; `krakendendpoints/finalizers` and `krakendbackendpolicies/finalizers` (neither kind owns anything).
 
-  # Autoconfig: create/update/delete generated KrakenDEndpoints
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendendpoints"]
-    verbs: ["create", "update", "patch", "delete"]
+Secrets and ConfigMaps are watched as metadata only (`builder.OnlyMetadata`) and read live from the API server (`client.CacheOptions.DisableFor`), so no Secret data or ConfigMap payload is cached; the grants stay `get`/`list`/`watch` because metadata watches still list and watch. The cached metadata also loses its annotations and `managedFields` (`controller.CacheByObject`), because an object applied client-side repeats its body in the `kubectl.kubernetes.io/last-applied-configuration` annotation. The residual: the names, labels and owner references of every Secret and ConfigMap in the cluster stay cached. Per reconcile pass the live reads are: gateway, the plugin ConfigMaps and the license Secret in full, and the config ConfigMap's owner and checksum annotation and the garbage-collection list as metadata (a config ConfigMap's payload is read in full once per stored version, to hash it against the checksum: `verifiedConfigMaps` remembers each UID and resource version, and the ConfigMaps this process created, per gateway, in memory); the children of disabled optional features come from the informer cache, read as metadata, for a kind whose CRD was installed at startup, and otherwise live, as metadata, through the API reader (with API discovery deciding whether the CRD exists), with an absent CRD remembered for `absentKindWindow` (one minute) in the delete path only; AutoConfig, the namespace's `krakend-cue-definitions` ConfigMap once in full (falling back to the embedded definitions), the `cue.definitionsConfigMapRef` ConfigMap once in full when set (a missing one fails the sync with `CUEEvaluationFailed`), and the spec and auth sources in full.
 
-  # Leader election
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+### Leader election (namespaced Role)
 
-  # Events
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
+`coordination.k8s.io/leases`: `get`, `create`, `update`; `events`: `create`, `patch`. controller-runtime uses a Lease; no ConfigMap lock.
 
-  # HPA (optional)
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+The ClusterRole is generated from the `+kubebuilder:rbac` markers into `operator/config/rbac/role.yaml`. `TestManagerRoleGrantsOnlyUsedVerbs` pins it to the table above, and the integration suite runs its manager as a ServiceAccount bound to exactly that role, so a verb the role lacks fails the integration suite on the paths it runs, while the golden test pins the role to the hand-kept table. The suite runs against K3s with the `OwnerReferencesPermissionEnforcement` admission plugin enabled, and the VirtualService CRD is installed there. Four paths stay outside it: the admission webhooks run only in the end-to-end tests, the Dragonfly and ExternalSecret CRDs are not installed, and the optional kinds' `delete` is not exercised, so those verbs are pinned by the table alone, and a Lease election is not contested.
 
-  # PodDisruptionBudget
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-```
+### User roles (chart)
 
-### External Secrets (Conditional)
-
-```yaml
-  # Only when ExternalSecret integration is enabled
-  - apiGroups: ["external-secrets.io"]
-    resources: ["externalsecrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["external-secrets.io"]
-    resources: ["externalsecrets/status"]
-    verbs: ["get"]
-```
-
-### Istio (Conditional)
-
-```yaml
-  # Only when Istio integration is enabled
-  - apiGroups: ["networking.istio.io"]
-    resources: ["virtualservices"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-```
+The chart also ships an admin, an editor and a viewer ClusterRole for each of the four kinds (`<fullname>-<kind>-<role>-role`, 12 in all). The operator does not use them and nothing binds them; they are for cluster admins to grant, and they carry no aggregation labels.
 
 ---
 
 ## 15. Status and Observability
 
+### Summary condition and columns
+
+Every kind has a `Ready` condition written only by its own controller, a
+top-level `status.observedGeneration`, and `status.conditions` keyed by
+`type` (`+listType=map`). `kubectl get` shows `Ready` and `Reason` (the
+reason of `Ready`); `Phase`, where the kind has one, is derived from the
+conditions and shown with `-o wide`.
+
+| Kind | `Ready` is True when |
+|---|---|
+| KrakenDGateway | the configuration is validated and applied, the Deployment is available and the applied config is rolled out to all replicas, and the EE license (if any) is valid |
+| KrakenDEndpoint | `ResolvedRefs` and `Accepted` are True, `Accepted` for the current generation |
+| KrakenDAutoConfig | `SpecAvailable`, `Synced` and `EndpointsReady` are True |
+| KrakenDBackendPolicy | its fields are in range |
+
+A gateway's `status.observedGeneration`, and the `observedGeneration` of its
+`Ready` condition, name the generation whose spec the operator has applied in
+full. Both stay at their previous value, with the rest of the status written
+as usual, while the pass has an infrastructure error (a child resource that
+could not be reconciled, or old config ConfigMaps that could not be
+collected) or holds the Deployment because no ConfigMap can hold the applied
+config although the render is the applied config (a ConfigMap that is not the
+gateway's sits at the content-addressed name). The error is returned, so the
+gateway is requeued with backoff, and kstatus and Flux report it as in
+progress, not current, until the error clears. A rejected config, an
+unavailable validator and a missing plugin ConfigMap are verdicts on the
+current generation and do not hold it back. The infrastructure stage attempts
+every independent child and joins the errors; the post-restart Job and the
+deletion of an unwanted HPA wait for a successful Deployment step, and
+ConfigMap collection runs after it, on a plugin or ServiceAccount hold, and
+beside a refused Deployment.
+
 ### Gateway Status Conditions
 
 | Condition | Meaning |
 |---|---|
-| `ConfigValid` | Last rendered krakend.json passed `krakend check -tlc` |
-| `Available` | Desired number of KrakenD pods are ready and serving traffic |
-| `LicenseValid` | EE license exists and is not within the expiry warning window |
-| `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `EEActive` during normal EE operation) |
-| `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator) |
-| `IstioConfigured` | VirtualService was successfully created/updated |
-| `LicenseSecretUnavailable` | License Secret is not available — either the ExternalSecret failed to sync or the referenced Secret (`secretRef`) does not exist |
-| `LicenseExpired` | License has expired and `fallbackToCE=false`; if a Deployment exists, gateway pods will self-terminate at T-0; on cold-start, Deployment creation is skipped. `False` with reason `EEActive` during normal EE operation |
-| `Progressing` | A rolling deployment is in progress |
+| `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, PluginsResolved, ResourcesControlled, Available, Progressing, LicenseExpired, LicenseDegraded and CEFallbackApplied (`Unknown` while the validator is unavailable); phase is derived from the same rules |
+| `EndpointsExcluded` | `True` (`InvalidEndpointsExcluded`) while the gateway leaves out endpoints that fail validation on their own (`Accepted=False`, `EndpointInvalid` or `PolicyInvalid`); the message counts them and names the first 10, and says they will not be served when the gateway next applies its config while it cannot apply its newest one. Absent otherwise; it does not change `ConfigValid` or `Ready` |
+| `ConfigValid` | Last rendered krakend.json passed validation as the edition it was rendered for: `krakend check -t -n -c`, after the route check (see Validation Strategy), which runs for every edition on the edition's validation copy, and after the EE wildcard route rules for an EE render (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run, and with reason `ConfigPublishFailed` while a render that passed validation cannot be published, or the applied config's ConfigMap does not hold the config; `False` with reason `GatewayRootInvalid` when the gateway root fails on its own, or `CombinedConfigInvalid` when the endpoints that pass on their own fail together (any that fails on its own is excluded first), and the last applied config keeps serving in both) |
+| `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline for the rollout it is running now (the Deployment has observed its latest generation and carries the wanted template). A fix pushed while a rollout is stuck replaces `RolloutFailed` with `Progressing=True`, and `Available` is reset until the new rollout settles |
+| `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired`, and `Unknown`/`LicenseSecretMissing` while the license cannot be read or parsed. While unreadable, the stage is judged from the last known expiry (`status.licenseExpiry`): once that is inside the safety buffer or past, the stage verdict (`False`) replaces `Unknown` |
+| `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
+| `CEFallbackApplied` | The applied config is the CE-fallback render (reason `EEFeaturesStripped`); the message lists the Enterprise-only features it removed. Absent otherwise |
+| `PluginsResolved` | Every plugin ConfigMap the gateway mounts exists (`ConfigMapsFound`), or `False`/`ConfigMapNotFound` naming the missing ones, while the Deployment is held. Absent without ConfigMap plugin sources |
+| `ResourcesControlled` | `True` (`ResourcesControlled`) when no object the gateway wrote this pass was refused (the condition keeps its last value while the pass failed otherwise or held the Deployment); `False` (`ResourceNotControlled`) naming each existing object it leaves alone (kind, `<namespace>/<name>`, its controller if any) and the remedy |
+| `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator); `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed; `False`/`ResourceNotControlled` when the Dragonfly named like the gateway's is one the gateway refuses (nothing is rendered for it) |
+| `IstioConfigured` | VirtualService was successfully created/updated; `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed; `False`/`ResourceNotControlled` while the gateway refuses the Service named like it (no VirtualService is written, and the one the gateway controls is deleted) |
+| `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read; `True`/`CRDNotInstalled` when the license comes from an ExternalSecret whose CRD is not installed |
+| `LicenseExpired` | License has expired or is inside the 1 h safety buffer (reason `LicenseExpired` or `LicensePreExpiry`), whether or not `fallbackToCE` is set; without `fallbackToCE` (no `LicenseDegraded`) the gateway reports phase `Error`, and its pods self-terminate at T-0. `False` with reason `LicenseRestored` after recovery, and absent otherwise |
+| `Progressing` | A rolling deployment is in progress. It is derived from the Deployment the reconcile just wrote, not from the detection of a change: it is `True` when the Deployment was created, the write changed its pod template (annotated or not), the template is not the wanted one, or old pods remain beside updated ones (`updatedReplicas < replicas`). A replica change alone (an HPA scale) is not a rollout. The reason is the detected change (`ConfigDeployed` or `DeploymentUpdated`), else the reason already reported, else `DeploymentUpdated`. It ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, image, plugin checksum and license checksum and mount the applied config's ConfigMap, and every replica is updated and available. A pass that holds the Deployment starts no rollout. A plugin hold or a refusal never raises it; a pass whose ServiceAccount write failed otherwise raises it while the Deployment does not mount the applied config (see *Config stage and infrastructure stage*) |
 
-### Operator Metrics (Prometheus)
+### Endpoint Status Conditions
+
+| Condition | Writer | Meaning |
+|---|---|---|
+| `ResolvedRefs` | endpoint controller | The gateway and every referenced policy exist (`RefsResolved`, `GatewayNotFound`, `PolicyNotFound`) |
+| `Accepted` | gateway controller | Part of the gateway's validated configuration (`Accepted`), `PartiallyAccepted` (True; `status.conflicts` lists the lost entries) when a conflict cost it some entries, or `EndpointConflict` (False) when it cost it all of them; `EndpointInvalid` (False) when it fails `krakend check` on its own, or `PolicyInvalid` (False) when a policy it references fails on its own or it fails only together with a policy of another namespace (in both the gateway leaves it out and serves the rest); removed while a referenced policy is missing; `EEFeaturesStripped` when a CE-fallback render removed Enterprise-only features from it (True while some entry is still served, False when every entry was an EE wildcard; the message lists them); a conflict reason wins over it, and that message appends the removals; `SchemaNameConflict` (True) when it defines a component schema differently from the endpoint the published documentation takes that name from (the first definition in namespace/name order of the gateway's endpoints, not the oldest endpoint), only while the gateway publishes docs (EE, not in CE fallback, `spec.openapi.enabled`), and only in place of plain `Accepted`: every other verdict outranks it. The endpoint is still served, and no event is emitted for it, except the usual recovery event when the endpoint was not accepted before |
+| `Ready` | endpoint controller | Derived by `api/v1alpha1.EndpointReady`: `Unknown`/`Pending` until the gateway accepts the current generation. A docs-only `SchemaNameConflict` on `Accepted` keeps `Ready=True`, with that reason: schema defects never affect whether a route renders or serves |
+
+Both writers patch status with an optimistic lock (`MergeFromWithOptimisticLock`),
+so neither can overwrite the other's condition; a writer that lost the race
+re-reads and retries.
+
+### Operator Metrics
+
+The metrics are OpenTelemetry instruments (`telemetry.OperatorMetrics`), exported to `/metrics` by OpenTelemetry's Prometheus exporter in controller-runtime's registry, with names, labels and help text unchanged (pinned by `TestMetricsExposition_MatchesGolden`). Gauges are observable, so a deleted object's series disappears. The reconcile-duration histogram keeps a deleted gateway's series until restart. Scrapes are authenticated and authorized: the operator creates a TokenReview
+and a SubjectAccessReview for each one, and the scraper needs `get` on the
+non-resource URL `/metrics` (the `metrics-reader` ClusterRole). The Helm chart
+carries both ClusterRoles, and the render test pins their rules. The chart's optional
+`ServiceMonitor` selects the metrics Service by its
+`app.kubernetes.io/component: metrics` label, so the webhook Service, which
+shares the other selector labels, is never scraped.
 
 | Metric | Type | Description |
 |---|---|---|
 | `krakend_operator_gateway_info` | Gauge | Gateway metadata labels (edition, version, namespace) |
 | `krakend_operator_config_renders_total` | Counter | Total config render attempts |
-| `krakend_operator_config_validation_failures_total` | Counter | Validation failures (broken configs blocked) |
+| `krakend_operator_config_validation_failures_total` | Counter | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again. Only the gateway controller counts, and its full check of a whole render is not counted: a config that fails only with its endpoints together shows as gateway_config_valid 0 (ConfigValid=False, CombinedConfigInvalid) instead |
 | `krakend_operator_rolling_restarts_total` | Counter | Rolling deployments triggered |
-| `krakend_operator_license_expiry_days` | Gauge | Days until EE license expiry |
-| `krakend_operator_endpoint_count` | Gauge | Number of KrakenDEndpoints per gateway |
+| `krakend_operator_license_expiry_seconds` | Gauge | Seconds until EE license expiry (labels: `namespace`, `name`) |
+| `krakend_operator_endpoints` | Gauge | Number of KrakenDEndpoints per gateway |
 | `krakend_operator_reconcile_duration_seconds` | Histogram | Reconciliation loop latency |
 | `krakend_operator_dragonfly_ready` | Gauge | 1 if Dragonfly is ready, 0 otherwise |
+| `krakend_operator_gateway_config_valid` | Gauge | 1 while the gateway's newest config passed validation, 0 otherwise (labels: `namespace`, `name`); removed when the gateway is deleted |
+| `krakend_operator_gateway_excluded_endpoints` | Gauge | KrakenDEndpoints a gateway leaves out because they fail validation on their own, by `Accepted` reason (`EndpointInvalid`, `PolicyInvalid`) (labels: `namespace`, `gateway`, `reason`); absent while none; removed with the gateway |
+| `krakend_operator_autoconfig_synced` | Gauge | 1 after a `KrakenDAutoConfig`'s last reconcile synced successfully, 0 while it is failing or any of its operations is held (labels: `namespace`, `name`); the series is removed when the AutoConfig is deleted |
+
+Per-gateway gauge series (`namespace`, `name` labels) are removed when the gateway is deleted or starts terminating (`GatewayMetrics.ForgetGateway`). The reconcile-duration histogram's series is not: an OpenTelemetry synchronous instrument cannot drop a series, so a deleted gateway's series stays until the operator restarts. The meter provider sets no cardinality limit, so a long-lived operator never folds new gateways into an overflow series.
+
+### Telemetry (OpenTelemetry)
+
+`internal/telemetry` builds the providers and is used only by `cmd`; the rest of the operator depends on the OpenTelemetry API alone, through `internal/tracing` (`Start`, `End`, `Object`) and the `GatewayMetrics` and `AutoConfigMetrics` ports of the controller package. Every component gets its tracer and recorder by injection.
+
+1. **Providers.** `telemetry.Setup` builds the tracer, meter and logger providers from the standard `OTEL_*` variables and a resource (`service.name`, `service.version`, `k8s.pod.name` and `k8s.namespace.name` from the downward API). A signal is exported over OTLP only when an endpoint is configured for it and `OTEL_<SIGNAL>_EXPORTER` is not `none`; without one, traces use a no-op provider, metrics are still served on `/metrics` and logs still go to stdout. An unsupported exporter or protocol stops startup. A malformed OTLP header or endpoint variable stops that signal's export instead, because the OTLP exporters would log its value, which can hold a credential: the operator keeps running, and the startup warning names the variable and never quotes its value.
+2. **The span tree.** The runbook's Tracing table lists every span. Each reconcile is a new root; each admission request is a root, or a child of the API server's span. A config rejected by `krakend check` is an answer: its span records `configcheck.ok=false` and no error. A content check answered from the verdict memo is marked `configcheck.memo_hit=true` and runs no krakend. Spans identify objects (kind, namespace, name, generation) and record no spec values: a denied admission records `admission.allowed` and `admission.code` but no status, no event and no text, no span carries a denial, a warning or krakend's output, and the CUE and generation spans, and the AutoConfig reconcile root, carry a fixed description. A failed step's own error text is recorded.
+3. **Kubernetes client spans.** `telemetry.TraceKubeAPI` wraps the `rest.Config` transport so a request sent under an active span is a client span of it, named `k8s <verb> <resource>`, with the trace context passed on. Not traced, because they run under no span: informer list and watch, leader-election renewals, the metrics endpoint's TokenReview and SubjectAccessReview, RESTMapper discovery (client-go sends it without a span context, so only the operator's own `crdAvailable` lookups are recorded) and events (raised inside a reconcile, written asynchronously without a span, since the event recorder takes no context). Reads through the manager's client are span events (`k8s.client.get`, `k8s.client.list`), because the cache answers without a request. Lookups of an optional CRD during a reconcile are `k8s.discovery` spans, since client-go sends the discovery request without a context.
+4. **Admission.** `telemetry.TraceWebhookServer` makes each request a server span that continues the API server's trace when it sends one. The sampler is parent-based by default, so an unsampled API server trace leaves the admission subtree unrecorded; `OTEL_TRACES_SAMPLER` changes that. `client.address` is the first `X-Forwarded-For` value, which a caller can set.
+5. **AutoConfig fetches.** The spec and `$ref` requests send no trace header. Each request, and each redirect hop, is an `HTTP GET` client span under `autoconfig.fetch`. A URL is recorded, and shown in errors and status, without user information and fragment, with every query value replaced by `REDACTED` (`redact.URL`, which the Kubernetes client spans share).
+6. **Logs.** Every logger goes through one `otellogr` bridge: logr (and so controller-runtime and the operator), klog, and the standard library's `log`; the OpenTelemetry SDK's own diagnostics and grpc-go's `grpclog` go to a logger that writes to stdout only, so a failing OTLP exporter cannot queue records for itself. A level processor sets a severity floor from `--zap-log-level` and `--zap-devel`, fills in the timestamp and severity text, and exports with a context that is never cancelled, so a timed-out reconcile's records are not dropped. Stdout is a synchronous JSON exporter (`--log-format=pretty` indents it); OTLP is batched. Errors are the `exception.message` and `exception.type` attributes; there are no stack traces.
+7. **Process-wide settings.** `InstallGRPCLogging` (the first call of `run()`, because grpc-go requires its logger before any gRPC call; it logs through the diagnostics logger once `InstallLogging` has run) and `InstallLogging` (controller-runtime, klog, `log` and the SDK's error handler) are the only places a global is set. Nothing else in the operator reads a global logger, tracer or meter provider.
+8. **Shutdown and the stderr exceptions.** `run()` sets telemetry up after parsing flags, because the log level and format come from them, and defers a flush of all three signals that waits at most 5 seconds, after a manager that waits at most 4 seconds to stop (`GracefulShutdownTimeout`), so manager stop plus flush fit the pod's 10 second grace period. Stdout is synchronous; only batched OTLP data can be cut off. These are written to stderr, because the log pipeline is not available or is what failed: flag errors and `--help`, an invalid logging flag, an unusable `OTEL_*` setting (exit status 1), the SDK's warnings about its `OTEL_*` variables while the exporters start, a failed flush, and Go runtime crashes.
 
 ### Kubernetes Events
 
-The operator emits events on KrakenDGateway resources:
+The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `PartiallyAccepted`, `EndpointInvalid`, `PolicyInvalid`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit`, `PolicyInvalid` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`) and `ValidatorUnavailable`. All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
+
+A gateway event backed by a condition (`RolloutFailed`,
+`IstioVirtualServiceCreated`, `DragonflyNotReady`, `DragonflyReady`, the license
+events and `CRDNotInstalled`) is recorded only when that condition changes
+status or reason. A steady state emits no events. `GatewayRootInvalid`, `CombinedConfigInvalid`, `InvalidEndpointsExcluded` and
+`ValidatorUnavailable` fire when the recorded verdict (or, for `InvalidEndpointsExcluded`, the message) changes, and `ConfigPublishFailed` when the reason changes. `ConfigMapTampered` fires on each deletion of a ConfigMap for a payload mismatch.
 
 | Event | Type | Reason |
 |---|---|---|
 | Config rendered and deployed | Normal | `ConfigDeployed` |
-| Config validation failed | Warning | `ConfigValidationFailed` |
+| Config validation failed: the gateway root fails on its own, or the endpoints that pass on their own fail together, with any that fail alone excluded first | Warning | `GatewayRootInvalid`, `CombinedConfigInvalid` |
+| The gateway leaves out endpoints that fail validation on their own | Warning | `InvalidEndpointsExcluded` |
+| An endpoint fails validation on its own (or through a policy it references) and is left out, on the KrakenDEndpoint | Warning | `EndpointInvalid`, `PolicyInvalid` |
+| krakend check could not run (retried with backoff): a gateway's config check, or an AutoConfig's check before its writes | Warning | `ValidatorUnavailable` |
+| A render passed validation but its ConfigMap could not be published (retried with backoff) | Warning | `ConfigPublishFailed` |
+| A config ConfigMap whose payload does not hash to the checksum its name addresses was deleted (whoever owned it) and is published again | Warning | `ConfigMapTampered` |
 | License expiring soon | Warning | `LicenseExpiringSoon` |
 | License expired or entering pre-expiry safety window, falling back to CE | Warning | `LicenseFallbackCE` |
 | License expired or entering pre-expiry safety window, CE fallback not configured | Warning | `LicenseExpiredNoFallback` |
 | Dragonfly not ready | Warning | `DragonflyNotReady` |
+| Dragonfly ready again | Normal | `DragonflyReady` |
+| Dragonfly, Istio or the license ExternalSecret is enabled but its CRD is not installed (on the transition only) | Warning | `CRDNotInstalled` |
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
-| Endpoint path+method conflict | Warning | `EndpointConflict` |
-| ESO sync failure | Warning | `LicenseSecretSyncFailed` |
+| A plugin ConfigMap is missing and the Deployment is held (on the transition only) | Warning | `ConfigMapNotFound` |
+| Every plugin ConfigMap exists again | Normal | `ConfigMapsFound` |
+| The applied config is the CE-fallback render (on the transition only; the message lists the Enterprise-only features removed, or says it uses none) | Warning | `EEFeaturesStripped` |
+| Endpoint newly loses all its entries to a route conflict (on the transition only) | Warning | `EndpointConflict` |
+| Endpoint newly loses some of its entries to a route conflict (on the transition only) | Warning | `PartiallyAccepted` |
+| Previously conflicted (fully or partly) endpoint included again | Normal | `Accepted` |
+| Endpoint's gateway does not exist (`ResolvedRefs` False) | Warning | `GatewayNotFound` |
+| Endpoint references a policy that does not exist (`ResolvedRefs` False) | Warning | `PolicyNotFound` |
+| Endpoint references resolve again | Normal | `RefsResolved` |
+| Policy circuit breaker fields out of range (`Ready` False) | Warning | `InvalidCircuitBreaker` |
+| Policy rate limit fields out of range (`Ready` False) | Warning | `InvalidRateLimit` |
+| Policy fails krakend check on its own (`Ready` False, quoting its own output) | Warning | `PolicyInvalid` |
+| Policy `Ready` again, after an invalid verdict or a check that could not run | Normal | `Ready` |
 | Referenced license Secret missing (`secretRef` path) | Warning | `LicenseSecretMissing` |
 | License renewed, EE restored | Normal | `LicenseRestored` |
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
-| OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
-| CUE evaluation failed | Warning | `CUEEvaluationFailed` |
+| OpenAPI spec fetch failed, including a failed external `$ref` fetch/decode | Warning | `SpecFetchFailed` |
+| CUE evaluation failed as a whole, outside any one operation's entry (sync fails) | Warning | `CUEEvaluationFailed` |
+| Override operationId not present in the OpenAPI spec, or backend index out of range (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| Override operationId that more than one operation declares (sync fails, last-good endpoints kept) | Warning | `AmbiguousOverride` |
+| No base path could be derived for `additionalEndpoints` (sync fails) | Warning | `AdditionalEndpointScopeFailed` |
+| Generated endpoints could not be created, updated or deleted for a transient reason (sync fails, retried with backoff) | Warning | `EndpointReconcileFailed` |
+| Operations are held: CUE evaluation, the gateway config check or an API rejection of their endpoint (on a change of the status) | Warning | `OperationsFailed` |
+| A spec problem that does not stop the sync (on a change of the inputs: with `DuplicateOperationId` and `AdditionalEndpointOverride`, at most 20 per sync, besides the failure or `OperationsFailed` event) | Warning | `SpecWarning` |
+| An `additionalEndpoints` entry replaced a spec-derived endpoint | Warning | `AdditionalEndpointOverride` |
 | Endpoints generated/updated from OpenAPI spec | Normal | `EndpointsGenerated` |
-| OpenAPI operation skipped (filtered) | Normal | `OperationFiltered` |
-| OpenAPI operation missing operationId | Warning | `MissingOperationId` |
 | Duplicate operationId in OpenAPI spec | Warning | `DuplicateOperationId` |
 | Deployment rollout exceeded progress deadline | Warning | `RolloutFailed` |
 
 ### Admission Validation
 
-The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: Fail` (or use Kubernetes' CEL-based `ValidatingAdmissionPolicy` on clusters >= 1.30 where the API is GA; available as beta in 1.28-1.29) to reject invalid CRs at submission time, before they enter etcd:
+The operator deploys four `ValidatingAdmissionWebhook`s, one per kind, with `failurePolicy: Fail` on CREATE and UPDATE, to reject invalid CRs at submission time, before they enter etcd. The CRD schema and CEL carry the rules an object decides on its own (§3 and §16), so the API server enforces them even for clients that bypass the webhook. The webhooks keep what needs other objects, a rendered config, or the default-image context. Every validator accepts an update that leaves the spec alone, and applies its rules to what an update changes (the ratchet below).
 
-> **Operational note:** `failurePolicy: Fail` means webhook pod outages will block CRD mutations cluster-wide. The operator Deployment should run with `replicas >= 2` and a PDB to minimize webhook downtime. For less strict environments, `failurePolicy: Ignore` allows bypass during outages at the cost of deferred validation.
+> **Operational note:** `failurePolicy: Fail` means webhook pod outages block CRD mutations cluster-wide. The Helm chart therefore runs two operator replicas by default, with a PodDisruptionBudget, soft anti-affinity and a readiness check on the webhook server; leader election keeps a single active controller. For less strict environments, `failurePolicy: Ignore` allows bypass during outages at the cost of deferred validation.
 
-- **KrakenDEndpoint** — reject if `gatewayRef` references a non-existent KrakenDGateway
-- **KrakenDEndpoint** — reject if `policyRef` references a non-existent KrakenDBackendPolicy
-- **KrakenDEndpoint** — warn (but allow) if an endpoint path+method already exists on the target gateway (conflict detection)
-- **KrakenDGateway** — reject if `edition: EE` but neither `license.externalSecret.enabled=true` nor `license.secretRef` is set
-- **KrakenDGateway** — reject if both `license.externalSecret.enabled=true` and `license.secretRef` are set (mutually exclusive)
-- **KrakenDGateway** — reject if `edition: CE` and either `license.externalSecret.enabled=true` or `license.secretRef` is set (CE requires no license)
-- **KrakenDBackendPolicy** — validate field ranges (e.g., `circuitBreaker.maxErrors > 0`)
-- **KrakenDBackendPolicy (DELETE)** — reject deletion if any KrakenDEndpoint references this policy via `policyRef`; emit a descriptive error listing the referencing endpoints
-- **KrakenDAutoConfig** — reject if `gatewayRef` references a non-existent KrakenDGateway
-- **KrakenDAutoConfig** — reject if both `openapi.url` and `openapi.configMapRef` are set (mutually exclusive)
-- **KrakenDAutoConfig** — reject if neither `openapi.url` nor `openapi.configMapRef` is set
-- **KrakenDAutoConfig** — reject if `openapi.configMapRef` is used and `urlTransform.hostMapping` is not provided (no URL to infer backend host from)
-- **KrakenDAutoConfig** — reject if `trigger: Periodic` but `periodic.interval` is absent
-- **KrakenDAutoConfig** — reject if both `auth.bearerTokenSecret` and `auth.basicAuthSecret` are set (mutually exclusive)
-- **KrakenDGateway** — reject if multiple `plugins.sources[]` entries use `persistentVolumeClaimRef` (only one PVC source supported)
+> **Deletion:** updates to an object that is being deleted (it has a `deletionTimestamp`) are admitted when they don't change its spec (for example, removing a finalizer); a spec change is still validated. Rejecting a finalizer removal would leave the object stuck in `Terminating`.
+
+> **Responses:** a rejected field is `422 Invalid` with one status cause per field error, so `kubectl` prints each rejected path. A failed lookup (a gateway, a policy or the endpoint list), or a config check that cannot run or get a validation slot within the 12 s budget, is `500 Internal Error`, a transient server error (`kubectl` does not retry it; controllers and GitOps tools retry on their own); it is never reported as a rejected field. Every webhook sets `timeoutSeconds: 15`. The webhook configuration in `config/webhook/manifests.yaml` is generated from the `+kubebuilder:webhook` markers in `internal/webhook/webhook.go`, and the Helm chart template carries the same values.
+
+> **Ratchet:** an update is judged only on what it changes. An unchanged spec skips every rule. A reference (`gatewayRef`, `policyRef`) is checked only when it is added or changed. A field rule rejects the update only for an error the stored object did not have, matched on the error's field, type, value and detail. A sidecar probe that changed is checked in full, because an error without a value (`Forbidden`) would otherwise read the same before and after. KrakenDEndpoint entries are matched on (endpoint, method), so a reorder is not a change, and a move to another gateway puts every entry through the new gateway's rules. A changed `runAsUser` security context is checked in full, because its errors read the same for every violating shape.
+
+- **KrakenDEndpoint** — reject a `gatewayRef` that names no KrakenDGateway, and a `policyRef` that names no KrakenDBackendPolicy or one that is being deleted; each is checked only when added or changed. Just before admitting, the validator re-reads the newly referenced policies uncached (`APIReader`), because a deletion can land while the render check runs
+- **KrakenDEndpoint** — reject a changed entry whose method and route shape (paths that differ only in parameter names or repeated slashes) another entry on the target gateway already has, in this or another KrakenDEndpoint (`Duplicate value`); against other KrakenDEndpoints only routes new to the stored object are checked; endpoints with the same controller are exempt, and the renderer keeps oldest-wins as the fallback
+- **KrakenDEndpoint** — apply the entry rules (`validateEntries` in `internal/webhook/endpoint_rules.go`) to each changed entry, naming the field: paths under `/__debug`, `/__echo` and `/__health` are reserved; `GET` on the gateway's health path (read as the route check reads it: a raw `router` block in `spec.config.extraConfig` replaces the typed one); the root wildcard `/*` in either edition; unnamed wildcards (`/prefix/*`) on a CE gateway; Enterprise-only `extra_config` namespaces in an entry or its backends on a CE gateway (`renderer.CEDrops`: a block that holds only keys CE honors is admitted); and a backend `urlPattern` placeholder that is neither a path parameter nor one KrakenD fills itself. On a CE gateway a backend `policyRef` the stored object did not already hold (every one on a create or a move) is also rejected, at `spec.endpoints[i].backends[j].policyRef`, when the policy's `raw` carries what a CE render drops (`validatePolicyNamespaces`; the operator's own writes included). The `documentation/openapi.audience` shape check runs with them
+- **KrakenDEndpoint** — judge the endpoint on its own (`checkRender` in `internal/webhook/endpoint.go`): refuse a write that would newly clash in KrakenD's router with another endpoint (`refuseNewClashes`), then check the gateway root alone and the endpoint with that root and the policies it references (`Checker.CheckEndpoint`, each policy alone first), and deny it quoting only the output of its own check (a policy that fails on its own is named, never quoted). That check renders the gateway root together with the endpoint, so output from a failure that occurs only with a root setting can reveal that setting to the endpoint's author; when the gateway root fails on its own the write is admitted with a warning that names the gateway, and so is an update whose stored version already fails on its own, since the gateway leaves that endpoint out either way. The entry rules and the `documentation/openapi.audience` shape check run first; a write they reject is not rendered, and the audience check stays because a CE render drops an entry's `documentation/openapi`. The checks run in the operator pod through the one `configcheck.Checker` the gateway controller also uses (`wireValidation` in `cmd/` builds it, the AutoConfig reconciler and the validators `SetupWebhooks` registers, three slots for the whole pod: the AutoConfig controller holds at most one and the gateway controller at most one, so together they never hold more than 2 of the 3 slots); each request stops its work after a 12 s budget, and a check that cannot run or cannot get a slot is a transient `500`
+- **KrakenDEndpoint** — the render check above is skipped for the operator's own writes to endpoints a `KrakenDAutoConfig` controls: the request username must equal `--operator-username` (default: the pod's ServiceAccount from `POD_NAMESPACE` and `POD_SERVICE_ACCOUNT`) and the controller owner reference must be a `KrakenDAutoConfig`. Schema, reference, audience, entry and duplicate-route rules still apply. The startup log names the trusted username
+- **KrakenDGateway** — keep the rules that need the default-image context or quantity arithmetic: the OpenAPI sidecar probe rules (when `spec.openapi.enabled`), the `runAsUser: 0` rules of `spec.postRestartJob` and `spec.dragonfly` (each ratcheted on the stored security context and rejected unless acknowledged with `runAsNonRoot: false`), and a negative `spec.postRestartJob.tmpSizeLimit`. A new or changed enabled `spec.postRestartJob` that runs as a ServiceAccount other than the gateway's own, takes `envFrom` from a Secret or an `env` `secretKeyRef`, or sets a security-context field outside an allow-list of settings that grant no privilege (or a non-`runtime/default` AppArmor annotation; `podLabels` and other `podAnnotations` are not reviewed), is refused with `403` unless a SubjectAccessReview (`authorizePostRestartJob`, created through the manager client) says the requester may `create` `pods` in the gateway's namespace: the operator creates the Job with its own grant, so the requester's rights are checked instead. A review that cannot be made is a transient `500`. The license sources, the OpenAPI port, the single PVC plugin source and the post-restart script rules are CEL in the CRD
+- **KrakenDGateway** — judge the root on its own and then with the endpoints it serves (`checkGatewayRender` in `internal/webhook/gateway.go`, over the same `ConfigChecker`): the root must pass alone (the denial quotes it, and an update whose stored root fails too only warns); an update that would make two endpoints' routes clash in the router is refused (`refuseNewGatewayClashes`); and the root with the endpoints it serves is judged as for a policy write (`judgeServed`: an update is denied, naming the endpoints and quoting nothing, when an endpoint fails with it and passed with the stored root, or, when the stored root fails on its own, when an endpoint the last applied config served fails with it: that root fails every stored check, so it never turns such a break into a warning, and a failure only together is denied without comparing the stored group; a create only warns about waiting endpoints, `warnWaiting`, and on a CE gateway their Enterprise-only namespaces and `/prefix/*` wildcards are refused instead, by `eeNamespacesOnCE`). An update that renders the same config for the same edition as the stored object (`Checker.SameConfig`, compared in process: an image, version, replica, resource, probe or `postRestartJob` edit) is not checked at all, so it is not refused with a `500` while the checker is unavailable. A `spec.version` whose minor differs from `configcheck.ValidatorVersion` gets a warning when set or changed
+- **KrakenDGateway** — on a CE gateway, reject what KrakenD CE accepts in `krakend check` and then ignores: what a CE render drops from `spec.config.extraConfig` (`renderer.CEDrops`, when it is new, changed or newly on CE), the typed fields `spec.redis`, `spec.config.documentation`, `spec.openapi.enabled` and `spec.dragonfly.enabled` (`eeFieldsOnCE`, `Forbidden`), and a CE gateway create or an `edition: EE` to `CE` switch while the gateway's KrakenDEndpoints or the KrakenDBackendPolicies they reference use an Enterprise-only namespace (`eeNamespacesInUse`, listing each object, field and namespace within a bounded message). Each rule ratchets: `spec.redis` and `spec.config.documentation` are judged when set or changed, `spec.openapi` and `spec.dragonfly` are keyed on `enabled` (enabling one is rejected, turning one off is admitted), and the switch judges every such field the gateway keeps. Editing the settings of an export or Dragonfly stored enabled on a CE gateway is admitted with a warning (`openAPIOnCEWarning`, `dragonflyOnCEWarning`). The switch denial names the dropped keys of a partly honored block (`backend/http/client: proxy_address`)
+- **KrakenDGateway** — warnings, which never reject: `spec.replicas` with `spec.autoscaling` (the HorizontalPodAutoscaler owns the count); the Redis and Dragonfly settings that never reach KrakenD (`redis.connectionPool.readTimeout` and `writeTimeout`, which KrakenD's pool has no setting for, the pool's stored `password` and `tls`, and `dragonfly.authentication.passwordFromSecret` on EE, where Dragonfly requires a password KrakenD is never given); an enabled `spec.openapi` or `spec.dragonfly` kept on a CE gateway (`openAPIOnCEWarning`, `dragonflyOnCEWarning`: admitted when stored, refused when new); a `spec.postRestartJob.workingDir` outside `/tmp` while the root filesystem is read-only; and a `spec.version` whose minor differs from `configcheck.ValidatorVersion`, when set or changed
+- **KrakenDGateway (DELETE)** — not registered: deleting a gateway needs no validation, and with `failurePolicy: Fail` a registration would make gateway and namespace deletion depend on a reachable operator
+- **KrakenDBackendPolicy** — the circuit breaker and rate limit ranges are CRD minimums, not webhook rules
+- **KrakenDBackendPolicy** — check the policy on its own (`lintPolicyAlone`, `ConfigChecker.CheckPolicy`: one synthetic endpoint on a default CE gateway whose only backend references it) and reject it when `krakend check -n` fails, unless the stored policy already failed too. For a change to a policy that endpoints reference, find the gateways of the referencing endpoints through the `fieldindex.EndpointPolicy` index and screen every gateway first (`screenPolicyUse`: the root alone, then the root with the endpoints that use the policy and that the gateway serves); only then name the endpoints the change breaks, gateway by gateway (`judgePolicyUse`, `failingEndpoints`): each endpoint the group leaves unjudged is checked on its own with the new policy and, when it fails, with the stored one, and the write is denied, naming it, when it fails only with the new policy. The scan stops at `maxEntryCauses` (20) names or at the 12 s budget, and a denial it found stands. A new or changed `raw` that holds what a CE render drops (`renderer.CEDrops` at the backend level) is rejected while a CE gateway uses the policy. Warnings name at most 5 gateways that already fail (`maxPolicyWarnings`) with the rest counted, and together take at most 4096 bytes (`policyWarningBytes`, the API server's warning budget, past which it cuts every warning of a response to 256 characters). A metadata-only update, or one that leaves the spec alone, is not validated
+- **KrakenDBackendPolicy (DELETE)** — not registered: a delete is accepted without the webhook and the protection finalizer holds a referenced policy until nothing references it, so policy and namespace deletion complete once the operator removes the finalizer
+- **KrakenDAutoConfig** — reject a `gatewayRef` that names no KrakenDGateway; it is checked when the object is created or the reference changes. The exclusive OpenAPI sources, `hostMapping`, the Periodic interval, the auth secrets and the path rules are CRD schema and CEL
+- **KrakenDAutoConfig** / **KrakenDEndpoint** — reject a non-list `documentation/openapi.audience` value inside `extraConfig` (`spec.overrides[].extraConfig`, `spec.defaults.endpoint.extraConfig`, and `spec.additionalEndpoints[].extraConfig` on KrakenDAutoConfig; `spec.endpoints[].extraConfig` on KrakenDEndpoint) — KrakenD's OpenAPI documentation plugin requires a list of strings, and a malformed value would otherwise pass validation here but fail `krakend check -t -n -c`, blocking config updates for every service on that gateway
+- **KrakenDAutoConfig** — reject two `spec.overrides` for one operation: an `operationId` listed twice, or two that generate one endpoint name (`autoconfig.OperationEndpointName`; `get_a` and `get-a`), on `spec.overrides[i].operationId`
+- **KrakenDAutoConfig** — warn, on create and on a spec change, for each `policyRef` (`spec.defaults`, `spec.overrides[]`, `spec.additionalEndpoints[].backends[]`) that names no KrakenDBackendPolicy; a release may create the policy later, and the generated endpoints are refused until it exists
 
 This provides fast feedback to users at `kubectl apply` time rather than waiting for reconciliation.
 
@@ -1906,6 +2454,19 @@ spec:
       name: standard-backend-policy    # applied to every backend in the generated endpoint's backends[] array (see §3.2)
 
   # Per-operation overrides (keyed by OpenAPI operationId)
+  # An override whose operationId is not declared by any operation in the fetched
+  # spec fails the sync (status.phase: Error, Synced=False, reason UnmatchedOverride)
+  # instead of being silently dropped; existing KrakenDEndpoints are left as they were
+  # (last-good) until the override is fixed. For operations with no operationId:
+  # spec.defaults applies to every generated operation; for a single operation, add an
+  # operationId to the service's OpenAPI spec, replace it with an additionalEndpoints
+  # entry (same endpoint+method replaces the spec-derived one), use a custom CUE
+  # definitions ConfigMap (spec.cue.definitionsConfigMapRef), or have the service
+  # declare `audience` on the operation itself as a list of strings — the
+  # default CUE definitions default it to ["public"] when absent and require
+  # a list of strings when present (cue/defaults.cue); a non-list value holds
+  # that operation (CUEEvaluationFailed, Synced=False/OperationsFailed) instead
+  # of silently defaulting, and needs no override.
   overrides:
     - operationId: getUserById
       timeout: "800ms"
@@ -1935,28 +2496,65 @@ spec:
       - deprecated
 
   # Execution policy
-  trigger: OnChange                   # OnChange (run once on create, re-run on spec update) or Periodic
+  trigger: OnChange                   # OnChange (react to spec/label/annotation changes; also resynced every 5m) or Periodic
   # periodic:
   #   interval: "1h"                   # re-fetch spec on this interval (only when trigger=Periodic)
 
 status:
-  phase: Synced                        # Pending, Fetching, Rendering, Synced, Error
-  lastSyncTime: "2026-04-03T10:00:00Z"
+  phase: Synced                        # derived from Synced: Synced or Error; empty before the first sync (Pending/Fetching/Rendering are never written)
+  observedGeneration: 4
+  lastSyncTime: "2026-04-03T10:00:00Z" # last sync that changed inputs or endpoints, not a heartbeat
   specChecksum: "sha256:def456..."
   generatedEndpoints: 15
-  skippedOperations: 3                 # operations excluded by filters or skipped due to duplicate operationId
+  readyEndpoints: 15                   # generated endpoints whose Ready is True for their current generation
+  skippedOperations: 3                 # operations skipped by rule (an unsupported method, or a duplicate); operations excluded by filter are not counted
+  skipped:                             # up to 20 entries, each message cut at 256 bytes
+    - method: HEAD
+      path: /api/v1/users
+      operationId: headUsers
+      reason: UnsupportedMethod
+      message: KrakenDEndpoint supports only GET, POST, PUT, PATCH, DELETE
+  # failedOperations lists the operations held (reason CUEEvaluationFailed, ConfigValidationFailed or EndpointRejected) while Synced is False/OperationsFailed
+  # warnings lists spec problems that do not stop a sync
   conditions:
     - type: SpecAvailable
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: FetchSuccess
-      message: "OpenAPI spec fetched from http://user-service..."
+      reason: SpecFetched
+      message: "OpenAPI spec fetched successfully"
     - type: Synced
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: EndpointsGenerated
-      message: "15 KrakenDEndpoints generated, 3 operations skipped"
+      reason: Synced
+      message: "Generated 15 endpoints; 3 operations skipped (see status.skipped)"
+    - type: EndpointsReady
+      status: "True"
+      lastTransitionTime: "2026-04-03T10:00:00Z"
+      reason: AllEndpointsReady
+      message: "15 of 15 endpoints ready"
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-04-03T10:00:00Z"
+      reason: Ready
+      message: "OpenAPI spec fetched, endpoints in sync and ready"
 ```
+
+The CRD enforces the object-decidable rules of the spec:
+
+- `openapi` has exactly one of `url` or `configMapRef`, and `configMapRef` requires `urlTransform.hostMapping`.
+- `trigger: Periodic` requires `periodic`, whose `interval` is a Go duration of at least 30s. One spec rule checks it, guarded by the interval pattern, so it applies only while the trigger is `Periodic`: an `OnChange` object may keep a short interval, and switching it to `Periodic` is rejected.
+- `bearerTokenSecret` and `basicAuthSecret` are mutually exclusive. The object name is at most 63 characters, since it becomes a label value on generated endpoints.
+- An override `method` is one of GET, POST, PUT, PATCH or DELETE, `concurrentCalls` is 1 or more, `backends[].index` is 0 or more, and `overrides` holds at most 1024 items (the per-item duration rules multiply by the list bound in the API server's cost estimate).
+- Override and additional endpoint paths use the KrakenDEndpoint path pattern. `additionalEndpointsBasePath` starts with `/`, and the base path is mutually exclusive with `urlTransform.addPathPrefix`.
+- `additionalEndpoints` is a map list keyed on (`endpoint`, `method`) with at most 256 items. `method` defaults to `GET` in the API server, so two entries for one path with and without the method collide. An entry sets either `backends` or the `host`/`backendUrlPattern`/`encoding` shorthand.
+- `timeout` and `cacheTTL` on the defaults, overrides and additional endpoints are Go durations that fit in 64 bits of nanoseconds. `outputEncoding`, `defaults.backend.encoding`, `defaults.backend.sd` and the shorthand `encoding` carry the same enums as the KrakenDEndpoint schema, so a typo is rejected on the AutoConfig instead of failing every generated endpoint write.
+
+The webhook keeps the gateway lookup, the `documentation/openapi.audience` shape checks and two rules about other objects and the override list:
+
+- **Override names.** Two entries of `spec.overrides` may not target the same operation: an `operationId` listed twice is `Duplicate value`, and two that generate one endpoint name (`autoconfig.OperationEndpointName`: the AutoConfig name, a dash and `autoconfig.SanitizeName(operationId)`, cut to 253 characters; `get_a` and `get-a`, `getA` and `geta`, or two long ids that agree up to the cut) are `Invalid` with `collides with operationId "<first>"`, both on `spec.overrides[i].operationId` of the later entry. The generator names each endpoint that way and keeps only the first of two operations with one name. The rule ratchets through `newErrors`, which matches on the error text: a stored collision stays admitted while the colliding entries keep their positions, and an override inserted or removed above them is rejected.
+- **Missing policies.** A `policyRef` in `spec.defaults`, `spec.overrides[]` or `spec.additionalEndpoints[].backends[]` that names no KrakenDBackendPolicy (in the namespace the reference names, or the AutoConfig's) is an admission warning on create and on a spec change (at most `maxPolicyWarnings` named, then a count), never a rejection: a release may create the policy after the AutoConfig. The endpoints generated from it are rejected by the KrakenDEndpoint webhook until the policy exists; the AutoConfig holds each as `EndpointRejected` in `status.failedOperations` and reports `OperationsFailed`. A failed lookup is a `500`.
+
+Not every stored violation ratchets. Field rules (patterns, enums, minimums) do. Rules written on `spec` itself are re-evaluated whenever the spec changes. The root name rule runs on every write, including metadata-only and status writes, because ratcheting compares the whole node and at the root that is the whole object, so a stored name over 63 characters can only be fixed by deleting and recreating the object. A duration that matches the pattern but overflows raises an evaluation error, which is never ratcheted. `overrides` and `additionalEndpoints[].backends` are atomic lists. `additionalEndpoints` itself changed from atomic to a map list keyed on (`endpoint`, `method`), so existing server-side apply managers get per-item ownership on their next apply and no conflicts are reported until then. `operator/hack/audit-admission-rules.sh` lists the stored objects that break these rules before an upgrade.
 
 ### Architecture
 
@@ -2008,14 +2606,46 @@ graph TB
 
 ### Execution Model
 
-The autoconfig controller runs **exactly once per change** (when `trigger: OnChange`):
+The autoconfig controller is **watch-driven with a resync backstop**, and every reconcile runs the whole pipeline (fetch → evaluate → filter → generate → converge), so owned endpoints converge to the desired state while the AutoConfig syncs successfully. While an operation fails (CUE evaluation, the gateway config check, or an API rejection of its endpoint), that operation keeps its last-synced endpoint, every other operation still converges, and no stale endpoint is deleted until every operation converges. A spec fetch (including a failed external `$ref` fetch/decode, a fetch past its 2-minute deadline, or a dereferenced spec over 10 MiB), whole-evaluation CUE, unmatched or ambiguous override, or base-path failure stops the pipeline before any endpoint is touched.
 
-1. **On `KrakenDAutoConfig` creation** — fetch the OpenAPI spec, load CUE definitions, evaluate CUE to generate endpoints, set status to `Synced`
-2. **On `KrakenDAutoConfig` update** — re-fetch the spec, re-evaluate CUE, diff against existing generated endpoints, create/update/delete as needed
-3. **On `KrakenDAutoConfig` deletion** — all generated `KrakenDEndpoint` resources are garbage-collected via `ownerReference`
-4. **On CUE definitions ConfigMap update** — the controller watches the referenced ConfigMap(s) and re-evaluates when definitions change
+1. **On `KrakenDAutoConfig` creation, or a spec (generation), label, or annotation change** — fetch the OpenAPI spec, load CUE definitions, evaluate CUE, filter, generate, and create/update/delete owned `KrakenDEndpoint` resources to match. Status-only updates (the phase/condition writes the reconciler itself makes) are ignored by the primary watch's predicate, so they cannot re-trigger a reconcile.
+2. **On an owned `KrakenDEndpoint` spec change or delete** — the same full pipeline runs, which restores a generated endpoint that was hand-edited or deleted out of band. Endpoint specs are compared by decoded JSON value, not bytes, so formatting/re-encoding differences alone don't produce a write.
+3. **On `KrakenDAutoConfig` deletion** — all generated `KrakenDEndpoint` resources are garbage-collected via `ownerReference`. A terminating AutoConfig (`deletionTimestamp` set) is not reconciled: under foreground deletion (`kubectl delete --cascade=foreground`) it lingers while its endpoints are collected, and each endpoint delete re-enqueues it, so converging would recreate them.
+4. **On an `openapi.configMapRef` or CUE definitions ConfigMap update** — the controller watches the referenced ConfigMap(s) and re-runs the pipeline.
+5. **On a resync** — `trigger: OnChange` AutoConfigs are re-polled every 5 minutes (`defaultResyncInterval`) even with no watch event, so upstream spec changes and out-of-band endpoint drift are converged by the next successful sync; `trigger: Periodic` AutoConfigs resync at `spec.periodic.interval` instead.
+6. **On a generated endpoint's label change or readiness change** — the same full pipeline runs, restoring labels and refreshing `EndpointsReady` (a failed sync refreshes it too). Only a change of the endpoint's `Ready` status or reason, or of the generation it has observed, counts; a message-only status write does not.
 
-When `trigger: Periodic`, the controller additionally re-fetches the spec on the configured interval and reconciles changes. The spec checksum (`status.specChecksum`) prevents unnecessary endpoint churn when the spec hasn't changed. A CUE definitions change (detected via ConfigMap resourceVersion) triggers re-evaluation even when the spec checksum is unchanged.
+A reconcile that finds nothing to change — the common steady-state case — writes no status and emits no event. When something does change, `status.lastSyncTime` and an `EndpointsGenerated` event (`"Generated N endpoints (C created, U updated, D deleted, S skipped)"`, `"Generated 1 endpoint (...)"` for one) are recorded; `SpecWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warning events fire only when the spec/CUE-definitions/generation inputs differ from the last successful sync's, so they don't spam on every resync. A failed sync doesn't record its inputs, so they do repeat on each retry of a failing sync whose inputs changed; a spec fetch failure emits `SpecFetchFailed` instead. A sync that only holds operations (`OperationsFailed`) reaches its endpoint writes and records its inputs like a successful one, so its warnings are not repeated on the next resync. `status.phase` no longer transitions through `Fetching`/`Rendering`; those enum values remain for compatibility, but the controller only writes `Synced` or `Error`, and the phase is empty before the first sync.
+
+Retry cadence differs by failure kind. A spec fetch, CUE, unmatched-override, ambiguous-override, or scope failure — including a failure to fetch or decode an external `$ref` document, which fails the sync closed the same way instead of falling back to the raw spec (a `$ref`-shaped value in example data, including the data inside an external Example Object, is not a reference and is never fetched; only the Example Object's own `$ref`, and a root `$ref` chain in its target, are, and the object is inlined under `components/examples`) — retries at `spec.periodic.interval` for `Periodic` or via controller-runtime's exponential backoff for `OnChange`. A transient endpoint write failure (`EndpointReconcileFailed`) or an unavailable config check (`ValidatorUnavailable`) does not follow that split: it always retries with backoff, on either trigger, since it's usually transient and a `Periodic` AutoConfig would otherwise wait a whole interval to recover. Held operations (`OperationsFailed`) are deterministic and are not errors: the reconcile returns no error and the AutoConfig is retried at its resync interval, or at once when an input or watched dependency changes. A `Conflict` on a status write, or a `Conflict`/`AlreadyExists` on an endpoint write, means this reconcile acted on a stale cached copy — it is not a failure: it requeues quietly one second later with no error log, no event, and no status change, and its input warning events (`SpecWarning`, `DuplicateOperationId`, `AdditionalEndpointOverride`) are held back and recorded only once the reconcile's own status write succeeds, so a retry after a lost conflict doesn't re-emit them. The exception is a failed sync whose failure-status write conflicts: the sync failed all the same, so it keeps the failure's own retry (backoff, or `spec.periodic.interval` where that applies) with no event from that attempt, since the one-second requeue would reset controller-runtime's backoff.
+
+To force an immediate reconcile outside the resync interval, change any annotation on the resource — the watch predicate doesn't inspect which one:
+
+```bash
+kubectl annotate krakendautoconfig <name> -n <ns> krakend.io/resync="$(date +%s)" --overwrite
+```
+
+### Per-Operation Failures and Status
+
+A problem in one operation stays with that operation. These failures are deterministic, so the operation is held and the rest of the AutoConfig converges:
+
+| `status.failedOperations[].reason` | Cause |
+|---|---|
+| `CUEEvaluationFailed` | The operation's entry fails CUE validation or does not decode into an endpoint entry (`exportEndpointEntries`). An error outside the endpoint entries fails the whole evaluation instead |
+| `ConfigValidationFailed` | The operation's own endpoint fails `krakend check` on its own, would make KrakenD's router unable to serve one of two entries (the message names the other endpoint), loses its route to another desired endpoint of the same method and route shape (`renderer.ConflictKey`), or the gateway has more router clashes than the render resolves at once (every write is held until they are fixed) |
+| `EndpointRejected` | The API server rejects the write as invalid (the webhook's denial included), another object controls the endpoint's name, a label-matched orphan cannot be adopted, or, on a CE gateway, the endpoint uses an Enterprise-only `extra_config` namespace (held without a write) |
+
+The hold rule has two parts: (a) a held operation's endpoint is not written, so its existing endpoint stays unchanged; (b) no stale endpoint is deleted while any operation is held or any write failed, so a failure never takes a route off the gateway. Operations that `spec.filter` excludes are never reported or held. Writes run before deletes and every write is attempted, so an operation rename converges: the new endpoint is written, shares the route with the old one until the old one is deleted, and the route keeps serving throughout.
+
+`Synced` is `False` with reason `OperationsFailed` while any operation is held. The reconcile returns no error, so there is no backoff: the AutoConfig retries at its resync interval, or at once on an input change. The `krakend_operator_autoconfig_synced` gauge is `0`, and an `OperationsFailed` Warning event fires when the `Synced` condition or `status.failedOperations` changes, not when only readiness changes. The full cause of every held operation, a CUE failure or a rejection, is logged at Info once per change of the causes for each process (a per-AutoConfig digest in a `sync.Map` on the reconciler keyed by namespace and name, dropped when the AutoConfig is deleted or holds nothing), so a restart logs them again. Transient errors (a failed write, adoption or delete, with a message that names the first five and counts the rest) fail the sync as `EndpointReconcileFailed`, and a config check that cannot run as `ValidatorUnavailable`; both retry with backoff, and `ValidatorUnavailable` writes and deletes nothing except that it may still adopt label-matched orphans (owner references only; routes unchanged). A `Conflict` or `AlreadyExists` write requeues quietly after one second.
+
+**The precheck.** Before writing, `reconcileEndpoints` runs the gateway config check over the endpoints it is about to write, through the pod's one `configcheck.Checker` (`AutoConfigChecker`). The precheck holds, in order: the candidates that use Enterprise-only namespaces on a CE gateway; the candidates that would take part in a new router clash (`configcheck.NewClashes` over `Conflicts` before and after, with every write held when the render's clash resolution is capped); then (`judgeCandidates`) the gateway root is checked alone (when it fails, no candidate is to blame and all are written), then the root with every candidate together, and when that fails each candidate is checked on its own, when it passes only the candidates that lost an entry in it. Every check goes through `withCheckSlot` and the AutoConfig's verdict memo. A hold quotes only that operation's own output (cut to fit the 256-byte status entry; the log keeps the full text), or names the policy at fault, so no other endpoint's content can hold a candidate or reach its message. After a hold, the clash check runs again over the remaining candidates, with the stale endpoints and the held candidates' stored versions kept, until it holds no more. When this sync will also delete the stale endpoints, the clash check sees them as empty copies, so a legal rename is not blamed on them; when any operation is held, or a write names an endpoint the last status recorded as `EndpointRejected` (it is rejected again and stops the delete), the stale endpoints stay in the check. Each candidate carries the creation time the cluster will give it (`creationOrder`: an existing endpoint's own, a new one after every existing one), because the renderer serves the oldest of the endpoints that share a route. A rename and a brand-new rejection in one pass is not predicted: the gateway renders the old and the new endpoints together, and the older one's entry is served until the rejection's cause is fixed. A gateway that does not exist is not checked. Other admission rules the check cannot see cost one rejected write per sync, which is held as `EndpointRejected`. A write rejected after a passing precheck keeps its stale endpoints. The AutoConfig checks and the policy controller's checks hold at most one of the checker's three slots between them (`autoConfigCheckSlots`) and the gateway controller at most one (`gatewayCheckWorkers`, its `MaxConcurrentReconciles`), so the controllers never hold more than 2 of the 3 slots; concurrent admission requests can take the rest. With several workers, two AutoConfigs can check the same gateway at once, each without seeing the other's pending writes; the gateway controller still never publishes a render that fails `krakend check`: it excludes the endpoints that fail on their own, and keeps its applied config with `ConfigValid=False` when its root fails or its endpoints fail only together.
+
+A route-clash hold carries the webhook's advice, written for KrakenDEndpoint authors, and the status cuts every message at 256 bytes. An AutoConfig user resolves it by excluding one of the operations with `spec.filter`, or by fixing the upstream paths to use one parameter name. A `urlTransform` that collapses two operations onto one method and path is a misconfiguration: the generator publishes one deterministically and reports the other as a duplicate in `status.skipped`, and the published endpoint's name, its `failedOperations` label and filter matching can follow the other operation, which `spec.filter` cannot separate.
+
+**Status.** `status.failedOperations`, `status.skipped` and `status.warnings` are capped at 20 entries, each message at 256 bytes; condition messages name at most 5 items, then "and N more". `status.skipped` lists operations with no endpoint by rule: a method KrakenDEndpoint does not accept (`UnsupportedMethod`: HEAD, OPTIONS and TRACE, unless an override gives the operation a supported method) and duplicates (`DuplicateOperationId`); `status.skippedOperations` counts them all. When a later sync fails before its endpoint writes, the three lists stay as the last sync that reached them recorded them; `status.readyEndpoints` and `EndpointsReady` are still refreshed from the endpoints the AutoConfig controls then (listed by controller UID, no adoption, and kept as they were when the list fails). Count messages agree with their number (`1 operation failed`, `1 endpoint ready`). `status.readyEndpoints` counts the generated endpoints whose `Ready` is True for their current generation, and the `EndpointsReady` condition, folded into `Ready`, names up to five that are not. Spec problems reach `status.warnings` and a `SpecWarning` event (at most 20 input warning events per sync (`SpecWarning`, `DuplicateOperationId` and `AdditionalEndpointOverride` together), besides the failure or `OperationsFailed` event) when the inputs change: unresolved or colliding `$ref`s, `#/…` refs inside fetched documents that are not resolved in their document (a pointer the document lacks, or an Example Object reference: both resolve against the main spec), recursive schemas in fetched documents (a cycle note; the schema is still rewritten correctly), external `$ref`s in a ConfigMap-sourced spec, parameter `$ref`s that do not resolve, and schema references `components/schemas` does not define. One root cause can produce two notes (an external or local ref note and a schema-not-defined note).
+
+**Concurrency and deadline.** `--autoconfig-max-concurrent-reconciles` (chart value `autoconfig.maxConcurrentReconciles`, default 4) sets how many AutoConfigs reconcile at once. One reconcile's spec fetch and external `$ref` resolution share a 2-minute deadline (`defaultFetchTimeout`) on top of the fetcher's per-request 30 seconds, so a stuck upstream fails that AutoConfig with `SpecFetchFailed` and holds no worker.
 
 ### CUE Evaluation Detail
 
@@ -2030,7 +2660,7 @@ The CUE evaluation pipeline replaces the discrete parse → transform → merge 
    - Define custom rate-limit parameters per path or per operation
 4. **Apply CR overrides as CUE values** — the `defaults`, `overrides`, and `filter` fields from the `KrakenDAutoConfig` spec are converted to CUE values and unified with the evaluation context
 5. **Set environment value** — `cue.environment` is injected into the CUE evaluation context via `FillPath("_env", ...)`, populating a hidden CUE field `_env` that definitions reference for per-environment branches (host resolution, namespace selection, etc.). This uses `FillPath` rather than CUE `@tag()` because the operator evaluates CUE via `cue/cuecontext` (not `cue/load`), and `@tag()` injection is only supported by `cue/load`.
-6. **Evaluate and export** — the unified CUE value is evaluated to concrete JSON matching the `KrakenDEndpointSpec` schema, producing an array of endpoint specs. CUE constraint violations (e.g., missing `gatewayRef`, invalid `method`, type mismatches against the CRD schema) surface as evaluation errors, reported in the `KrakenDAutoConfig` status. The generator (§13 in the application architecture) wraps each evaluated spec in a `KrakenDEndpoint` CR with appropriate metadata, labels, and owner references.
+6. **Evaluate and export** — the unified CUE value is evaluated to concrete JSON matching the `KrakenDEndpointSpec` schema, producing an array of endpoint specs. CUE constraint violations (e.g., missing `gatewayRef`, invalid `method`, type mismatches against the CRD schema) inside one endpoint entry fail that operation only (held, `OperationsFailed`); violations outside the endpoint entries fail the whole evaluation. Entries whose method KrakenDEndpoint does not accept (HEAD, OPTIONS, TRACE) are skipped and reported, after the overrides have applied. Parameter `$ref`s are dereferenced before evaluation, so the definitions see each parameter's name and location; a `#/…` ref inside a fetched document, such as an alias to another parameter, resolves against that document (an Example Object reference excepted). Each endpoint carries only the component schemas its documentation references, directly or through the schemas they reference; the renderer reports a schema name that two endpoints define differently as `Accepted` reason `SchemaNameConflict` on the endpoint that comes later in namespace/name order. An override reaches custom CUE definitions as `_overrides` under the `SanitizeName` form of its `operationId` (lowercased, every character outside `a-z`, `0-9` and `-` replaced by `-`, leading and trailing `-` trimmed), and an override on an operationId that more than one operation declares fails the sync closed (`AmbiguousOverride`). The generator (§13 in the application architecture) wraps each evaluated spec in a `KrakenDEndpoint` CR with appropriate metadata, labels, and owner references.
 
 > **Relationship to KrakenD-SwaggerParse:** The default CUE definitions encode the same transformation *logic* as KrakenD-SwaggerParse's `endpoints.cue` but target the `KrakenDEndpointSpec` CRD schema rather than raw KrakenD JSON. The iteration pattern (for each path+verb, produce an endpoint), host resolution via `#internalHost` per environment, parameter extraction from OpenAPI `parameters[]`, and per-path override mechanism (`enabled`, `rewrite`, `timeout`, `api_rate_limit`) are preserved. The output structure changes: instead of producing KrakenD JSON fields (`url_pattern`, `input_headers`, `extra_config`), the CUE definitions produce CRD fields (`backends[].urlPattern`, `inputHeaders`, `extraConfig`). The rendering pipeline (§10) handles the CRD → `krakend.json` conversion. The `swagger_overrides.cue` pattern is supported via custom CUE definitions ConfigMaps. The shell-script import pipeline (`import_oas.sh`) is replaced by the operator's HTTP fetcher.
 
@@ -2073,13 +2703,13 @@ If no `operationId` is present in the OpenAPI spec, the name is derived from:
 
 Where `sanitized-path` replaces `/` with `-`, removes leading dashes, and converts `{param}` to `param`. Example: `users-autoconfig-get-api-v1-users-id`.
 
-All generated endpoints carry the label `gateway.krakend.io/auto-generated: "true"` and `gateway.krakend.io/autoconfig: {autoconfig-name}` for easy identification and querying.
+All generated endpoints carry the label `gateway.krakend.io/auto-generated: "true"` and `gateway.krakend.io/autoconfig: {autoconfig-name}` for easy identification and querying. Ownership is the controller owner reference, not the labels: the AutoConfig tracks its endpoints by it, adopts label-matched orphans (both labels, no controller and not terminating, that it does not itself want to write) as a ReplicaSet adopts pods, never touches an endpoint controlled by another object, and merges the managed labels into existing labels. Anyone who can label an uncontrolled endpoint in the namespace can therefore have the AutoConfig converge or delete it. Uncontrolled endpoints are not watched, so adoption happens on the next reconcile. An uncontrolled endpoint whose name the AutoConfig wants to write is taken over whatever its labels.
 
 ### Interaction with Manual Endpoints
 
 - Generated endpoints are standard `KrakenDEndpoint` resources and participate in the normal conflict detection pipeline (§5)
-- If a manually-created `KrakenDEndpoint` conflicts with a generated one, the standard tie-breaking rules apply (older by `creationTimestamp` wins)
-- Users can override generated endpoints by creating manual endpoints with the same path+method — the manual endpoint wins if it was created first
+- If a manually-created `KrakenDEndpoint` and a generated one share a method and route shape, admission rejects whichever is written second (`Duplicate value`). A refused generated write is held as `EndpointRejected` and reported in `status.failedOperations` (`OperationsFailed`), so exclude the operation with `spec.filter` (`filter.excludeOperationIds` or `filter.excludePaths`) to keep a manual endpoint, or expect `OperationsFailed`. A conflict stored before the admission rule falls back to the standard tie-breaking rules (older by `creationTimestamp` wins)
+- Two endpoints of one AutoConfig may share a route while an operation rename converges; the webhook admits that, and the older one serves until the AutoConfig deletes it. Desired endpoints of one AutoConfig that share a route are different: the AutoConfig holds all but the one the renderer serves
 - To exclude specific operations from auto-generation, use the `filter.excludeOperationIds` or `filter.excludePaths` fields
 
 ### Runtime Model
@@ -2088,7 +2718,7 @@ The autoconfig controller runs as part of the main operator process (same binary
 
 - Uses a separate work queue keyed by `KrakenDAutoConfig` namespace/name
 - Does NOT trigger gateway reconciliation directly — generated `KrakenDEndpoint` creates/updates trigger the normal endpoint controller watch, which in turn triggers the gateway reconciler
-- Runs with the same RBAC permissions as the gateway controller (it creates `KrakenDEndpoint` resources, which requires `create/update/patch/delete` on `krakendendpoints`)
+- Runs with the same RBAC permissions as the gateway controller (it creates, updates and deletes `KrakenDEndpoint` resources, which requires `create`, `update` and `delete` on `krakendendpoints`)
 
 ### SSRF Mitigation
 
@@ -2098,7 +2728,7 @@ The `openapi.url` field accepts arbitrary HTTP URLs, which introduces a server-s
 2. **IP blocklist** — the operator always rejects URLs resolving to loopback addresses (`127.0.0.0/8`, `::1`), link-local addresses (`169.254.0.0/16`, `fe80::/10`), and IPv6 ULA addresses (`fc00::/7` — includes `fd00::/8` covering AWS `fd00:ec2::254`, GCP, and similar provider-assigned metadata endpoints; the `fc00::/8` half is reserved by RFC 4193 but blocked preventively). When `openapi.allowClusterLocal: false`, RFC 1918 private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) are also blocked. Resolved addresses MUST be normalized prior to CIDR matching: if an IPv6 address is an IPv4-mapped address (`::ffff:0:0/96`), it must be converted to its IPv4 form before applying the RFC 1918 rules. The default `allowClusterLocal: true` permits fetching from cluster-internal services (the primary use case). Cloud metadata endpoints (`169.254.169.254` and IPv6 equivalents) are always blocked regardless of this setting
 3. **DNS resolution validation** — the operator resolves the hostname before making the request and applies the IP blocklist to the resolved address (prevents DNS rebinding)
 4. **Redirect validation** — the operator applies the same IP blocklist to HTTP redirect `Location` headers before following them, preventing redirect-based SSRF bypasses. Maximum redirect depth: 5
-5. **HTTP timeout** — all spec fetches use a configurable timeout (default: 30 seconds) to prevent resource exhaustion from slow endpoints
+5. **HTTP timeout** — every spec and `$ref` document request is bounded at 30 seconds, and one reconcile's fetch and external `$ref` resolution together at 2 minutes, to prevent resource exhaustion from slow endpoints
 6. **RBAC gating** — `KrakenDAutoConfig` creation should be restricted via Kubernetes RBAC to trusted operators/CI systems, not arbitrary namespace users
 
 ### Duplicate operationId Handling
@@ -2106,25 +2736,35 @@ The `openapi.url` field accepts arbitrary HTTP URLs, which introduces a server-s
 If an OpenAPI spec contains duplicate `operationId` values (technically invalid per the OpenAPI specification but common in practice), the autoconfig controller:
 
 1. Uses the **first** occurrence and skips subsequent duplicates
-2. Emits a `DuplicateOperationId` Warning event on the `KrakenDAutoConfig` resource
+2. Lists the skipped operation in `status.skipped` (reason `DuplicateOperationId`) and emits a `DuplicateOperationId` Warning event on the `KrakenDAutoConfig` resource when the inputs change
 3. Increments the `status.skippedOperations` counter
+
+An override on a duplicated operationId fails the sync closed (`AmbiguousOverride`), because it would land on only one of the operations. The same skip covers two operations that a `urlTransform` collapses onto one method and path.
 
 ### Events and Conditions
 
 | Event | Type | Reason |
 |---|---|---|
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
-| OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
-| CUE evaluation failed | Warning | `CUEEvaluationFailed` |
+| OpenAPI spec fetch failed, including a failed external `$ref` fetch/decode | Warning | `SpecFetchFailed` |
+| CUE evaluation failed as a whole, outside any one operation's entry (sync fails) | Warning | `CUEEvaluationFailed` |
+| Override operationId not present in the OpenAPI spec, or backend index out of range (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| Override operationId that more than one operation declares (sync fails, last-good endpoints kept) | Warning | `AmbiguousOverride` |
+| No base path could be derived for `additionalEndpoints` (sync fails) | Warning | `AdditionalEndpointScopeFailed` |
+| Generated endpoints could not be created, updated or deleted for a transient reason (sync fails, retried with backoff) | Warning | `EndpointReconcileFailed` |
+| The gateway config check could not run (nothing written or deleted, retried with backoff) | Warning | `ValidatorUnavailable` |
+| Operations are held: CUE evaluation, the gateway config check or an API rejection of their endpoint (on a change of the status) | Warning | `OperationsFailed` |
+| A spec problem that does not stop the sync (on a change of the inputs: with `DuplicateOperationId` and `AdditionalEndpointOverride`, at most 20 per sync, besides the failure or `OperationsFailed` event) | Warning | `SpecWarning` |
+| An `additionalEndpoints` entry replaced a spec-derived endpoint | Warning | `AdditionalEndpointOverride` |
 | Endpoints generated/updated | Normal | `EndpointsGenerated` |
-| Operation skipped (filtered) | Normal | `OperationFiltered` |
-| Operation has no operationId | Warning | `MissingOperationId` |
 | Duplicate operationId in OpenAPI spec | Warning | `DuplicateOperationId` |
 
 | Condition | Meaning |
 |---|---|
 | `SpecAvailable` | OpenAPI spec was fetched and parsed successfully |
-| `Synced` | Generated endpoints are in sync with the latest spec |
+| `Synced` | Generated endpoints are in sync with the latest spec; `False` with reason `OperationsFailed` while any operation is held, and with the failure's reason (`SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed`, `EndpointReconcileFailed`, `ValidatorUnavailable`) when the sync fails before or during its writes |
+| `EndpointsReady` | Every generated endpoint's `Ready` is True for its current generation (`AllEndpointsReady`), or `False` (`EndpointsNotReady`) naming up to five endpoints and their reasons |
+| `Ready` | `SpecAvailable`, `Synced` and `EndpointsReady` are True; otherwise the first failing one's reason, absent until the first status write; a first sync that creates endpoints reports `False`/`EndpointsNotReady` until the endpoint controller reports them |
 
 ---
 
@@ -2148,29 +2788,63 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │       ├── groupversion_info.go            # API group registration
 │   │       └── zz_generated.deepcopy.go        # Generated deep copy methods
 │   ├── cmd/
-│   │   └── main.go                             # Entrypoint
+│   │   ├── main.go                             # Entrypoint
+│   │   ├── logflags.go                         # --log-format and the kept --zap-* flags
+│   │   ├── version.go                          # main.version, set by the build
+│   │   ├── serving.go                          # Webhook and metrics server options and certificate checks
+│   │   ├── wiring.go                           # wireValidation: the one config checker, the gateway and AutoConfig reconcilers and the webhook validators
+│   │   └── webhooks.go                         # registerWebhooks: sets the webhooks up and gates readiness on them, only when enabled
 │   ├── internal/
 │   │   ├── controller/
-│   │   │   ├── gateway_controller.go           # KrakenDGateway reconciler
-│   │   │   ├── endpoint_controller.go          # KrakenDEndpoint reconciler
-│   │   │   ├── policy_controller.go            # KrakenDBackendPolicy reconciler
-│   │   │   ├── autoconfig_controller.go        # KrakenDAutoConfig reconciler (OpenAPI watcher)
-│   │   │   └── license_monitor.go              # Periodic license expiry checker
+│   │   │   ├── krakendgateway_controller.go    # KrakenDGateway reconciler (config and infrastructure stages)
+│   │   │   ├── krakendendpoint_controller.go   # KrakenDEndpoint reconciler
+│   │   │   ├── krakendbackendpolicy_controller.go # KrakenDBackendPolicy reconciler
+│   │   │   ├── krakendautoconfig_controller.go # KrakenDAutoConfig reconciler (OpenAPI watcher)
+│   │   │   ├── autoconfig_endpoints.go         # AutoConfig endpoint convergence: adoption, precheck, route collisions, reconcileEndpoints, writes, deletes
+│   │   │   ├── autoconfig_status.go            # AutoConfig status lists, condition messages, endpoint readiness and sync recording
+│   │   │   ├── schema_conflicts.go             # Accepted message for an endpoint whose component schema loses a name collision
+│   │   │   ├── gateway_config.go               # Config stage: publish and GC config ConfigMaps, Accepted verdicts
+│   │   │   ├── gateway_validation.go           # The per-endpoint pipeline and exclusion signals
+│   │   │   ├── gateway_events.go               # Events on condition transitions
+│   │   │   ├── gateway_optional.go             # Optional kinds (Dragonfly, ExternalSecret, VirtualService)
+│   │   │   ├── verdict_memo.go                 # Per-owner verdict memo
+│   │   │   └── gateway_license.go              # License evaluation inside the gateway reconcile
+│   │   ├── configcheck/
+│   │   │   ├── checker.go                      # Checker: renders a gateway with a change and validates it, behind a pod-wide slot pool
+│   │   │   ├── unit.go                         # Per-object checks and the verdict memo port
+│   │   │   ├── clash.go                        # Router clashes a change adds
+│   │   │   └── verdict.go                      # Verdict: what a check found, with the endpoints that lost an entry
+│   │   ├── telemetry/                          # OpenTelemetry providers, log pipeline, OperatorMetrics, Kubernetes, webhook and exec instrumentation (used only by cmd)
+│   │   ├── tracing/                            # Span helpers on the OpenTelemetry API (Start, End, Object) and tracingtest
+│   │   ├── fieldindex/
+│   │   │   └── fieldindex.go                   # KrakenDEndpoint field indexes (gateway, policy) shared by controllers, webhooks and checker
 │   │   ├── autoconfig/
 │   │   │   ├── fetcher.go                      # OpenAPI spec fetcher (HTTP + ConfigMap sources)
 │   │   │   ├── cue_evaluator.go                # CUE evaluation engine (cuelang.org/go/cue)
 │   │   │   ├── filter.go                       # Include/exclude filter engine
-│   │   │   └── generator.go                    # EndpointEntry → KrakenDEndpoint CRD renderer
+│   │   │   ├── generator.go                    # EndpointEntry → KrakenDEndpoint CRD renderer
+│   │   │   ├── operations.go                   # Operation and OperationIssue: what skipped and failed operations report
+│   │   │   ├── parameters.go                   # Dereferences parameter $refs before CUE evaluation
+│   │   │   ├── jsonwalk.go                     # JSON walk shared by the $ref resolver and the schema closure
+│   │   │   ├── schemas.go                      # Component schemas and the per-endpoint schema closure
+│   │   │   └── cue/
+│   │   │       └── defaults.cue                # Built-in default CUE definitions (embedded; the krakend-cue-definitions ConfigMap overrides them)
 │   │   ├── renderer/
 │   │   │   ├── config.go                       # KrakenD JSON config builder
 │   │   │   ├── endpoints.go                    # Endpoint array builder
 │   │   │   ├── extra_config.go                 # extra_config namespace builder
 │   │   │   ├── plugins.go                      # Plugin volume + krakend.json plugin block builder
-│   │   │   └── validator.go                    # krakend check -tlc wrapper
+│   │   │   ├── eestrip.go                      # Enterprise-only features stripped on CE fallback
+│   │   │   ├── eewildcard.go                   # EE wildcard route rules used when validating
+│   │   │   ├── eeonly_namespaces.json          # Data: extra_config namespaces only Enterprise accepts, by level
+│   │   │   ├── routeadmit.go                   # Oldest-first router admission of entries
+│   │   │   ├── routes.go                       # Route shape: ConflictKey and PathParams
+│   │   │   ├── routecheck.go                   # In-process gin route check that stands in for krakend check -t
+│   │   │   └── validator.go                    # krakend check wrapper: Validate (-t -n, controller) and Lint (-n, admission)
 │   │   ├── resources/
 │   │   │   ├── deployment.go                   # Deployment builder (includes plugin volume assembly)
 │   │   │   ├── service.go                      # Service builder
-│   │   │   ├── configmap.go                    # ConfigMap builder
+│   │   │   ├── configmap.go                    # Content-addressed config ConfigMap builder
 │   │   │   ├── serviceaccount.go               # ServiceAccount builder
 │   │   │   ├── pdb.go                          # PodDisruptionBudget builder
 │   │   │   ├── hpa.go                          # HorizontalPodAutoscaler builder
@@ -2178,28 +2852,42 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── virtualservice.go               # Istio VirtualService builder
 │   │   │   └── externalsecret.go               # ExternalSecret builder
 │   │   ├── webhook/
-│   │   │   └── validation.go                   # ValidatingAdmissionWebhook handlers
+│   │   │   ├── webhook.go                      # Webhook markers, Validators, SetupWebhooks, shared audience rule
+│   │   │   ├── policy.go                       # PolicyValidator and the policy render checks
+│   │   │   ├── autoconfig.go                   # AutoConfigValidator
+│   │   │   ├── admission.go                    # ConfigChecker port, 422/500 error helpers, the newErrors ratchet
+│   │   │   ├── endpoint.go                     # EndpointValidator: refs, route uniqueness, render check, operator-write exemption
+│   │   │   ├── endpoint_rules.go               # Entry rules: reserved and health paths, wildcards, Enterprise-only namespaces, placeholders
+│   │   │   ├── gateway.go                      # GatewayValidator: probe, runAs and Enterprise-on-CE rules, warnings, gateway render check
+│   │   │   ├── memo.go                         # Admission verdict memo
+│   │   │   └── render.go                       # Per-object admission helpers: served endpoints, naming broken ones, router clashes
 │   │   └── util/
-│   │       ├── hash.go                         # SHA-256 config checksumming
-│   │       └── license.go                      # X.509 license parsing
+│   │       ├── hash/
+│   │       │   └── hash.go                     # SHA-256 config checksumming
+│   │       └── license/
+│   │           ├── license.go                  # X.509 license parsing
+│   │           └── window.go                   # License stages (StageAt, NextChange)
 │   ├── config/
 │   │   ├── crd/
 │   │   │   └── bases/                          # Generated CRD YAML manifests
-│   │   ├── cue/
-│   │   │   └── defaults/                       # Default CUE transformation definitions (deployed as ConfigMap by Helm)
-│   │   │       ├── endpoints.cue               # Core transformation: OpenAPI paths → KrakenDEndpointSpec CRDs
-│   │   │       ├── schema.cue                  # KrakenDEndpointSpec output schema constraints
-│   │   │       └── defaults.cue                # Default rate limits, headers, timeouts, policyRef, extraConfig
-│   │   ├── rbac/                               # RBAC manifests
-│   │   ├── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
-│   │   ├── manager/                            # Operator Deployment manifests
-│   │   └── samples/                            # Example CR YAML files
+│   │   ├── rbac/
+│   │   │   └── role.yaml                       # Generated manager ClusterRole
+│   │   ├── samples/                            # Example CR YAML files
+│   │   └── webhook/
+│   │       └── manifests.yaml                  # Generated ValidatingWebhookConfiguration
+│   ├── hack/
+│   │   ├── audit-admission-rules.sh            # Read-only pre-upgrade audit of stored objects against the admission rules
+│   │   ├── test-audit-admission-rules.sh       # Runs the audit against its fixtures (make test-audit)
+│   │   ├── testdata/audit/                     # Audit fixtures and expected output
+│   │   ├── gen-third-party-notices.sh          # Generates THIRD-PARTY-NOTICES
+│   │   └── notices/                            # KrakenD CE and musl notice texts that gen-third-party-notices.sh includes
 │   ├── test/
-│   │   └── e2e/                                # End-to-end tests
+│   │   ├── e2e/                                # End-to-end tests
+│   │   ├── integration/                        # Integration tests against an ephemeral K3s cluster (build tag integration)
+│   │   └── utils/                              # Shared helpers for the tests
 │   ├── go.mod
 │   ├── go.sum
 │   ├── Makefile
-│   ├── Dockerfile
-│   └── PROJECT                                 # operator-sdk project metadata
+│   └── Dockerfile
 └── .github/                                # CI, linting, and AI development instructions
 ```

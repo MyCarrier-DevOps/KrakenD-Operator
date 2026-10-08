@@ -54,3 +54,13 @@ func DragonflyLabels(gw *v1alpha1.KrakenDGateway) map[string]string {
 		"app.kubernetes.io/managed-by": "krakend-operator",
 	}
 }
+
+// DragonflyConsentLabels returns the labels that hand an existing Dragonfly
+// over to the gateway: the instance and managed-by labels BuildDragonfly sets.
+func DragonflyConsentLabels(gw *v1alpha1.KrakenDGateway) map[string]string {
+	df := DragonflyLabels(gw)
+	return map[string]string{
+		"app.kubernetes.io/instance":   df["app.kubernetes.io/instance"],
+		"app.kubernetes.io/managed-by": df["app.kubernetes.io/managed-by"],
+	}
+}

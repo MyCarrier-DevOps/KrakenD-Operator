@@ -88,7 +88,7 @@ func strategicMergeSecurityContext[T corev1.SecurityContext | corev1.PodSecurity
 // also explicitly setting runAsNonRoot at that same scope — the exact
 // shape every post-merge uid0 fixup in this file and in dragonfly.go
 // inspects before dropping an inherited runAsNonRoot default. Extracted
-// (fix-round review 2, T2 DRY) from mergePodSecurityContext,
+// from mergePodSecurityContext,
 // mergeDragonflyContainerSecurityContext, and mergeDragonflyPodSecurityContext,
 // which each independently reimplemented this identical predicate against a
 // different pair of fields; behavior at every call site is unchanged (see

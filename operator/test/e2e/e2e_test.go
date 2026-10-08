@@ -40,7 +40,7 @@ const namespace = "krakend-operator-system"
 const serviceAccountName = "krakend-operator-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "krakend-operator-controller-manager-metrics-service"
+const metricsServiceName = "krakend-operator-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "krakend-operator-metrics-binding"
@@ -65,15 +65,21 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+		By("rendering the Helm chart")
+		manifest, err := utils.OperatorManifest(namespace, projectImage, true)
+		Expect(err).NotTo(HaveOccurred(), "Failed to render the Helm chart")
 
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+		By("installing the CRDs and the controller-manager from the chart")
+		cmd = exec.Command("kubectl", "apply", "--server-side", "-f", "-")
+		cmd.Stdin = strings.NewReader(manifest)
 		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+		Expect(err).NotTo(HaveOccurred(), "Failed to install the operator from the chart")
+
+		By("waiting for the controller-manager to roll out")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/krakend-operator-controller-manager",
+			"-n", namespace, "--timeout=5m")
+		_, err = utils.Run(cmd) // Ready only once the webhook server serves
+		Expect(err).NotTo(HaveOccurred(), "The controller-manager did not roll out")
 
 		By("creating test namespace for CRD lifecycle tests")
 		cmd = exec.Command("kubectl", "create", "ns", testNamespace)
@@ -93,13 +99,16 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 			"-n", namespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
+		// The CRDs go with the K3s container: deleting them once the operator is gone could
+		// hang on the policy-protection finalizer.
+		By("deleting the controller-manager")
+		if manifest, err := utils.OperatorManifest(namespace, projectImage, false); err == nil {
+			cmd = exec.Command("kubectl", "delete", "--ignore-not-found", "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			_, _ = utils.Run(cmd)
+		} else {
+			fmt.Fprintf(GinkgoWriter, "warning: rendering the chart for teardown: %v\n", err) //nolint:errcheck // best-effort log
+		}
 
 		By("cleaning up metrics ClusterRoleBinding")
 		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
@@ -227,8 +236,8 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
-					"Metrics server not yet started")
+				g.Expect(hasMetricsServerRecord(output)).To(BeTrue(),
+					"no single record has the body, the logger name and the service name of the metrics server start")
 			}
 			Eventually(verifyMetricsServerStarted).Should(Succeed())
 
@@ -278,6 +287,12 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 			Expect(metricsOutput).To(ContainSubstring(
 				"controller_runtime_reconcile_total",
 			))
+
+			By("checking the operator's metrics keep their names and gain no exporter family")
+			Expect(metricsOutput).To(ContainSubstring("krakend_operator_config_renders_total"))
+			Expect(metricsOutput).NotTo(ContainSubstring("target_info"))
+			Expect(metricsOutput).NotTo(ContainSubstring("otel_scope_"))
+			Expect(metricsOutput).NotTo(ContainSubstring("http_server_request"))
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
@@ -454,8 +469,12 @@ metadata:
   name: e2e-dragonfly
 spec:
   version: "2.9"
-  edition: CE
+  edition: EE
   config: {}
+  license:
+    secretRef:
+      name: e2e-license
+      key: license.lic
   dragonfly:
     enabled: true
     replicas: 1
@@ -472,6 +491,18 @@ spec:
 				g.Expect(output).To(Equal("e2e-dragonfly"))
 			}
 			Eventually(verifyDeployment).Should(Succeed())
+
+			By("verifying the missing license Secret is reported and does not fall back to CE")
+			verifyLicenseState := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-dragonfly",
+					"-n", testNamespace, "-o",
+					"jsonpath={.status.conditions[?(@.type==\"LicenseSecretUnavailable\")].status}"+
+						"{.status.conditions[?(@.type==\"CEFallbackApplied\")].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyLicenseState).Should(Succeed())
 
 			By("verifying the Dragonfly CR is created")
 			verifyDragonfly := func(g Gomega) {
@@ -627,8 +658,12 @@ metadata:
   name: e2e-full
 spec:
   version: "2.9"
-  edition: CE
+  edition: EE
   config: {}
+  license:
+    secretRef:
+      name: e2e-license
+      key: license.lic
   dragonfly:
     enabled: true
     replicas: 1
@@ -770,4 +805,31 @@ type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`
 	} `json:"status"`
+}
+
+// hasMetricsServerRecord reports whether one line of the operator's JSON logs,
+// one record per line, is the metrics server's start: its body, the logger
+// name of its scope and the operator's service name all on the same record.
+func hasMetricsServerRecord(logs string) bool {
+	for _, line := range strings.Split(logs, "\n") {
+		var record struct {
+			Body     struct{ Value any }
+			Resource []struct {
+				Key   string
+				Value struct{ Value any }
+			}
+			Scope struct{ Name string }
+		}
+		if json.Unmarshal([]byte(line), &record) != nil ||
+			record.Body.Value != "Serving metrics server" ||
+			record.Scope.Name != "krakend-operator/controller-runtime/metrics" {
+			continue
+		}
+		for _, attr := range record.Resource {
+			if attr.Key == "service.name" && attr.Value.Value == "krakend-operator" {
+				return true
+			}
+		}
+	}
+	return false
 }

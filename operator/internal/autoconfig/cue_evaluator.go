@@ -20,12 +20,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
-	"sort"
 	"strings"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
+	cueerrors "cuelang.org/go/cue/errors"
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
@@ -50,13 +51,46 @@ type CUEOutput struct {
 	Entries      []v1alpha1.EndpointEntry
 	OperationIDs map[string]string
 	Tags         map[string][]string
-	Warnings     []string
+	// UnmatchedOverrides holds, in override order, an operationId from
+	// spec.overrides that no operation has, or "<operationId> backends[<i>]"
+	// for a backend index out of range.
+	UnmatchedOverrides []string
+	// AmbiguousOverrides holds the operationIds from spec.overrides that
+	// more than one operation declares, in override order. Such an override
+	// is not applied: the caller must not use Entries while this is non-empty.
+	AmbiguousOverrides []string
+	// Skipped holds the operations whose method the KrakenDEndpoint API does
+	// not accept (reason UnsupportedMethod), sorted by path then method, with
+	// the path and method their entry has after the URL transform and the
+	// overrides. They have no entry in Entries.
+	Skipped []OperationIssue
+	// Failed holds the operations whose entries failed CUE validation or
+	// could not be decoded (reason CUEEvaluationFailed), sorted by path then
+	// method. They have no entry in Entries.
+	Failed []OperationIssue
+
+	// entryOperationIDs and entryTags hold the operationId and the tags of
+	// each of Entries, in order, from before the URL transform and the
+	// overrides can put two operations on one route and so on one
+	// OperationIDs and Tags key.
+	entryOperationIDs []string
+	entryTags         [][]string
 }
 
 // CUEEvaluator evaluates CUE definitions against OpenAPI spec data.
 type CUEEvaluator interface {
 	Evaluate(ctx context.Context, input CUEInput) (*CUEOutput, error)
 }
+
+// supportedMethods are the HTTP methods the KrakenDEndpoint API accepts. An
+// entry with any other method (the default definitions also emit HEAD,
+// OPTIONS and TRACE operations) is skipped, not generated.
+var supportedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+// skippedMethods are the standard HTTP methods the KrakenDEndpoint API
+// rejects; the default definitions emit all but CONNECT. A failed operation
+// is skipped, not held, only when its method is known to be one of these.
+var skippedMethods = []string{"HEAD", "OPTIONS", "TRACE", "CONNECT"}
 
 // NewCUEEvaluator returns a CUEEvaluator implementation.
 func NewCUEEvaluator() CUEEvaluator {
@@ -102,12 +136,12 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	unified = applyOverrides(cueCtx, unified, input)
 
-	if err := unified.Validate(cue.Concrete(true)); err != nil {
-		return nil, fmt.Errorf("CUE evaluation failed: %w", err)
-	}
+	// Errors inside one endpoint entry fail only that operation (see
+	// exportEndpointEntries); any other error fails the whole evaluation.
+	rootErrors := entryErrors(unified.Validate(cue.Concrete(true)))
 
 	endpointsValue := unified.LookupPath(cue.ParsePath("endpoint"))
-	output, err := exportEndpointEntries(endpointsValue)
+	output, err := exportEndpointEntries(endpointsValue, rootErrors)
 	if err != nil {
 		return nil, err
 	}
@@ -127,17 +161,26 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	if input.URLTransform != nil {
 		applyURLTransform(output, input.URLTransform)
+		transformIssuePaths(output.Failed, input.URLTransform)
 	}
 
 	applyFieldOverrides(output, input.Overrides)
+	skipUnsupportedMethods(output)
+	// Sorted once the paths and methods are final: a prefix strip or an
+	// override can reorder them.
+	sortIssues(output.Failed)
+	sortIssues(output.Skipped)
 
 	return output, nil
 }
 
+// loadDefinitions unifies the definition files in filename order: CUE words
+// a conflict by the order of its operands, so map order would change the
+// text of an error from one evaluation to the next.
 func loadDefinitions(cueCtx *cue.Context, defs map[string]string) cue.Value {
 	var unified cue.Value
-	for filename, content := range defs {
-		val := cueCtx.CompileString(content, cue.Filename(filename))
+	for _, filename := range slices.Sorted(maps.Keys(defs)) {
+		val := cueCtx.CompileString(defs[filename], cue.Filename(filename))
 		if !unified.Exists() {
 			unified = val
 		} else {
@@ -165,8 +208,8 @@ func normalizeToJSON(data []byte, format v1alpha1.SpecFormat) ([]byte, error) {
 func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.Value {
 	for _, override := range input.Overrides {
 		if override.ExtraConfig != nil && override.ExtraConfig.Raw != nil {
-			key := sanitizeName(override.OperationID)
-			overrideCUE := fmt.Sprintf("_overrides: %s: _\n_overrides: %s: %s", key, key, override.ExtraConfig.Raw)
+			key := SanitizeName(override.OperationID)
+			overrideCUE := fmt.Sprintf("_overrides: %q: _\n_overrides: %q: %s", key, key, override.ExtraConfig.Raw)
 			val := cueCtx.CompileString(overrideCUE, cue.Filename("override-"+key+".cue"))
 			unified = unified.Unify(val)
 		}
@@ -174,7 +217,11 @@ func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.
 	return unified
 }
 
-func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
+// exportEndpointEntries decodes every entry of the endpoint struct, whatever
+// its method: skipUnsupportedMethods partitions them once overrides applied.
+// An entry that fails concrete validation or does not decode into an
+// EndpointEntry is recorded in Failed and does not stop the other entries.
+func exportEndpointEntries(endpointsValue cue.Value, rootErrors map[string][]string) (*CUEOutput, error) {
 	output := &CUEOutput{
 		OperationIDs: make(map[string]string),
 		Tags:         make(map[string][]string),
@@ -187,45 +234,175 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 
 	for iter.Next() {
 		key := iter.Selector().String()
+		rootMsgs := rootErrors[key]
+		delete(rootErrors, key)
 		val := iter.Value()
-
-		var entry v1alpha1.EndpointEntry
-		jsonBytes, err := val.MarshalJSON()
+		op, methodKnown := entryOperation(iter.Selector().Unquoted(), val)
+		entry, err := decodeEntry(val)
+		// The root validation reports errors the entry alone does not, such
+		// as an unresolved reference: the entry's own error comes first.
+		if err == nil && len(rootMsgs) > 0 {
+			err = fmt.Errorf("%s", strings.Join(sortedUnique(rootMsgs), "; "))
+		}
 		if err != nil {
-			output.Warnings = append(output.Warnings, fmt.Sprintf("skipping %s: %v", key, err))
+			output.Failed = append(output.Failed, OperationIssue{
+				Operation: op, Reason: v1alpha1.ReasonCUEEvaluationFailed, Message: err.Error(),
+				methodKnown: methodKnown,
+			})
 			continue
 		}
-		if err := json.Unmarshal(jsonBytes, &entry); err != nil {
-			output.Warnings = append(output.Warnings, fmt.Sprintf("skipping %s: %v", key, err))
-			continue
-		}
-
 		output.Entries = append(output.Entries, entry)
-
+		output.entryOperationIDs = append(output.entryOperationIDs, op.OperationID)
+		output.entryTags = append(output.entryTags, op.Tags)
 		entryKey := entry.Endpoint + ":" + entry.Method
-		opIDValue := val.LookupPath(cue.MakePath(cue.Hid("_operationId", "_")))
-		if opIDValue.Exists() {
-			if opID, err := opIDValue.String(); err == nil {
-				output.OperationIDs[entryKey] = opID
-			}
+		if op.OperationID != "" {
+			output.OperationIDs[entryKey] = op.OperationID
 		}
-
-		tagsValue := val.LookupPath(cue.MakePath(cue.Hid("_tags", "_")))
-		if tagsValue.Exists() {
-			tagsIter, err := tagsValue.List()
-			if err == nil {
-				var tags []string
-				for tagsIter.Next() {
-					if t, err := tagsIter.Value().String(); err == nil {
-						tags = append(tags, t)
-					}
-				}
-				output.Tags[entryKey] = tags
-			}
+		if len(op.Tags) > 0 {
+			output.Tags[entryKey] = op.Tags
 		}
 	}
-
+	if len(rootErrors) > 0 {
+		return nil, fmt.Errorf("CUE evaluation failed: %s", strings.Join(sortedMessages(rootErrors), "; "))
+	}
 	return output, nil
+}
+
+// entryErrors groups the errors of err by the endpoint entry they lie in, at a
+// path endpoint.<key>.<...>, keyed by the entry's selector. An error anywhere
+// else is grouped under "", which no entry has.
+func entryErrors(err error) map[string][]string {
+	byEntry := map[string][]string{}
+	for _, e := range cueerrors.Errors(err) {
+		key := ""
+		if p := e.Path(); len(p) >= 2 && p[0] == "endpoint" {
+			key = p[1]
+		}
+		byEntry[key] = append(byEntry[key], e.Error())
+	}
+	return byEntry
+}
+
+// sortedMessages returns every message of byEntry, sorted and distinct.
+func sortedMessages(byEntry map[string][]string) []string {
+	var all []string
+	for _, msgs := range byEntry {
+		all = append(all, msgs...)
+	}
+	return sortedUnique(all)
+}
+
+// sortedUnique returns the distinct messages in sorted order.
+func sortedUnique(msgs []string) []string {
+	sorted := slices.Clone(msgs)
+	slices.Sort(sorted)
+	return slices.Compact(sorted)
+}
+
+// decodeEntry validates one endpoint entry as concrete and decodes it.
+func decodeEntry(val cue.Value) (v1alpha1.EndpointEntry, error) {
+	var entry v1alpha1.EndpointEntry
+	if err := val.Validate(cue.Concrete(true)); err != nil {
+		return entry, err
+	}
+	jsonBytes, err := val.MarshalJSON()
+	if err != nil {
+		return entry, err
+	}
+	if err := json.Unmarshal(jsonBytes, &entry); err != nil {
+		return entry, err
+	}
+	return entry, nil
+}
+
+// entryOperation identifies the entry labelled key by its own endpoint and
+// method fields, falling back to the label ("<path>:<METHOD>", the label the
+// default definitions use) when a field is not concrete, and by its hidden
+// _operationId and _tags, which the default definitions copy from the spec.
+// It also reports whether the method came from a concrete method field.
+func entryOperation(key string, val cue.Value) (Operation, bool) {
+	op := Operation{Path: key}
+	methodKnown := false
+	if i := strings.LastIndex(key, ":"); i >= 0 {
+		op.Path, op.Method = key[:i], key[i+1:]
+	}
+	if path, err := val.LookupPath(cue.ParsePath("endpoint")).String(); err == nil {
+		op.Path = path
+	}
+	if method, err := val.LookupPath(cue.ParsePath("method")).String(); err == nil {
+		op.Method, methodKnown = method, true
+	}
+	if opID, err := val.LookupPath(cue.MakePath(cue.Hid("_operationId", "_"))).String(); err == nil {
+		op.OperationID = opID
+	}
+	tagsIter, err := val.LookupPath(cue.MakePath(cue.Hid("_tags", "_"))).List()
+	if err != nil {
+		return op, methodKnown
+	}
+	for tagsIter.Next() {
+		if t, err := tagsIter.Value().String(); err == nil {
+			op.Tags = append(op.Tags, t)
+		}
+	}
+	return op, methodKnown
+}
+
+// sortIssues orders issues by path, then method.
+func sortIssues(issues []OperationIssue) {
+	slices.SortFunc(issues, func(a, b OperationIssue) int {
+		if c := strings.Compare(a.Path, b.Path); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Method, b.Method)
+	})
+}
+
+// skipUnsupportedMethods moves every entry, and every failed operation, whose
+// final method the KrakenDEndpoint API does not accept to Skipped, so an
+// override that changes the method decides whether the operation is
+// generated. A failed operation of such a method can never publish, so it
+// must not hold anything back.
+func skipUnsupportedMethods(output *CUEOutput) {
+	kept := output.Entries[:0]
+	keptIDs := output.entryOperationIDs[:0]
+	keptTags := output.entryTags[:0]
+	for i, entry := range output.Entries {
+		if slices.Contains(supportedMethods, entry.Method) {
+			kept = append(kept, entry)
+			keptIDs = append(keptIDs, output.entryOperationIDs[i])
+			keptTags = append(keptTags, output.entryTags[i])
+			continue
+		}
+		key := entry.Endpoint + ":" + entry.Method
+		output.Skipped = append(output.Skipped, unsupportedMethodIssue(Operation{
+			Method: entry.Method, Path: entry.Endpoint,
+			OperationID: output.entryOperationIDs[i], Tags: output.entryTags[i],
+		}))
+		delete(output.OperationIDs, key)
+		delete(output.Tags, key)
+	}
+	output.Entries = kept
+	output.entryOperationIDs = keptIDs
+	output.entryTags = keptTags
+
+	stillFailed := output.Failed[:0]
+	for _, failed := range output.Failed {
+		if !failed.methodKnown || !slices.Contains(skippedMethods, failed.Method) {
+			stillFailed = append(stillFailed, failed)
+			continue
+		}
+		output.Skipped = append(output.Skipped, unsupportedMethodIssue(failed.Operation))
+	}
+	output.Failed = stillFailed
+}
+
+// unsupportedMethodIssue reports op as skipped for its method.
+func unsupportedMethodIssue(op Operation) OperationIssue {
+	return OperationIssue{
+		Operation: op,
+		Reason:    v1alpha1.ReasonUnsupportedMethod,
+		Message:   "KrakenDEndpoint supports only " + strings.Join(supportedMethods, ", "),
+	}
 }
 
 // applyDefaults applies CR-level EndpointDefaults to all entries. These replace
@@ -349,6 +526,28 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 	}
 }
 
+// transformIssuePaths gives each issue the path strip and add-prefix its
+// entry would have after applyURLTransform.
+func transformIssuePaths(issues []OperationIssue, transform *v1alpha1.URLTransformSpec) {
+	for i := range issues {
+		issues[i].Path = transformPath(issues[i].Path, transform)
+	}
+}
+
+// transformPath applies the path strip and add-prefix of transform to path.
+func transformPath(path string, transform *v1alpha1.URLTransformSpec) string {
+	if transform.StripPathPrefix != "" {
+		path = strings.TrimPrefix(path, transform.StripPathPrefix)
+		if path == "" {
+			path = "/"
+		}
+	}
+	if transform.AddPathPrefix != "" {
+		path = transform.AddPathPrefix + path
+	}
+	return path
+}
+
 // applyURLTransformToEntry applies host mapping and path strip/add-prefix to a
 // single entry. hostMap is the precomputed From→To map.
 func applyURLTransformToEntry(
@@ -363,15 +562,7 @@ func applyURLTransformToEntry(
 			}
 		}
 	}
-	if transform.StripPathPrefix != "" {
-		entry.Endpoint = strings.TrimPrefix(entry.Endpoint, transform.StripPathPrefix)
-		if entry.Endpoint == "" {
-			entry.Endpoint = "/"
-		}
-	}
-	if transform.AddPathPrefix != "" {
-		entry.Endpoint = transform.AddPathPrefix + entry.Endpoint
-	}
+	entry.Endpoint = transformPath(entry.Endpoint, transform)
 }
 
 // ApplyURLTransformToEntries applies a URLTransformSpec (host mapping + path
@@ -403,78 +594,133 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		return
 	}
 
-	// Build operationID → entry index lookup
-	opIDIndex := make(map[string]int, len(output.Entries))
-	for _, key := range sortedKeys(output.OperationIDs) {
-		opID := output.OperationIDs[key]
-		for i := range output.Entries {
-			entryKey := output.Entries[i].Endpoint + ":" + output.Entries[i].Method
-			if entryKey == key {
-				opIDIndex[opID] = i
-				break
+	opIDIndex, count := indexOverrideTargets(output)
+
+	for _, ov := range overrides {
+		if count[ov.OperationID] > 1 {
+			output.AmbiguousOverrides = append(output.AmbiguousOverrides, ov.OperationID)
+			continue
+		}
+		idx, ok := opIDIndex[ov.OperationID]
+		if !ok {
+			// An override whose target failed evaluation is held with it,
+			// not unmatched, and moves it to the route it gives the entry.
+			if count[ov.OperationID] == 0 {
+				output.UnmatchedOverrides = append(output.UnmatchedOverrides, ov.OperationID)
+			}
+			remapFailed(output.Failed, ov)
+			continue
+		}
+		applyOverrideToEntry(output, idx, ov)
+	}
+}
+
+// indexOverrideTargets builds the operationID → entry index lookup, and how
+// many operations (entries and failed ones) declare each operationId. An
+// override on an operationId declared more than once is ambiguous and is not
+// applied, so the index only serves operationIds declared once.
+func indexOverrideTargets(output *CUEOutput) (opIDIndex, count map[string]int) {
+	opIDIndex = make(map[string]int, len(output.Entries))
+	count = make(map[string]int, len(output.Entries))
+	for i, opID := range output.entryOperationIDs {
+		if opID == "" {
+			continue
+		}
+		if _, seen := opIDIndex[opID]; !seen {
+			opIDIndex[opID] = i
+		}
+		count[opID]++
+	}
+	for _, failed := range output.Failed {
+		if failed.OperationID != "" {
+			count[failed.OperationID]++
+		}
+	}
+	return opIDIndex, count
+}
+
+// applyOverrideToEntry applies ov to Entries[idx] and keeps the route-keyed
+// OperationIDs and Tags maps in step when the override moves the entry.
+func applyOverrideToEntry(output *CUEOutput, idx int, ov v1alpha1.OperationOverride) {
+	entry := &output.Entries[idx]
+	oldKey := entry.Endpoint + ":" + entry.Method
+
+	applyOverrideFields(entry, ov)
+	if ov.PolicyRef != nil {
+		for i := range entry.Backends {
+			entry.Backends[i].PolicyRef = ov.PolicyRef
+		}
+	}
+	for _, bo := range ov.Backends {
+		if bo.Index < 0 || bo.Index >= len(entry.Backends) {
+			output.UnmatchedOverrides = append(output.UnmatchedOverrides,
+				fmt.Sprintf("%s backends[%d]", ov.OperationID, bo.Index))
+			continue
+		}
+		if bo.ExtraConfig != nil {
+			entry.Backends[bo.Index].ExtraConfig = &runtime.RawExtension{
+				Raw: append([]byte(nil), bo.ExtraConfig.Raw...),
 			}
 		}
 	}
 
-	for _, ov := range overrides {
-		idx, ok := opIDIndex[ov.OperationID]
-		if !ok {
+	// Update OperationIDs and Tags maps if endpoint/method changed
+	newKey := entry.Endpoint + ":" + entry.Method
+	if newKey != oldKey {
+		if opID, ok := output.OperationIDs[oldKey]; ok {
+			delete(output.OperationIDs, oldKey)
+			output.OperationIDs[newKey] = opID
+		}
+		if tags, ok := output.Tags[oldKey]; ok {
+			delete(output.Tags, oldKey)
+			output.Tags[newKey] = tags
+		}
+	}
+}
+
+// applyOverrideFields copies the entry-level fields ov sets onto entry.
+func applyOverrideFields(entry *v1alpha1.EndpointEntry, ov v1alpha1.OperationOverride) {
+	if ov.Timeout != nil {
+		entry.Timeout = ov.Timeout
+	}
+	if ov.CacheTTL != nil {
+		entry.CacheTTL = ov.CacheTTL
+	}
+	if ov.OutputEncoding != "" {
+		entry.OutputEncoding = ov.OutputEncoding
+	}
+	if ov.ConcurrentCalls != nil {
+		entry.ConcurrentCalls = ov.ConcurrentCalls
+	}
+	if ov.InputHeaders != nil {
+		entry.InputHeaders = slices.Clone(ov.InputHeaders)
+	}
+	if ov.InputQueryStrings != nil {
+		entry.InputQueryStrings = slices.Clone(ov.InputQueryStrings)
+	}
+	if ov.Endpoint != "" {
+		entry.Endpoint = ov.Endpoint
+	}
+	if ov.Method != "" {
+		entry.Method = ov.Method
+	}
+	if ov.ExtraConfig != nil {
+		entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, ov.ExtraConfig)
+	}
+}
+
+// remapFailed gives every failed operation of ov the endpoint and method the
+// override sets, so the failure is judged where the operation would publish.
+func remapFailed(failed []OperationIssue, ov v1alpha1.OperationOverride) {
+	for i := range failed {
+		if failed[i].OperationID == "" || failed[i].OperationID != ov.OperationID {
 			continue
 		}
-		entry := &output.Entries[idx]
-		oldKey := entry.Endpoint + ":" + entry.Method
-
-		if ov.Timeout != nil {
-			entry.Timeout = ov.Timeout
-		}
-		if ov.CacheTTL != nil {
-			entry.CacheTTL = ov.CacheTTL
-		}
-		if ov.OutputEncoding != "" {
-			entry.OutputEncoding = ov.OutputEncoding
-		}
-		if ov.ConcurrentCalls != nil {
-			entry.ConcurrentCalls = ov.ConcurrentCalls
-		}
-		if ov.InputHeaders != nil {
-			entry.InputHeaders = slices.Clone(ov.InputHeaders)
-		}
-		if ov.InputQueryStrings != nil {
-			entry.InputQueryStrings = slices.Clone(ov.InputQueryStrings)
-		}
 		if ov.Endpoint != "" {
-			entry.Endpoint = ov.Endpoint
+			failed[i].Path = ov.Endpoint
 		}
 		if ov.Method != "" {
-			entry.Method = ov.Method
-		}
-		if ov.ExtraConfig != nil {
-			entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, ov.ExtraConfig)
-		}
-		if ov.PolicyRef != nil {
-			for i := range entry.Backends {
-				entry.Backends[i].PolicyRef = ov.PolicyRef
-			}
-		}
-		for _, bo := range ov.Backends {
-			if bo.Index >= 0 && bo.Index < len(entry.Backends) && bo.ExtraConfig != nil {
-				entry.Backends[bo.Index].ExtraConfig = &runtime.RawExtension{
-					Raw: append([]byte(nil), bo.ExtraConfig.Raw...),
-				}
-			}
-		}
-
-		// Update OperationIDs and Tags maps if endpoint/method changed
-		newKey := entry.Endpoint + ":" + entry.Method
-		if newKey != oldKey {
-			if opID, ok := output.OperationIDs[oldKey]; ok {
-				delete(output.OperationIDs, oldKey)
-				output.OperationIDs[newKey] = opID
-			}
-			if tags, ok := output.Tags[oldKey]; ok {
-				delete(output.Tags, oldKey)
-				output.Tags[newKey] = tags
-			}
+			failed[i].Method, failed[i].methodKnown = ov.Method, true
 		}
 	}
 }
@@ -546,14 +792,4 @@ func deepMergeJSON(base, patch json.RawMessage) json.RawMessage {
 		return patch
 	}
 	return merged
-}
-
-// sortedKeys returns the keys of a map in stable order for deterministic processing.
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

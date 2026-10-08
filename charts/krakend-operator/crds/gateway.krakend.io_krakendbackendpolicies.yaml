@@ -17,6 +17,12 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      type: string
     - jsonPath: .status.referencedBy
       name: ReferencedBy
       type: integer
@@ -26,8 +32,10 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies
-          API.
+        description: |-
+          KrakenDBackendPolicy defines circuit-breaker, rate-limit and cache settings,
+          plus raw backend extra_config, that KrakenDEndpoint backends reference
+          through policyRef.
         properties:
           apiVersion:
             description: |-
@@ -111,6 +119,12 @@ spec:
               KrakenDBackendPolicy.
             properties:
               conditions:
+                description: |-
+                  Conditions are keyed by type. Ready is the summary condition: False
+                  (InvalidCircuitBreaker, InvalidRateLimit) when a field is out of range,
+                  False (PolicyInvalid) when the policy fails krakend check on its own,
+                  with that output in the message, Unknown (ValidatorUnavailable) when the
+                  check could not run, True otherwise.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -166,6 +180,14 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the metadata.generation this status
+                  was computed for.
+                format: int64
+                type: integer
               referencedBy:
                 type: integer
             type: object

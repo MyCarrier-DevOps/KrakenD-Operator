@@ -17,8 +17,6 @@ limitations under the License.
 package utils
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -66,15 +64,11 @@ func warnError(err error) {
 	fmt.Fprintf(GinkgoWriter, "warning: %v\n", err) //nolint:errcheck // best-effort log
 }
 
-// Run executes the provided command within this context.
-// If a kubeconfig has been set (ephemeral K3s cluster), it is injected via KUBECONFIG env var.
-func Run(cmd *exec.Cmd) (string, error) {
+// prepareCommand runs cmd in the project directory with the environment the e2e suite needs:
+// KUBECONFIG when an ephemeral K3s cluster is set, and CONTAINER_HOST when DOCKER_HOST is.
+func prepareCommand(cmd *exec.Cmd) {
 	dir, _ := GetProjectDir() //nolint:errcheck // best-effort directory resolution
 	cmd.Dir = dir
-
-	if err := os.Chdir(cmd.Dir); err != nil {
-		fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err) //nolint:errcheck // best-effort log
-	}
 
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	if kubeconfigPath != "" {
@@ -85,6 +79,17 @@ func Run(cmd *exec.Cmd) (string, error) {
 	if dh := os.Getenv("DOCKER_HOST"); dh != "" {
 		cmd.Env = append(cmd.Env, "CONTAINER_HOST="+dh)
 	}
+}
+
+// Run executes the provided command within this context.
+// If a kubeconfig has been set (ephemeral K3s cluster), it is injected via KUBECONFIG env var.
+func Run(cmd *exec.Cmd) (string, error) {
+	prepareCommand(cmd)
+
+	if err := os.Chdir(cmd.Dir); err != nil {
+		fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err) //nolint:errcheck // best-effort log
+	}
+
 	command := strings.Join(cmd.Args, " ")
 	fmt.Fprintf(GinkgoWriter, "running: %q\n", command) //nolint:errcheck // best-effort log
 	output, err := cmd.CombinedOutput()
@@ -277,55 +282,6 @@ func GetProjectDir() (string, error) {
 	}
 	wd = strings.ReplaceAll(wd, "/test/e2e", "")
 	return wd, nil
-}
-
-// UncommentCode searches for target in the file and remove the comment prefix
-// of the target content. The target content may span multiple lines.
-func UncommentCode(filename, target, prefix string) error {
-	content, err := os.ReadFile(filename) //nolint:gosec // filename is from test fixture, not user input
-	if err != nil {
-		return fmt.Errorf("failed to read file %q: %w", filename, err)
-	}
-	strContent := string(content)
-
-	idx := strings.Index(strContent, target)
-	if idx < 0 {
-		return fmt.Errorf("unable to find the code %q to be uncomment", target)
-	}
-
-	out := new(bytes.Buffer)
-	_, err = out.Write(content[:idx])
-	if err != nil {
-		return fmt.Errorf("failed to write to output: %w", err)
-	}
-
-	scanner := bufio.NewScanner(bytes.NewBufferString(target))
-	if !scanner.Scan() {
-		return nil
-	}
-	for {
-		if _, err = out.WriteString(strings.TrimPrefix(scanner.Text(), prefix)); err != nil {
-			return fmt.Errorf("failed to write to output: %w", err)
-		}
-		// Avoid writing a newline in case the previous line was the last in target.
-		if !scanner.Scan() {
-			break
-		}
-		if _, err = out.WriteString("\n"); err != nil {
-			return fmt.Errorf("failed to write to output: %w", err)
-		}
-	}
-
-	if _, err = out.Write(content[idx+len(target):]); err != nil {
-		return fmt.Errorf("failed to write to output: %w", err)
-	}
-
-	//nolint:gosec // filename is from test fixture, not user input
-	if err = os.WriteFile(filename, out.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("failed to write file %q: %w", filename, err)
-	}
-
-	return nil
 }
 
 // InstallDragonflyCRD applies the Dragonfly operator CRD to the cluster.

@@ -740,7 +740,7 @@ DNS SRV entries are cached for **30 seconds** by default (configurable via root-
 ### Recommended Dockerfile
 
 ```dockerfile
-FROM krakend/krakend-ee:2.x    # or krakend/krakend:2.x for CE
+FROM krakend/krakend-ee:2.x    # or krakend:2.x for CE
 COPY krakend.json /etc/krakend/krakend.json
 # Or for flexible config:
 # COPY config/ /etc/krakend/config/
@@ -1004,7 +1004,7 @@ krakend license --license /path/to/devel_license
 
 - **Running EE processes will shut down** when the license expires
 - KrakenD EE **will not start** with an expired, incorrect, or missing LICENSE file
-- Downgrade to CE is straightforward — switch to the `krakend/krakend` image (CE) without Enterprise features
+- Downgrade to CE is straightforward — switch to the `krakend` image (CE) without Enterprise features
 
 ### Automated Expiration Checks
 
@@ -1233,7 +1233,7 @@ Key considerations when building a Kubernetes Operator for KrakenD:
    - Verify the new pods start successfully before draining old pods
 
 10. **Fallback to CE on license expiry** — When the EE license has expired and no renewal is available, the operator should:
-    - Switch the Deployment container image from `krakend/krakend-ee` to `krakend/krakend` (CE)
+    - Switch the Deployment container image from `krakend/krakend-ee` to `krakend` (CE)
     - Remove or adjust structural Enterprise-only features that CE cannot handle (e.g., wildcard endpoint paths `/*` which CE's router rejects). Enterprise-only `extra_config` namespaces (e.g., `security/policies`, `auth/api-keys`) are silently ignored by CE and do not need to be stripped.
     - Trigger a rolling deployment with the CE-compatible config
     - Set a status condition on the CRD (e.g., `LicenseDegraded=True`) to alert operators
@@ -1505,7 +1505,7 @@ Key considerations when building a Kubernetes Operator for KrakenD:
 | Page | Synopsis |
 |------|----------|
 | [Deployment overview](https://www.krakend.io/docs/deploying/) | Best practices for production deployment: bake config into Docker image, use health endpoints, and avoid `:watch` in production. |
-| [Docker images](https://www.krakend.io/docs/deploying/docker/) | Official Docker images: `krakend/krakend` (CE), `krakend/krakend-ee` (EE), `:watch` tag for development auto-reload (CE must build from `krakend-watch` repo). |
+| [Docker images](https://www.krakend.io/docs/deploying/docker/) | Official Docker images: `krakend` (CE), `krakend/krakend-ee` (EE), `:watch` tag for development auto-reload (CE must build from `krakend-watch` repo). |
 | [Kubernetes](https://www.krakend.io/docs/deploying/kubernetes/) | Kubernetes deployment patterns: Deployment + ConfigMap + Service (ClusterIP); liveness/readiness probes on `/__health`; `runAsUser: 1000`. |
 | [Blue/green deployments](https://www.krakend.io/docs/deploying/blue-green/) | Blue/green strategy: deploy new version alongside old, validate health, switch Service selector, drain old pods. |
 | [Configuration reload](https://www.krakend.io/docs/deploying/hot-reload/) | `:watch` tag for development (inotify reloads on config change); production uses rolling deployments for zero-downtime config updates. |

@@ -20,19 +20,28 @@ spec:
     - jsonPath: .spec.gatewayRef.name
       name: Gateway
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
       type: string
     - jsonPath: .status.generatedEndpoints
       name: Generated
       type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+        description: |-
+          KrakenDAutoConfig generates the KrakenDEndpoints of a gateway from an OpenAPI
+          specification and keeps them in sync with it.
         properties:
           apiVersion:
             description: |-
@@ -96,6 +105,15 @@ spec:
                             type: boolean
                           encoding:
                             description: Encoding selects the backend response encoding.
+                            enum:
+                            - json
+                            - safejson
+                            - fast-json
+                            - xml
+                            - rss
+                            - string
+                            - no-op
+                            - yaml
                             type: string
                           extraConfig:
                             description: ExtraConfig holds arbitrary backend-level
@@ -107,8 +125,11 @@ spec:
                               named key to avoid collisions.
                             type: string
                           host:
-                            description: Host is the list of backend host URLs.
+                            description: |-
+                              Host is the list of backend host URLs. A host holds no whitespace or
+                              control character: krakend check prints it verbatim in its errors.
                             items:
+                              pattern: ^[^\x00-\x20\x7F]+$
                               type: string
                             type: array
                           inputHeaders:
@@ -135,12 +156,23 @@ spec:
                           method:
                             description: Method overrides the endpoint method for
                               this backend.
+                            enum:
+                            - GET
+                            - POST
+                            - PUT
+                            - PATCH
+                            - DELETE
+                            - OPTIONS
+                            - HEAD
+                            - CONNECT
+                            - TRACE
                             type: string
                           policyRef:
                             description: PolicyRef references a KrakenDBackendPolicy
                               to apply.
                             properties:
                               name:
+                                minLength: 1
                                 type: string
                               namespace:
                                 maxLength: 63
@@ -152,6 +184,10 @@ spec:
                           sd:
                             description: SD selects the service discovery provider
                               (e.g. "static", "dns").
+                            enum:
+                            - static
+                            - dns
+                            - dns-shared
                             type: string
                           sdScheme:
                             description: SDScheme sets the service discovery scheme
@@ -171,7 +207,13 @@ spec:
                       type: array
                     cacheTTL:
                       description: CacheTTL overrides the endpoint cache TTL.
+                      maxLength: 64
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
+                      x-kubernetes-validations:
+                      - message: must be a duration that fits in 64 bits of nanoseconds
+                        rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                          || duration(self) >= duration(''0s'')'
                     concurrentCalls:
                       description: ConcurrentCalls sets the number of concurrent backend
                         calls.
@@ -182,10 +224,21 @@ spec:
                       description: |-
                         Encoding sets the synthesized backend's encoding. "no-op" also sets the
                         endpoint output encoding to no-op unless OutputEncoding is set. Ignored when Backends is set.
+                      enum:
+                      - json
+                      - safejson
+                      - fast-json
+                      - xml
+                      - rss
+                      - string
+                      - no-op
+                      - yaml
                       type: string
                     endpoint:
                       description: Endpoint is the public path KrakenD exposes (e.g.
                         "/liveness").
+                      minLength: 1
+                      pattern: ^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$
                       type: string
                     extraConfig:
                       description: ExtraConfig holds endpoint-level extra_config JSON.
@@ -215,6 +268,7 @@ spec:
                         type: string
                       type: array
                     method:
+                      default: GET
                       description: Method is the HTTP method. Defaults to GET.
                       enum:
                       - GET
@@ -226,20 +280,47 @@ spec:
                     outputEncoding:
                       description: OutputEncoding overrides the endpoint response
                         encoding.
+                      enum:
+                      - json
+                      - json-collection
+                      - yaml
+                      - fast-json
+                      - xml
+                      - negotiate
+                      - string
+                      - no-op
                       type: string
                     timeout:
                       description: Timeout overrides the endpoint timeout.
+                      maxLength: 64
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
+                      x-kubernetes-validations:
+                      - message: must be a duration that fits in 64 bits of nanoseconds
+                        rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                          || duration(self) >= duration(''0s'')'
                   required:
                   - endpoint
                   type: object
+                  x-kubernetes-validations:
+                  - message: backends and the host/backendUrlPattern/encoding shorthand
+                      are mutually exclusive
+                    rule: '!(has(self.backends) && size(self.backends) > 0 && ((has(self.host)
+                      && size(self.host) > 0) || (has(self.backendUrlPattern) && size(self.backendUrlPattern)
+                      > 0) || (has(self.encoding) && size(self.encoding) > 0)))'
+                maxItems: 256
                 type: array
+                x-kubernetes-list-map-keys:
+                - endpoint
+                - method
+                x-kubernetes-list-type: map
               additionalEndpointsBasePath:
                 description: |-
                   AdditionalEndpointsBasePath overrides the auto-derived base path used to
                   scope AdditionalEndpoints under the application. When empty, the base is
-                  derived from the generated endpoints' common parent directory. Must start
-                  with "/".
+                  derived from the common parent directory of the generated endpoints and
+                  the operations held by a failure. Must start with "/".
+                pattern: ^/
                 type: string
               cue:
                 description: CUE configures optional custom CUE definitions for endpoint
@@ -280,6 +361,15 @@ spec:
                       encoding:
                         description: Encoding sets the default backend response encoding
                           (e.g. "json", "safejson", "no-op").
+                        enum:
+                        - json
+                        - safejson
+                        - fast-json
+                        - xml
+                        - rss
+                        - string
+                        - no-op
+                        - yaml
                         type: string
                       extraConfig:
                         description: |-
@@ -302,6 +392,10 @@ spec:
                       sd:
                         description: SD sets the default service discovery provider
                           (e.g. "static", "dns").
+                        enum:
+                        - static
+                        - dns
+                        - dns-shared
                         type: string
                       sdScheme:
                         description: SDScheme sets the default service discovery scheme
@@ -315,7 +409,13 @@ spec:
                     properties:
                       cacheTTL:
                         description: CacheTTL sets the default endpoint cache TTL.
+                        maxLength: 64
+                        pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                         type: string
+                        x-kubernetes-validations:
+                        - message: must be a duration that fits in 64 bits of nanoseconds
+                          rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                            || duration(self) >= duration(''0s'')'
                       concurrentCalls:
                         description: |-
                           ConcurrentCalls sets the default number of concurrent backend calls.
@@ -343,16 +443,32 @@ spec:
                       outputEncoding:
                         description: OutputEncoding sets the default response encoding
                           (e.g. "json", "no-op").
+                        enum:
+                        - json
+                        - json-collection
+                        - yaml
+                        - fast-json
+                        - xml
+                        - negotiate
+                        - string
+                        - no-op
                         type: string
                       timeout:
                         description: Timeout sets the default endpoint timeout.
+                        maxLength: 64
+                        pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                         type: string
+                        x-kubernetes-validations:
+                        - message: must be a duration that fits in 64 bits of nanoseconds
+                          rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                            || duration(self) >= duration(''0s'')'
                     type: object
                   policyRef:
                     description: PolicyRef sets the default KrakenDBackendPolicy applied
                       to all backends.
                     properties:
                       name:
+                        minLength: 1
                         type: string
                       namespace:
                         maxLength: 63
@@ -396,6 +512,7 @@ spec:
                   endpoints belong to.
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     maxLength: 63
@@ -453,6 +570,10 @@ spec:
                         type: object
                         x-kubernetes-map-type: atomic
                     type: object
+                    x-kubernetes-validations:
+                    - message: bearerTokenSecret and basicAuthSecret are mutually
+                        exclusive
+                      rule: '!(has(self.bearerTokenSecret) && has(self.basicAuthSecret))'
                   configMapRef:
                     description: ConfigMapRef references a ConfigMap key containing
                       the OpenAPI spec.
@@ -476,6 +597,9 @@ spec:
                       from.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one of url or configMapRef is required
+                  rule: (has(self.url) && size(self.url) > 0) != has(self.configMapRef)
               overrides:
                 description: Overrides applies per-operation overrides to generated
                   endpoints.
@@ -496,6 +620,7 @@ spec:
                             x-kubernetes-preserve-unknown-fields: true
                           index:
                             description: Index is the 0-based backend index.
+                            minimum: 0
                             type: integer
                         required:
                         - index
@@ -503,14 +628,23 @@ spec:
                       type: array
                     cacheTTL:
                       description: CacheTTL overrides the endpoint cache TTL.
+                      maxLength: 64
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
+                      x-kubernetes-validations:
+                      - message: must be a duration that fits in 64 bits of nanoseconds
+                        rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                          || duration(self) >= duration(''0s'')'
                     concurrentCalls:
-                      description: ConcurrentCalls overrides the number of concurrent
-                        backend calls.
+                      description: |-
+                        ConcurrentCalls overrides the number of concurrent backend calls.
+                        When specified, it must be a positive integer.
                       format: int32
+                      minimum: 1
                       type: integer
                     endpoint:
                       description: Endpoint overrides the generated endpoint path.
+                      pattern: ^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$
                       type: string
                     extraConfig:
                       description: ExtraConfig overrides the endpoint extra_config.
@@ -530,6 +664,12 @@ spec:
                       type: array
                     method:
                       description: Method overrides the HTTP method.
+                      enum:
+                      - GET
+                      - POST
+                      - PUT
+                      - PATCH
+                      - DELETE
                       type: string
                     operationId:
                       description: OperationID identifies the OpenAPI operation to
@@ -538,11 +678,21 @@ spec:
                     outputEncoding:
                       description: OutputEncoding overrides the response encoding
                         (e.g. "no-op", "json").
+                      enum:
+                      - json
+                      - json-collection
+                      - yaml
+                      - fast-json
+                      - xml
+                      - negotiate
+                      - string
+                      - no-op
                       type: string
                     policyRef:
                       description: PolicyRef overrides the backend policy reference.
                       properties:
                         name:
+                          minLength: 1
                           type: string
                         namespace:
                           maxLength: 63
@@ -552,17 +702,27 @@ spec:
                       - name
                       type: object
                     timeout:
-                      description: Timeout overrides the endpoint timeout.
+                      description: Timeout overrides the endpoint timeout (a Go duration).
+                      maxLength: 64
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
+                      x-kubernetes-validations:
+                      - message: must be a duration that fits in 64 bits of nanoseconds
+                        rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                          || duration(self) >= duration(''0s'')'
                   required:
                   - operationId
                   type: object
+                maxItems: 1024
                 type: array
               periodic:
                 description: Periodic configures the polling interval when trigger
                   is "Periodic".
                 properties:
                   interval:
+                    description: Interval is the polling interval; at least 30s.
+                    maxLength: 32
+                    pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                 required:
                 - interval
@@ -601,10 +761,28 @@ spec:
             - openapi
             - trigger
             type: object
+            x-kubernetes-validations:
+            - fieldPath: .urlTransform.hostMapping
+              message: hostMapping is required when using configMapRef
+              rule: '!has(self.openapi.configMapRef) || (has(self.urlTransform) &&
+                has(self.urlTransform.hostMapping) && size(self.urlTransform.hostMapping)
+                > 0)'
+            - fieldPath: .periodic.interval
+              message: periodic.interval of at least 30s is required when trigger
+                is Periodic
+              rule: self.trigger != 'Periodic' || (has(self.periodic) && (!self.periodic.interval.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$')
+                || duration(self.periodic.interval) >= duration('30s')))
+            - fieldPath: .additionalEndpointsBasePath
+              message: additionalEndpointsBasePath is mutually exclusive with urlTransform.addPathPrefix;
+                set only one
+              rule: '!(has(self.additionalEndpointsBasePath) && size(self.additionalEndpointsBasePath)
+                > 0 && has(self.urlTransform) && has(self.urlTransform.addPathPrefix)
+                && size(self.urlTransform.addPathPrefix) > 0)'
           status:
             description: KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
             properties:
               conditions:
+                description: Conditions are keyed by type. Ready is the summary condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -660,12 +838,75 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              failedOperations:
+                description: |-
+                  FailedOperations lists up to 20 operations the last sync could not
+                  converge: they failed CUE evaluation (CUEEvaluationFailed), the gateway
+                  config check (ConfigValidationFailed), or the API server rejected their
+                  endpoint (EndpointRejected). Each keeps the endpoint it had, if any,
+                  and while any is listed no stale endpoint is deleted. Synced is False
+                  while this list is not empty; its reason is OperationsFailed unless a
+                  later sync failed before its endpoint writes, which leaves this list
+                  as the last sync that reached them recorded it.
+                items:
+                  description: |-
+                    OperationStatus reports one OpenAPI operation the AutoConfig skipped or
+                    could not converge.
+                  properties:
+                    endpoint:
+                      description: |-
+                        Endpoint is the KrakenDEndpoint generated for the operation, when the
+                        problem concerns that object.
+                      type: string
+                    message:
+                      description: Message explains Reason, truncated to 256 bytes.
+                      type: string
+                    method:
+                      description: Method is the operation's HTTP method, upper case.
+                      type: string
+                    operationId:
+                      description: OperationID is the operation's operationId, when
+                        it declares one.
+                      type: string
+                    path:
+                      description: Path is the gateway path the operation's endpoint
+                        has, or would have.
+                      type: string
+                    reason:
+                      description: Reason is a CamelCase code for why the operation
+                        is listed.
+                      type: string
+                  required:
+                  - method
+                  - path
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               generatedEndpoints:
                 type: integer
               lastSyncTime:
+                description: |-
+                  LastSyncTime is when a sync last changed something: new inputs (a
+                  different OpenAPI spec, CUE definitions or spec generation) or an
+                  endpoint create, update or delete. A resync that changes nothing leaves
+                  it alone, so an old value does not mean the AutoConfig is stale; use
+                  the Ready condition or the krakend_operator_autoconfig_synced metric
+                  for freshness.
                 format: date-time
                 type: string
+              observedGeneration:
+                description: ObservedGeneration is the metadata.generation this status
+                  was computed for.
+                format: int64
+                type: integer
               phase:
+                description: |-
+                  Phase is derived from the Synced condition and kept for compatibility;
+                  read the Ready condition instead.
                 enum:
                 - Pending
                 - Fetching
@@ -673,14 +914,76 @@ spec:
                 - Synced
                 - Error
                 type: string
+              readyEndpoints:
+                description: |-
+                  ReadyEndpoints counts the KrakenDEndpoints this AutoConfig controls
+                  whose Ready condition is True for their current generation.
+                type: integer
+              skipped:
+                description: |-
+                  Skipped lists up to 20 operations the last sync generated no endpoint
+                  for by rule: an HTTP method KrakenDEndpoint does not accept
+                  (UnsupportedMethod), or a duplicate of an earlier operation
+                  (DuplicateOperationId).
+                items:
+                  description: |-
+                    OperationStatus reports one OpenAPI operation the AutoConfig skipped or
+                    could not converge.
+                  properties:
+                    endpoint:
+                      description: |-
+                        Endpoint is the KrakenDEndpoint generated for the operation, when the
+                        problem concerns that object.
+                      type: string
+                    message:
+                      description: Message explains Reason, truncated to 256 bytes.
+                      type: string
+                    method:
+                      description: Method is the operation's HTTP method, upper case.
+                      type: string
+                    operationId:
+                      description: OperationID is the operation's operationId, when
+                        it declares one.
+                      type: string
+                    path:
+                      description: Path is the gateway path the operation's endpoint
+                        has, or would have.
+                      type: string
+                    reason:
+                      description: Reason is a CamelCase code for why the operation
+                        is listed.
+                      type: string
+                  required:
+                  - method
+                  - path
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               skippedOperations:
+                description: |-
+                  SkippedOperations counts the operations the last sync generated no
+                  endpoint for by rule (see skipped), including any beyond the 20 listed.
                 type: integer
               specChecksum:
                 type: string
+              warnings:
+                description: |-
+                  Warnings lists up to 20 problems in the OpenAPI spec or the AutoConfig
+                  that do not stop a sync, such as unresolved or colliding schema
+                  references, which leave the published documentation wrong.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: 'name must be at most 63 characters: it is a label value on generated
+            endpoints'
+          rule: size(self.metadata.name) <= 63
     served: true
     storage: true
     subresources:

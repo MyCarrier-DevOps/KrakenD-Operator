@@ -56,7 +56,7 @@ func TestFetcher_ConfigMap(t *testing.T) {
 		Data:       map[string]string{"openapi.json": spec},
 	}
 
-	f := NewFetcher(fakeClient(cm))
+	f := NewFetcher(fakeClient(cm), nil)
 	result, err := f.Fetch(context.Background(), FetchSource{
 		ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "my-spec"},
 		Namespace:    "default",
@@ -79,7 +79,7 @@ func TestFetcher_ConfigMapCustomKey(t *testing.T) {
 		Data:       map[string]string{"spec.yaml": "openapi: '3.0.0'"},
 	}
 
-	f := NewFetcher(fakeClient(cm))
+	f := NewFetcher(fakeClient(cm), nil)
 	result, err := f.Fetch(context.Background(), FetchSource{
 		ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "my-spec", Key: "spec.yaml"},
 		Namespace:    "default",
@@ -93,7 +93,7 @@ func TestFetcher_ConfigMapCustomKey(t *testing.T) {
 }
 
 func TestFetcher_ConfigMapNotFound(t *testing.T) {
-	f := NewFetcher(fakeClient())
+	f := NewFetcher(fakeClient(), nil)
 	_, err := f.Fetch(context.Background(), FetchSource{
 		ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "missing"},
 		Namespace:    "default",
@@ -109,7 +109,7 @@ func TestFetcher_ConfigMapKeyNotFound(t *testing.T) {
 		Data:       map[string]string{"other.json": "{}"},
 	}
 
-	f := NewFetcher(fakeClient(cm))
+	f := NewFetcher(fakeClient(cm), nil)
 	_, err := f.Fetch(context.Background(), FetchSource{
 		ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "my-spec", Key: "spec.json"},
 		Namespace:    "default",
@@ -160,7 +160,7 @@ func TestFetcher_HTTPBadStatus(t *testing.T) {
 }
 
 func TestFetcher_UnsupportedScheme(t *testing.T) {
-	f := NewFetcher(fakeClient())
+	f := NewFetcher(fakeClient(), nil)
 	_, err := f.Fetch(context.Background(), FetchSource{URL: "ftp://example.com/spec.json"})
 	if err == nil {
 		t.Error("expected error for ftp scheme")
@@ -168,7 +168,7 @@ func TestFetcher_UnsupportedScheme(t *testing.T) {
 }
 
 func TestFetcher_NoSource(t *testing.T) {
-	f := NewFetcher(fakeClient())
+	f := NewFetcher(fakeClient(), nil)
 	_, err := f.Fetch(context.Background(), FetchSource{})
 	if err == nil {
 		t.Error("expected error for no source")
@@ -555,7 +555,7 @@ func TestNormalizeIP_PureIPv6(t *testing.T) {
 }
 
 func TestFetcher_InvalidURL(t *testing.T) {
-	f := NewFetcher(fakeClient())
+	f := NewFetcher(fakeClient(), nil)
 	_, err := f.Fetch(context.Background(), FetchSource{URL: "://invalid"})
 	if err == nil {
 		t.Error("expected error for invalid URL")
@@ -679,7 +679,7 @@ func TestFetcher_OversizedBodyRejected(t *testing.T) {
 }
 
 func TestFetcher_ConfigMapErrorIncludesNamespace(t *testing.T) {
-	f := NewFetcher(fakeClient())
+	f := NewFetcher(fakeClient(), nil)
 	_, err := f.Fetch(context.Background(), FetchSource{
 		ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "missing"},
 		Namespace:    "production",

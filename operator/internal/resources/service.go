@@ -22,8 +22,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// BuildService mutates svc in place to expose the KrakenD gateway.
-func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway) {
+// BuildService mutates svc in place to expose the KrakenD gateway. ceRender
+// is true when the applied config is a CE render (see DeploymentInputs).
+func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway, ceRender bool) {
 	svc.Labels = StandardLabels(gw)
 	svc.Spec.Selector = SelectorLabels(gw)
 	svc.Spec.Type = corev1.ServiceTypeClusterIP
@@ -39,7 +40,8 @@ func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway) {
 		},
 	}
 
-	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
+	// No openapi-serve sidecar runs on a CE render, so nothing listens there.
+	if !ceRender && gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
 		oaPort := OpenAPIPort(gw)
 		ports = append(ports, corev1.ServicePort{
 			Name:       "openapi",

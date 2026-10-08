@@ -25,6 +25,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -1283,5 +1284,283 @@ func TestScenario_BackendDefaultsScalarFieldsSurviveOverride(t *testing.T) {
 	}
 	if order.Backends[0].Encoding != "safejson" {
 		t.Errorf("Order backend[0]: expected encoding=safejson, got %s", order.Backends[0].Encoding)
+	}
+}
+
+// =========================================================================
+// Scenario: Two operations share an operationId (invalid, but seen in real
+// specs) and the user overrides that operationId.
+// Expected: The override is reported as ambiguous and applied to neither
+// operation, since it would land on only one of them; the caller fails the
+// sync closed.
+// =========================================================================
+
+func TestScenario_DuplicateOperationIdOverrideIsAmbiguousAndNotApplied(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/z": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/a": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}
+		}
+	}`)
+	overrideTimeout := metav1.Duration{Duration: 42 * time.Second}
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+		DefaultHost: "http://dup-svc.dev.svc:8080",
+		Overrides: []v1alpha1.OperationOverride{
+			{OperationID: "dup", Timeout: &overrideTimeout},
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("expected no UnmatchedOverrides, got %v", out.UnmatchedOverrides)
+	}
+	if !slices.Equal(out.AmbiguousOverrides, []string{"dup"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [dup]", out.AmbiguousOverrides)
+	}
+
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "dup-svc", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"}},
+	}
+	genOut, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig:   ac,
+		Entries:      out.Entries,
+		OperationIDs: out.OperationIDs,
+		GatewayRef:   ac.Spec.GatewayRef,
+	})
+	if err != nil {
+		t.Fatalf("generator: %v", err)
+	}
+	if len(genOut.Endpoints) != 1 {
+		t.Fatalf("expected 1 generated endpoint (duplicate skipped), got %d", len(genOut.Endpoints))
+	}
+
+	published := genOut.Endpoints[0].Spec.Endpoints[0]
+	if published.Timeout != nil && published.Timeout.Duration == 42*time.Second {
+		t.Errorf("published endpoint %s: the ambiguous override was applied", published.Endpoint)
+	}
+}
+
+// =========================================================================
+// Scenario: A path-prefix strip makes two operations share a route, and a
+// third operation outside that pair shares an operationId with one of them.
+// Expected: the override on the shared operationId is ambiguous, as it is
+// without the strip. The operationIds are counted per operation, not per
+// route, which the strip changes.
+// =========================================================================
+
+// stripPrefixCollisionSpec has /x (dup) and /v1/x (other), which a strip of
+// /v1 puts on one route, and /z (dup).
+var stripPrefixCollisionSpec = []byte(`{
+	"paths": {
+		"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+		"/v1/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}},
+		"/z": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}
+	}
+}`)
+
+func evaluateStripPrefixCollision(t *testing.T, overrides ...v1alpha1.OperationOverride) *CUEOutput {
+	t.Helper()
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:     stripPrefixCollisionSpec,
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		ServiceName:  "_spec",
+		DefaultHost:  "http://svc.dev.svc:8080",
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+		Overrides:    overrides,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	return out
+}
+
+func TestScenario_StripPrefixRouteCollisionKeepsASharedOperationIdAmbiguous(t *testing.T) {
+	timeout := metav1.Duration{Duration: 42 * time.Second}
+
+	out := evaluateStripPrefixCollision(t, v1alpha1.OperationOverride{OperationID: "dup", Timeout: &timeout})
+
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, want none", out.UnmatchedOverrides)
+	}
+	if !slices.Equal(out.AmbiguousOverrides, []string{"dup"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [dup]: /x and /z both declare it", out.AmbiguousOverrides)
+	}
+}
+
+func TestScenario_StripPrefixRouteCollisionAppliesAnOverrideToItsOwnOperation(t *testing.T) {
+	timeout := metav1.Duration{Duration: 42 * time.Second}
+
+	out := evaluateStripPrefixCollision(t, v1alpha1.OperationOverride{OperationID: "other", Timeout: &timeout})
+
+	if len(out.UnmatchedOverrides) != 0 || len(out.AmbiguousOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, AmbiguousOverrides = %v, want none", out.UnmatchedOverrides, out.AmbiguousOverrides)
+	}
+	// Both /x and /v1/x are entries of route /x GET now; the backend path
+	// tells them apart, since the URL transform leaves it alone.
+	for _, e := range out.Entries {
+		hasTimeout := e.Timeout != nil && e.Timeout.Duration == 42*time.Second
+		switch e.Backends[0].URLPattern {
+		case "/v1/x":
+			if !hasTimeout {
+				t.Errorf("/v1/x (other) did not get its override: timeout %v", e.Timeout)
+			}
+		default:
+			if hasTimeout {
+				t.Errorf("%s got the override for other", e.Backends[0].URLPattern)
+			}
+		}
+	}
+}
+
+// routeCollisionCases are specs, with keys sorted as the fetch leaves them,
+// in which a strip of the prefix puts the operation "other" and an operation
+// "dup" on the route GET /x. CUE emits the entries in source order with the
+// first path moved to the end, so each spec fixes which of the two the
+// generator meets first and keeps: survivor is the backend path of the entry
+// that publishes on GET /x.
+var routeCollisionCases = map[string]struct {
+	prefix, spec, survivor string
+	routes                 []string
+}{
+	"dup survives": {
+		prefix: "/z", survivor: "/x", routes: []string{"/q", "/x"},
+		spec: `{"paths": {
+			"/q": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/z/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}}}}`,
+	},
+	"other survives": {
+		prefix: "/v1", survivor: "/v1/x", routes: []string{"/q", "/x"},
+		spec: `{"paths": {
+			"/q": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/v1/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}},
+			"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}}}`,
+	},
+	"the dropped operation's id is shared elsewhere": {
+		prefix: "/z", survivor: "/x", routes: []string{"/a", "/x"},
+		spec: `{"paths": {
+			"/a": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/z/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}}}}`,
+	},
+}
+
+// TestScenario_RouteCollisionKeepsEveryRouteServed pins what holds when a
+// strip of the path prefix puts two operations on one route: an override
+// lands only on the operation it names, every route stays served, and the
+// collision is reported as a duplicate skip.
+//
+// What does not hold: OperationIDs, the filter's lookups and the generator
+// are keyed by route, so the endpoint that publishes on the collided route
+// is named, labelled in status.failedOperations and matched by spec.filter
+// by the operationId the route was last rekeyed to, which may be the dropped
+// operation's. The operation that publishes is the first the evaluator emits.
+func TestScenario_RouteCollisionKeepsEveryRouteServed(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	timeout := metav1.Duration{Duration: 42 * time.Second}
+	for name, tc := range routeCollisionCases {
+		t.Run(name, func(t *testing.T) {
+			out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+				SpecData: []byte(tc.spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+				DefaultHost:  "http://svc.dev.svc:8080",
+				URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: tc.prefix},
+				Overrides:    []v1alpha1.OperationOverride{{OperationID: "other", Timeout: &timeout}},
+			})
+			if err != nil {
+				t.Fatalf("evaluate: %v", err)
+			}
+			ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"}}
+			gen, err := NewGenerator().Generate(context.Background(), GenerateInput{
+				AutoConfig: ac, Entries: out.Entries, OperationIDs: out.OperationIDs,
+			})
+			if err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+
+			var routes []string
+			for _, ep := range gen.Endpoints {
+				e := ep.Spec.Endpoints[0]
+				routes = append(routes, e.Endpoint)
+				// The backend path tells the operations apart: the transform leaves it alone.
+				overridden := e.Timeout != nil && e.Timeout.Duration == 42*time.Second
+				if want := e.Backends[0].URLPattern == tc.prefix+"/x"; overridden != want {
+					t.Errorf("endpoint %s (backend %s) has timeout %v: only the operation other has an override",
+						ep.Name, e.Backends[0].URLPattern, e.Timeout)
+				}
+				if e.Endpoint == "/x" && e.Backends[0].URLPattern != tc.survivor {
+					t.Errorf("GET /x is served by backend %s, want %s", e.Backends[0].URLPattern, tc.survivor)
+				}
+			}
+			slices.Sort(routes)
+			if !slices.Equal(routes, tc.routes) {
+				t.Errorf("published routes = %v, want %v", routes, tc.routes)
+			}
+			var dups []string
+			for _, s := range slices.Concat(out.Skipped, gen.Skipped) {
+				if s.Reason == v1alpha1.ReasonDuplicateOperationId && s.Path == "/x" {
+					dups = append(dups, s.Message)
+				}
+			}
+			if len(dups) != 1 || dups[0] != "same path and method as GET /x" {
+				t.Errorf("duplicate skips for GET /x = %q, want one 'same path and method as GET /x'", dups)
+			}
+		})
+	}
+}
+
+// Without a route collision the endpoint names are the ones the route-keyed
+// ids always gave, so no live endpoint is renamed.
+func TestScenario_NoCollisionKeepsEndpointNames(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	spec := `{"paths": {
+		"/v1/x": {"get": {"operationId": "getX", "responses": {"200": {"description": "OK"}}},
+			"post": {"operationId": "Create_X", "responses": {"200": {"description": "OK"}}}},
+		"/v1/y": {"get": {"responses": {"200": {"description": "OK"}}}}}}`
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+		DefaultHost: "http://svc:8080", URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"}}
+	gen, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig: ac, Entries: out.Entries, OperationIDs: out.OperationIDs,
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	var names []string
+	for _, ep := range gen.Endpoints {
+		names = append(names, ep.Name)
+	}
+	slices.Sort(names)
+	if want := []string{"t-create-x", "t-get-y", "t-getx"}; !slices.Equal(names, want) || len(out.Skipped)+len(gen.Skipped) != 0 {
+		t.Errorf("endpoint names = %v, skipped = %v %v, want %v and none skipped", names, out.Skipped, gen.Skipped, want)
 	}
 }

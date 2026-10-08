@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -29,10 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// These tests cover review round 4, D2/D5: the
-// ConditionDragonflyRunAsRootUnacknowledged status condition's three
-// possible states (True/RunAsRootUnacknowledged,
-// False/RunAsRootAcknowledged, False/NoRunAsRootRequest) and D3's
+// These tests cover the ConditionDragonflyRunAsRootUnacknowledged status
+// condition's three possible states (True/RunAsRootUnacknowledged,
+// False/RunAsRootAcknowledged, False/NoRunAsRootRequest) and its
 // disable-clears behavior. (i)-(iii) exercise
 // recordDragonflyRunAsRootCondition directly against a BUILT Dragonfly CR
 // (resources.BuildDragonfly) — the webhook is not in the reconcile path, so
@@ -145,18 +143,18 @@ func TestRecordDragonflyRunAsRootCondition_NoRequest(t *testing.T) {
 		t.Errorf("expected reason %q, got %q", v1alpha1.ReasonDragonflyRunAsRootNoRequest, cond.Reason)
 	}
 	if cond.Reason == v1alpha1.ReasonDragonflyRunAsRootAcknowledged {
-		t.Error("NoRunAsRootRequest must be distinct from RunAsRootAcknowledged (D5b reason split)")
+		t.Error("NoRunAsRootRequest must be distinct from RunAsRootAcknowledged (the two False reasons are split)")
 	}
 }
 
-// TestReconcileOwnedResources_DragonflyDisabledClearsStaleRunAsRootCondition
-// covers D3/D2(iv): when Dragonfly is deliberately off
+// TestReconcileInfrastructure_DragonflyDisabledClearsStaleRunAsRootCondition
+// covers the disable case: when Dragonfly is deliberately off
 // (gw.Spec.Dragonfly == nil or Enabled: false), a stale
 // ConditionDragonflyRunAsRootUnacknowledged left over from a prior reconcile
 // (while Dragonfly WAS enabled) must be removed — mirroring
 // reconcilePostRestartJob's disabled/empty guard
 // (TestReconcilePostRestartJob_DisabledSpecClearsStaleConditions).
-func TestReconcileOwnedResources_DragonflyDisabledClearsStaleRunAsRootCondition(t *testing.T) {
+func TestReconcileInfrastructure_DragonflyDisabledClearsStaleRunAsRootCondition(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Dragonfly = nil // deliberately off
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
@@ -170,12 +168,8 @@ func TestReconcileOwnedResources_DragonflyDisabledClearsStaleRunAsRootCondition(
 	c := fakeClientBuilder().WithObjects(gw).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	output := &renderer.RenderOutput{
-		JSON:         []byte(`{"version":3}`),
-		Checksum:     "abc123",
-		DesiredImage: "krakend/krakend-ce:2.7.0",
-	}
-	if err := r.reconcileOwnedResources(context.Background(), gw, output); err != nil {
+	in := infraInputs{appliedChecksum: "abc123", image: "krakend/krakend-ce:2.7.0"}
+	if _, err := reconcileInfrastructureOf(context.Background(), r, gw, in); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

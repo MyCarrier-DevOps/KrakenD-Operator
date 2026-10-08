@@ -18,14 +18,18 @@ package controller
 
 import (
 	"context"
-	"sync"
+	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
 func TestConditionsEqual_BothEmpty(t *testing.T) {
@@ -150,64 +154,6 @@ func TestDistinctMethods(t *testing.T) {
 	}
 }
 
-func TestEnsureEndpointIndexes_Sequential(t *testing.T) {
-	resetIndexRegistry()
-	defer resetIndexRegistry()
-
-	indexer := &stubIndexer{}
-	mgr := &stubManager{indexer: indexer}
-
-	// First call registers both indexes (2 IndexField calls).
-	if err := EnsureEndpointIndexes(mgr); err != nil {
-		t.Fatalf("first call failed: %v", err)
-	}
-	if indexer.callCount() != 2 {
-		t.Fatalf("expected 2 IndexField calls after first call, got %d", indexer.callCount())
-	}
-
-	// Second call should be a no-op (idempotent — returns from cache).
-	if err := EnsureEndpointIndexes(mgr); err != nil {
-		t.Fatalf("second (idempotent) call failed: %v", err)
-	}
-	if indexer.callCount() != 2 {
-		t.Errorf("expected still 2 IndexField calls after idempotent call, got %d", indexer.callCount())
-	}
-}
-
-func TestEnsureEndpointIndexes_ConcurrentCallers(t *testing.T) {
-	resetIndexRegistry()
-	defer resetIndexRegistry()
-
-	indexer := &stubIndexer{}
-	mgr := &stubManager{indexer: indexer}
-
-	const goroutines = 10
-	var wg sync.WaitGroup
-	errs := make(chan error, goroutines)
-
-	wg.Add(goroutines)
-	for range goroutines {
-		go func() {
-			defer wg.Done()
-			if err := EnsureEndpointIndexes(mgr); err != nil {
-				errs <- err
-			}
-		}()
-	}
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		t.Errorf("concurrent EnsureEndpointIndexes failed: %v", err)
-	}
-
-	// registerEndpointIndexes should have been called exactly once
-	// (2 IndexField calls) regardless of how many goroutines raced.
-	if indexer.callCount() != 2 {
-		t.Errorf("expected exactly 2 IndexField calls (one registration), got %d", indexer.callCount())
-	}
-}
-
 func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 	// Use fakeClientBuilder which registers the canonical index functions,
 	// rather than duplicating closures inline.
@@ -230,7 +176,7 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 	// Verify the gateway index works.
 	var list v1alpha1.KrakenDEndpointList
 	if err := c.List(context.Background(), &list,
-		client.MatchingFields{EndpointGatewayIndex: "default/gw1"},
+		client.MatchingFields{fieldindex.EndpointGateway: "default/gw1"},
 	); err != nil {
 		t.Fatalf("gateway index lookup failed: %v", err)
 	}
@@ -240,7 +186,7 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 
 	// Verify the policy index query returns the endpoint.
 	if err := c.List(context.Background(), &list,
-		client.MatchingFields{EndpointPolicyIndex: "default/pol1"},
+		client.MatchingFields{fieldindex.EndpointPolicy: "default/pol1"},
 	); err != nil {
 		t.Fatalf("policy index lookup failed: %v", err)
 	}
@@ -250,7 +196,7 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 
 	// Verify non-matching lookup returns 0.
 	if err := c.List(context.Background(), &list,
-		client.MatchingFields{EndpointPolicyIndex: "default/nonexistent"},
+		client.MatchingFields{fieldindex.EndpointPolicy: "default/nonexistent"},
 	); err != nil {
 		t.Fatalf("policy index lookup failed: %v", err)
 	}
@@ -259,116 +205,92 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 	}
 }
 
-func TestPolicyIndexFunc_Deduplicates(t *testing.T) {
-	resetIndexRegistry()
-	defer resetIndexRegistry()
-
-	indexer := &stubIndexer{}
-	mgr := &stubManager{indexer: indexer}
-	if err := EnsureEndpointIndexes(mgr); err != nil {
-		t.Fatalf("setup failed: %v", err)
+func TestTruncateMessage(t *testing.T) {
+	if got := truncateMessage("short"); got != "short" {
+		t.Errorf("a message within the bound must be unchanged, got %q", got)
+	}
+	long := "x" + strings.Repeat("é", 5000) // one line; rune starts fall on odd offsets
+	got := truncateMessage(long)
+	if len(got) > 4096 || !utf8.ValidString(got) {
+		t.Errorf("got %d bytes, valid UTF-8 = %v; want at most 4096 valid bytes", len(got), utf8.ValidString(got))
 	}
 
-	fn := indexer.funcs[EndpointPolicyIndex]
-	if fn == nil {
-		t.Fatal("policy index function not captured")
+	line := strings.Repeat("l", 100)
+	lines := truncateMessage(strings.Repeat(line+"\n", 100)) // 100 lines, 101 bytes each
+	// 4096-64 bytes hold 39 whole lines; the empty string after the final
+	// newline is not a line, so 61 of the 100 remain.
+	if want := "(output truncated, 61 more lines)"; !strings.HasSuffix(lines, want) {
+		t.Errorf("got ending %q, want it to end with %q", lines[max(0, len(lines)-50):], want)
 	}
-
-	t.Run("intra-entry", func(t *testing.T) {
-		// Two backends in the same entry both reference "pol1".
-		ep := &v1alpha1.KrakenDEndpoint{
-			ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
-			Spec: v1alpha1.KrakenDEndpointSpec{
-				GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
-				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/api", Method: "GET", Backends: []v1alpha1.BackendSpec{
-						{Host: []string{"http://svc:80"}, URLPattern: "/",
-							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
-						{Host: []string{"http://svc:80"}, URLPattern: "/alt",
-							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
-					}},
-				},
-			},
-		}
-
-		refs := fn(ep)
-		if len(refs) != 1 {
-			t.Errorf("expected 1 deduped policy ref, got %d: %v", len(refs), refs)
-		}
-		if len(refs) > 0 && refs[0] != "default/pol1" {
-			t.Errorf("expected %q, got %q", "default/pol1", refs[0])
-		}
-	})
-
-	t.Run("cross-entry", func(t *testing.T) {
-		// Same policy referenced in two different entries.
-		// Verifies the seen map is scoped outside the outer loop.
-		ep := &v1alpha1.KrakenDEndpoint{
-			ObjectMeta: metav1.ObjectMeta{Name: "ep2", Namespace: "default"},
-			Spec: v1alpha1.KrakenDEndpointSpec{
-				GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
-				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/a", Method: "GET", Backends: []v1alpha1.BackendSpec{
-						{Host: []string{"http://svc:80"}, URLPattern: "/",
-							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
-					}},
-					{Endpoint: "/b", Method: "POST", Backends: []v1alpha1.BackendSpec{
-						{Host: []string{"http://svc:80"}, URLPattern: "/",
-							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
-					}},
-				},
-			},
-		}
-
-		refs := fn(ep)
-		if len(refs) != 1 {
-			t.Errorf("expected 1 deduped policy ref, got %d: %v", len(refs), refs)
-		}
-		if len(refs) > 0 && refs[0] != "default/pol1" {
-			t.Errorf("expected %q, got %q", "default/pol1", refs[0])
-		}
-	})
 }
 
-// resetIndexRegistry clears the index registry for test isolation.
-func resetIndexRegistry() {
-	indexRegistry.Range(func(key, _ any) bool {
-		indexRegistry.Delete(key)
-		return true
-	})
-}
-
-// stubIndexer implements client.FieldIndexer to track IndexField calls
-// and capture the registered functions for direct invocation in tests.
-type stubIndexer struct {
-	mu    sync.Mutex
-	calls int
-	funcs map[string]client.IndexerFunc
-}
-
-func (s *stubIndexer) IndexField(
-	_ context.Context, _ client.Object, field string, fn client.IndexerFunc,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.calls++
-	if s.funcs == nil {
-		s.funcs = make(map[string]client.IndexerFunc)
+func TestRecordConditionTransition(t *testing.T) {
+	obj := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "ep", Namespace: "default"}}
+	notAccepted := func(reason string) metav1.Condition {
+		return metav1.Condition{Type: "Accepted", Status: metav1.ConditionFalse, Reason: reason, Message: reason + " message"}
 	}
-	s.funcs[field] = fn
-	return nil
+	accepted := metav1.Condition{Type: "Accepted", Status: metav1.ConditionTrue, Reason: "Accepted", Message: "included"}
+	tests := []struct {
+		name string
+		prev *metav1.Condition
+		next metav1.Condition
+		want []string
+	}{
+		{"first set True", nil, accepted, nil},
+		{"first set False", nil, notAccepted("EndpointConflict"),
+			[]string{"Warning EndpointConflict EndpointConflict message"}},
+		{"False unchanged", new(notAccepted("EndpointConflict")), notAccepted("EndpointConflict"), nil},
+		{"False with a new reason", new(notAccepted("EndpointConflict")), notAccepted("EndpointInvalid"),
+			[]string{"Warning EndpointInvalid EndpointInvalid message"}},
+		{"True to False", &accepted, notAccepted("EndpointConflict"),
+			[]string{"Warning EndpointConflict EndpointConflict message"}},
+		{"False to True", new(notAccepted("EndpointConflict")), accepted, []string{"Normal Accepted included"}},
+		{"True unchanged", &accepted, accepted, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := record.NewFakeRecorder(10)
+			recordConditionTransition(rec, obj, tt.prev, tt.next)
+			if got := drainEvents(rec); !slices.Equal(got, tt.want) {
+				t.Errorf("events = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
-func (s *stubIndexer) callCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
+func TestSameCondition(t *testing.T) {
+	base := metav1.Condition{Type: "Accepted", Status: metav1.ConditionTrue, Reason: "Accepted", Message: "m",
+		ObservedGeneration: 1}
+	later := base
+	later.LastTransitionTime = metav1.Now()
+	otherGen := base
+	otherGen.ObservedGeneration = 2
+	tests := []struct {
+		name string
+		a, b *metav1.Condition
+		want bool
+	}{
+		{"both absent", nil, nil, true},
+		{"one absent", &base, nil, false},
+		{"only lastTransitionTime differs", &base, &later, true},
+		{"observedGeneration differs", &base, &otherGen, false},
+	}
+	for _, tt := range tests {
+		if got := sameCondition(tt.a, tt.b); got != tt.want {
+			t.Errorf("%s: sameCondition = %v, want %v", tt.name, got, tt.want)
+		}
+	}
 }
 
-// stubManager implements enough of ctrl.Manager for EnsureEndpointIndexes.
-type stubManager struct {
-	ctrl.Manager // embed to satisfy interface; nil methods panic if called
-	indexer      client.FieldIndexer
+func TestExistencePredicate(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default", Generation: 1}}
+	changed := gw.DeepCopy()
+	changed.Generation = 2
+	p := existencePredicate()
+	if !p.Create(event.CreateEvent{Object: gw}) || !p.Delete(event.DeleteEvent{Object: gw}) {
+		t.Error("create and delete events must pass: they change whether the object exists")
+	}
+	if p.Update(event.UpdateEvent{ObjectOld: gw, ObjectNew: changed}) {
+		t.Error("update events must not pass: an update never changes whether the object exists")
+	}
 }
-
-func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return m.indexer }

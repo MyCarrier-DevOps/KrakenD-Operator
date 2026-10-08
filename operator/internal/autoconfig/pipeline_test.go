@@ -182,8 +182,8 @@ func TestEmbeddedCUE_FullPipeline(t *testing.T) {
 	if len(genOutput.Endpoints) != 6 {
 		t.Fatalf("expected 6 generated endpoints, got %d", len(genOutput.Endpoints))
 	}
-	if genOutput.SkippedOperations != 0 {
-		t.Errorf("expected 0 skipped operations, got %d", genOutput.SkippedOperations)
+	if len(genOutput.Skipped) != 0 {
+		t.Errorf("expected no skipped operations, got %+v", genOutput.Skipped)
 	}
 
 	// Verify generated CRs have correct metadata
@@ -211,7 +211,7 @@ func TestEmbeddedCUE_FullPipeline(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "main-gateway", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
 			Version: "2.7.0",
-			Edition: v1alpha1.EditionCE,
+			Edition: v1alpha1.EditionEE,
 			Config:  v1alpha1.GatewayConfig{},
 		},
 	}

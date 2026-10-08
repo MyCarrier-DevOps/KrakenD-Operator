@@ -29,8 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// RULE (review id 3811443573, #4; scope corrected per review id 3812030505,
-// round-5 #2, so its letter matches its spirit): any default value consumed
+// RULE: any default value consumed
 // by an effective* helper (effectivePostRestartCommand,
 // effectivePostRestartImage, effectivePostRestartWorkingDir,
 // effectivePostRestartServiceAccountName) is baked into
@@ -45,8 +44,8 @@ import (
 //     effectivePostRestartServiceAccountName).
 //  2. Switching a field's hash policy between RAW and EFFECTIVE — i.e.
 //     whether "unset" and "explicitly set to the default" converge on one
-//     checksum. This is exactly what the round-4 Image/ServiceAccountName
-//     fix did (see postRestartJobProjection's field comments below and
+//     checksum. This is exactly what the Image/ServiceAccountName
+//     normalization did (see postRestartJobProjection's field comments below and
 //     docs/upgrade-guide.md item 10): no default VALUE changed, but it has
 //     the same fleet-wide shape as #1 because it changes WHICH checksum an
 //     unset field's gateway computes on its next reconcile.
@@ -111,8 +110,8 @@ const (
 	// container within its pod template. Exported so the controller can
 	// locate this container's effective (post-merge) SecurityContext
 	// directly off a BUILT Job (see krakendgateway_controller.go's
-	// postRestartJobContainerSecurityContext / recordPostRestartJobROFSCondition,
-	// review id 3807285633 #3d) rather than re-deriving it from the raw
+	// postRestartJobContainerSecurityContext / recordPostRestartJobROFSCondition)
+	// rather than re-deriving it from the raw
 	// user spec, which could drift from what mergeContainerSecurityContext
 	// actually produced.
 	PostRestartContainerName = "post-restart"
@@ -152,8 +151,8 @@ func PostRestartJobName(gw *v1alpha1.KrakenDGateway, checksum string) string {
 // so editing them must not re-trigger the Job (a new checksum/name).
 //
 // BackoffLimit, ActiveDeadlineSeconds, and TmpSizeLimit are ALSO excluded
-// here — but NOT because they're cosmetic like the fields above. Correction
-// (review id 3805157426, #2): these three DO affect whether the script can
+// here — but NOT because they're cosmetic like the fields above: these
+// three DO affect whether the script can
 // actually complete (a too-short ActiveDeadlineSeconds, too-low
 // BackoffLimit, or too-small TmpSizeLimit all produce a failure
 // indistinguishable from a genuine script bug). They're excluded from the
@@ -169,8 +168,7 @@ func PostRestartJobName(gw *v1alpha1.KrakenDGateway, checksum string) string {
 // rename, or new operational knob on PostRestartJobSpec cannot silently
 // change the projection's hash — only a deliberate edit to this struct can.
 //
-// Direction-aware audit (review id 3811443558, #2; summary corrected per
-// review id 3812030509, round-5 #3): every field below is hashed either RAW
+// Direction-aware audit: every field below is hashed either RAW
 // (verbatim from the user spec) or EFFECTIVE (normalized through the same
 // effectivePostRestart* helper BuildPostRestartJob applies) — the choice is
 // deliberate per field, recorded inline, and follows TWO distinct policies,
@@ -213,7 +211,7 @@ type postRestartJobProjection struct {
 	Command []string `json:"command"`
 	// EFFECTIVE: BuildPostRestartJob defaults an unset Image to
 	// DefaultPostRestartJobImage; hashing raw would diverge unset vs.
-	// explicit-default (the bug this round-4 fix addresses).
+	// explicit-default (the bug this normalization fixes).
 	Image string `json:"image"`
 	// EFFECTIVE: BuildPostRestartJob defaults an unset WorkingDir to
 	// postRestartWorkingDir; see effectivePostRestartCommand's doc for why.
@@ -235,7 +233,7 @@ type postRestartJobProjection struct {
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext"`
 	// EFFECTIVE: BuildPostRestartJob defaults an unset ServiceAccountName to
 	// gw.Name; hashing raw would diverge unset vs. explicit-default (the bug
-	// this round-4 fix addresses — see effectivePostRestartServiceAccountName).
+	// this normalization fixes — see effectivePostRestartServiceAccountName).
 	ServiceAccountName string `json:"serviceAccountName"`
 	// RAW: Resources has no builder-applied default — BuildPostRestartJob
 	// only sets container.Resources when spec.Resources is non-nil, leaving
@@ -274,9 +272,9 @@ func effectivePostRestartWorkingDir(spec *v1alpha1.PostRestartJobSpec) string {
 // spec.Image if set, otherwise the same DefaultPostRestartJobImage default
 // BuildPostRestartJob applies. Shared with PostRestartJobChecksum's
 // projection for the same reason as effectivePostRestartCommand above
-// (review id 3811443558, #2 — an explicit-default Image previously hashed
-// differently from an omitted one, minting a spurious new checksum/Job
-// name for a byte-identical rendered Job).
+// (an explicit-default Image used to hash differently from an omitted one,
+// minting a spurious new checksum/Job name for a byte-identical rendered
+// Job).
 func effectivePostRestartImage(spec *v1alpha1.PostRestartJobSpec) string {
 	if spec.Image != "" {
 		return spec.Image
@@ -289,7 +287,7 @@ func effectivePostRestartImage(spec *v1alpha1.PostRestartJobSpec) string {
 // template: the user's spec.ServiceAccountName if set, otherwise the
 // gateway-derived default (gw.Name) BuildPostRestartJob applies. Shared with
 // PostRestartJobChecksum's projection for the same reason as
-// effectivePostRestartCommand above (review id 3811443558, #2). Unlike the
+// effectivePostRestartCommand above. Unlike the
 // other effective* helpers this one needs gw, since its default is
 // gateway-derived rather than a compile-time constant.
 func effectivePostRestartServiceAccountName(spec *v1alpha1.PostRestartJobSpec, gw *v1alpha1.KrakenDGateway) string {
@@ -334,9 +332,8 @@ func PostRestartJobChecksum(
 	// hashed verbatim from the raw spec. Otherwise "unset" and "explicitly
 	// set to the default" hash to two different checksums while
 	// BuildPostRestartJob renders a byte-identical Job for both, causing a
-	// spurious re-trigger (round-3 cleanup covered Command/WorkingDir;
-	// round-4 review id 3811443558 #2 extended this to Image/
-	// ServiceAccountName, which round-3 missed). See postRestartJobProjection
+	// spurious re-trigger (Command and WorkingDir were normalized first,
+	// then Image and ServiceAccountName). See postRestartJobProjection
 	// for the field-by-field raw-vs-effective audit.
 	projection := postRestartJobProjection{
 		Script:             spec.Script,
@@ -383,8 +380,7 @@ func BuildPostRestartJob(
 	job.Annotations[PostRestartJobCombinedChecksumAnnotation] = checksum
 
 	// Image and ServiceAccountName default resolution is delegated to the
-	// same effective* helpers PostRestartJobChecksum's projection uses (see
-	// review id 3811443558, #2), so the built Job and the checksum can never
+	// same effective* helpers PostRestartJobChecksum's projection uses, so the built Job and the checksum can never
 	// disagree about what "unset" resolves to.
 	image := effectivePostRestartImage(spec)
 	saName := effectivePostRestartServiceAccountName(spec, gw)
@@ -545,7 +541,7 @@ func defaultPostRestartPodSecurityContext() *corev1.PodSecurityContext {
 // runAsUser: 0 keeps runAsNonRoot's sibling defaults (runAsGroup,
 // seccompProfile) intact unless the user also overrides them.
 //
-// Cross-reference (fix-round review 1, change #4): this pod-scope fixup is
+// Cross-reference: this pod-scope fixup is
 // the RIGHT scope for the postRestartJob Job, because
 // defaultPostRestartContainerSecurityContext leaves runAsUser/runAsNonRoot
 // UNSET at container scope — pod scope genuinely governs the effective uid,
@@ -554,14 +550,12 @@ func defaultPostRestartPodSecurityContext() *corev1.PodSecurityContext {
 // deliberately asymmetric: mergeDragonflyContainerSecurityContext carries
 // the fixup instead, because dragonfly's container default PINS
 // RunAsNonRoot (container scope always wins over pod scope per-field at
-// the kubelet). This function's own runtime behavior is unchanged by that
-// fix-round.
+// the kubelet).
 func mergePodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurityContext {
 	base := *defaultPostRestartPodSecurityContext()
 	merged := strategicMergeSecurityContext(base, user)
 
-	// #1 (review id 3804144382, important/security): an explicit
-	// podSecurityContext.runAsUser: 0 contradicts the inherited
+	// An explicit podSecurityContext.runAsUser: 0 contradicts the inherited
 	// runAsNonRoot:true default. Kubelet validates the pair together at
 	// container start and refuses to start the container
 	// (CreateContainerConfigError) when they conflict — but that failure

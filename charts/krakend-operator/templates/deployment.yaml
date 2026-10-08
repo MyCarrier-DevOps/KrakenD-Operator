@@ -1,3 +1,7 @@
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.leaderElection.enabled) }}
+{{- fail "replicaCount > 1 requires leaderElection.enabled=true: without it every replica runs the controllers" }}
+{{- end }}
+{{- $metricsCert := and .Values.metrics.enabled .Values.metrics.certManager.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,6 +36,76 @@ spec:
         - name: manager
           image: {{ include "krakend-operator.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_SERVICE_ACCOUNT
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- if .Values.telemetry.otlp.nodeCollector.enabled }}
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- end }}
+            {{- $endpoint := include "krakend-operator.otlpEndpoint" . }}
+            {{- with .Values.telemetry.otlp }}
+            {{- if $endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .protocol | quote }}
+            {{- if .headersSecret.name }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .headersSecret.name }}
+                  key: {{ .headersSecret.key }}
+                  optional: true
+            {{- end }}
+            {{- range $signal, $exported := .signals }}
+            {{- if not $exported }}
+            - name: OTEL_{{ upper $signal }}_EXPORTER
+              value: "none"
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.telemetry.traces.sampler }}
+            - name: OTEL_TRACES_SAMPLER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if ne (toString .Values.telemetry.traces.samplerArg) "" }}
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ .Values.telemetry.traces.samplerArg | toString | quote }}
+            {{- end }}
+            {{- $attributes := include "krakend-operator.resourceAttributes" .Values.telemetry.resourceAttributes }}
+            {{- if .Values.telemetry.otlp.nodeCollector.enabled }}
+            {{- $attributes = join "," (compact (list $attributes "k8s.node.name=$(NODE_NAME)" "k8s.pod.uid=$(POD_UID)" "k8s.pod.ip=$(POD_IP)")) }}
+            {{- end }}
+            {{- if $attributes }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ $attributes | quote }}
+            {{- end }}
           command:
             - /manager
           args:
@@ -39,11 +113,20 @@ spec:
             - --leader-elect
             {{- end }}
             - --health-probe-bind-address=:{{ .Values.healthProbes.port }}
+            - --autoconfig-max-concurrent-reconciles={{ .Values.autoconfig.maxConcurrentReconciles }}
+            {{- if and .Values.telemetry.logs.format (ne .Values.telemetry.logs.format "json") }}
+            - --log-format={{ .Values.telemetry.logs.format }}
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             - --metrics-bind-address=:{{ .Values.metrics.service.port }}
+            {{- if .Values.metrics.certManager.enabled }}
+            - --metrics-cert-path=/tmp/k8s-metrics-server/metrics-certs
+            {{- end }}
             {{- end }}
             {{- if .Values.webhooks.enabled }}
             - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+            {{- else }}
+            - --enable-webhooks=false
             {{- end }}
           ports:
             {{- if .Values.metrics.enabled }}
@@ -75,27 +158,51 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if .Values.webhooks.enabled }}
+          {{- if or .Values.webhooks.enabled $metricsCert }}
           volumeMounts:
+            {{- if .Values.webhooks.enabled }}
             - name: cert
               mountPath: /tmp/k8s-webhook-server/serving-certs
               readOnly: true
+            {{- end }}
+            {{- if $metricsCert }}
+            - name: metrics-certs
+              mountPath: /tmp/k8s-metrics-server/metrics-certs
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.webhooks.enabled }}
+      {{- if or .Values.webhooks.enabled $metricsCert }}
       volumes:
+        {{- if .Values.webhooks.enabled }}
         - name: cert
           secret:
             secretName: {{ include "krakend-operator.fullname" . }}-webhook-server-cert
             defaultMode: 420
+        {{- end }}
+        {{- if $metricsCert }}
+        - name: metrics-certs
+          secret:
+            secretName: {{ include "krakend-operator.fullname" . }}-metrics-server-cert
+            defaultMode: 420
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- if .Values.affinity }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "krakend-operator.selectorLabels" . | nindent 20 }}
+        {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

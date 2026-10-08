@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "operator/**"
+      - "charts/krakend-operator/**"
+      - ".github/krakend-smoke/**"
       - ".github/workflows/ci.yml"
 
 permissions:
@@ -39,6 +41,12 @@ jobs:
         run: |
           go test -race -coverprofile=coverage.out -covermode=atomic ./internal/... ./api/... ./cmd/...
           go tool cover -func=coverage.out
+      - name: Run test helper unit tests
+        working-directory: operator
+        run: go test -race ./test/utils/...
+      - name: Test the admission audit
+        working-directory: operator
+        run: make test-audit
       - name: Check coverage threshold
         uses: vladopajic/go-test-coverage@v2
         with:
@@ -102,8 +110,33 @@ jobs:
           tags: ghcr.io/mycarrier-devops/krakend-operator:e2e
           cache-from: type=gha,scope=operator-image
           cache-to: type=gha,mode=max,scope=operator-image
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
       - name: Run e2e tests
         working-directory: operator
         env:
           SKIP_OPERATOR_BUILD: "true"
         run: go test -tags=e2e -v -timeout 30m ./test/e2e/ -ginkgo.v
+
+  krakend-smoke:
+    name: KrakenD Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check the pinned krakend binary's exit codes
+        run: |
+          IMG=$(sed -n 's/^ARG KRAKEND_IMAGE=//p' operator/Dockerfile)
+          test -n "$IMG"
+          check() {
+            want=$1 fixture=$2 got=0
+            docker run --rm --network=none -v "$PWD/.github/krakend-smoke:/f:ro" \
+              "$IMG" check -t -n -c "/f/$fixture.json" || got=$?
+            if [ "$got" -ne "$want" ]; then
+              echo "::error::$fixture: want exit $want, got $got"
+              exit 1
+            fi
+          }
+          check 0 valid
+          check 1 schema-error
+          check 1 route-conflict

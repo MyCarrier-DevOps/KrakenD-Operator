@@ -28,6 +28,8 @@ _env: string | *"dev"
 
 // _httpMethods lists recognized OpenAPI HTTP methods.
 // Path-item keys not in this set (parameters, summary, etc.) are skipped.
+// HEAD, OPTIONS and TRACE produce entries too, so the operator can report
+// them: it skips every entry whose method KrakenDEndpoint does not accept.
 _httpMethods: ["get", "post", "put", "delete", "patch", "head", "options", "trace"]
 
 // _defaultHost is the backend host URL. The operator injects this value
@@ -144,7 +146,15 @@ endpoint: {
 								}
 							}
 							"documentation/openapi": {
-								audience: *_op.audience | ["public"]
+								// audience must be a list of strings if the operation
+								// declares one; a wrong-shaped value (e.g. a mapping)
+								// fails evaluation instead of silently defaulting.
+								if _op.audience == _|_ {
+									audience: ["public"]
+								}
+								if _op.audience != _|_ {
+									audience: [...string] & _op.audience
+								}
 								if _op.description != _|_ {
 									description: *_op.description | ""
 								}

@@ -1,0 +1,50 @@
+/*
+Copyright 2026 The KrakenD Operator Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package resources
+
+import (
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+)
+
+// licenseKey is the key of the license in the Secret an ExternalSecret syncs,
+// and the key a Secret reference that names none is read from.
+const licenseKey = "LICENSE"
+
+// LicenseSecret is the Secret and key the gateway's license is read from and
+// mounted from: spec.license.secretRef when set, otherwise the Secret an enabled
+// ExternalSecret syncs. ok is false when the spec names neither, and for a
+// reference with no name, which names no Secret and does not fall through.
+func LicenseSecret(gw *v1alpha1.KrakenDGateway) (name, key string, ok bool) {
+	lic := gw.Spec.License
+	if lic == nil {
+		return "", "", false
+	}
+	if lic.SecretRef != nil {
+		if lic.SecretRef.Name == "" {
+			return "", "", false
+		}
+		key := lic.SecretRef.Key
+		if key == "" {
+			key = licenseKey
+		}
+		return lic.SecretRef.Name, key, true
+	}
+	if lic.ExternalSecret.Enabled {
+		return ExternalSecretName(gw), licenseKey, true
+	}
+	return "", "", false
+}

@@ -1,0 +1,17 @@
+{{- if and .Values.metrics.enabled .Values.metrics.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "krakend-operator.fullname" . }}-metrics-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "krakend-operator.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+    - {{ include "krakend-operator.fullname" . }}-metrics-service.{{ .Release.Namespace }}.svc
+    - {{ include "krakend-operator.fullname" . }}-metrics-service.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: {{ include "krakend-operator.issuerName" . }}
+  secretName: {{ include "krakend-operator.fullname" . }}-metrics-server-cert
+{{- end }}

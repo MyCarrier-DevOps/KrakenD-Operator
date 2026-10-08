@@ -57,6 +57,8 @@ jobs:
             org.opencontainers.image.version=${{ steps.version.outputs.new_version }}
             org.opencontainers.image.source=https://github.com/MyCarrier-DevOps/KrakenD-Operator
           platforms: linux/amd64
+          build-args: |
+            VERSION=${{ steps.version.outputs.new_version }}
           cache-from: type=gha,scope=operator-image
           cache-to: type=gha,mode=max,scope=operator-image
 
@@ -76,6 +78,8 @@ jobs:
         run: cp operator/config/crd/bases/*.yaml charts/krakend-operator/crds/
 
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
 
       - name: Ensure gh-pages branch exists
         run: |

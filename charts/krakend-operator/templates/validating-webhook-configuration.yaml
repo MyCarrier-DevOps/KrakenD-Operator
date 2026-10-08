@@ -10,6 +10,7 @@ metadata:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "krakend-operator.fullname" . }}-serving-cert
   {{- end }}
 webhooks:
+  # Keep in sync with the +kubebuilder:webhook markers in operator/internal/webhook/webhook.go.
   - name: vkrakendgateway.kb.io
     admissionReviewVersions:
       - v1
@@ -19,7 +20,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendgateway
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
@@ -30,10 +31,10 @@ webhooks:
         operations:
           - CREATE
           - UPDATE
-          - DELETE
         resources:
           - krakendgateways
     sideEffects: None
+    timeoutSeconds: 15
   - name: vkrakendendpoint.kb.io
     admissionReviewVersions:
       - v1
@@ -43,7 +44,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
@@ -57,6 +58,7 @@ webhooks:
         resources:
           - krakendendpoints
     sideEffects: None
+    timeoutSeconds: 15
   - name: vkrakendbackendpolicy.kb.io
     admissionReviewVersions:
       - v1
@@ -66,7 +68,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
@@ -77,10 +79,10 @@ webhooks:
         operations:
           - CREATE
           - UPDATE
-          - DELETE
         resources:
           - krakendbackendpolicies
     sideEffects: None
+    timeoutSeconds: 15
   - name: vkrakendautoconfig.kb.io
     admissionReviewVersions:
       - v1
@@ -90,7 +92,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
@@ -104,4 +106,5 @@ webhooks:
         resources:
           - krakendautoconfigs
     sideEffects: None
+    timeoutSeconds: 15
 {{- end }}

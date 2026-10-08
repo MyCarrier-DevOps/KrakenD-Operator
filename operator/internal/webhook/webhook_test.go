@@ -18,6 +18,9 @@ package webhook
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,12 +30,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-	"github.com/mycarrier-devops/krakend-operator/internal/controller"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
 func testScheme() *runtime.Scheme {
@@ -42,53 +49,19 @@ func testScheme() *runtime.Scheme {
 	return s
 }
 
+// fakeClient builds a fake client with both endpoint field indexes registered.
 func fakeClient(objs ...client.Object) client.Client {
-	return fake.NewClientBuilder().
-		WithScheme(testScheme()).
-		WithObjects(objs...).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, controller.EndpointGatewayIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
-				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
-			},
-		).
-		Build()
+	return fakeClientBuilderWith(interceptor.Funcs{}, objs...)
 }
 
-// fakeClientWithPolicyIndex builds a fake client with the endpoint-policy
-// field index registered, required for PolicyValidator.ValidateDelete.
-func fakeClientWithPolicyIndex(objs ...client.Object) client.Client {
+// fakeClientBuilderWith is fakeClient with interceptors.
+func fakeClientBuilderWith(funcs interceptor.Funcs, objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
 		WithObjects(objs...).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, controller.EndpointPolicyIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				var refs []string
-				seen := make(map[string]struct{})
-				for _, entry := range ep.Spec.Endpoints {
-					for _, be := range entry.Backends {
-						if be.PolicyRef == nil {
-							continue
-						}
-						key := be.PolicyRef.PolicyKey(ep.Namespace)
-						if _, ok := seen[key]; ok {
-							continue
-						}
-						seen[key] = struct{}{}
-						refs = append(refs, key)
-					}
-				}
-				return refs
-			},
-		).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointGateway, fieldindex.EndpointGatewayKeys).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys).
+		WithInterceptorFuncs(funcs).
 		Build()
 }
 
@@ -106,123 +79,10 @@ func TestGatewayValidator_ValidEE(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
-	}
-}
-
-func TestGatewayValidator_EERequiresLicense(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionEE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	v := &GatewayValidator{}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err == nil {
-		t.Error("expected error for EE without license")
-	}
-}
-
-func TestGatewayValidator_CEWithLicenseForbidden(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-			License: &v1alpha1.LicenseConfig{
-				SecretRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: "lic"},
-					Key:                  "LICENSE",
-				},
-			},
-		},
-	}
-	v := &GatewayValidator{}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err == nil {
-		t.Error("expected error for CE with license")
-	}
-}
-
-func TestGatewayValidator_MutuallyExclusiveLicense(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionEE,
-			Config: v1alpha1.GatewayConfig{},
-			License: &v1alpha1.LicenseConfig{
-				ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true},
-				SecretRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: "lic"},
-					Key:                  "LICENSE",
-				},
-			},
-		},
-	}
-	v := &GatewayValidator{}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err == nil {
-		t.Error("expected error for mutually exclusive license sources")
-	}
-}
-
-func TestGatewayValidator_MultiplePVCForbidden(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-			Plugins: &v1alpha1.PluginsSpec{
-				Sources: []v1alpha1.PluginSource{
-					{PersistentVolumeClaimRef: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "a"}},
-					{PersistentVolumeClaimRef: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "b"}},
-				},
-			},
-		},
-	}
-	v := &GatewayValidator{}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err == nil {
-		t.Error("expected error for multiple PVC sources")
-	}
-}
-
-func TestGatewayValidator_OpenAPIPortConflict(t *testing.T) {
-	// Explicit port collision: openapi port == gateway port
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config:  v1alpha1.GatewayConfig{Port: 9090},
-			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 9090},
-		},
-	}
-	v := &GatewayValidator{}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err == nil {
-		t.Error("expected error when openapi port equals gateway port")
-	}
-}
-
-func TestGatewayValidator_OpenAPIPortDefaultConflict(t *testing.T) {
-	// Default gateway port (8080) set explicitly as openapi port
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config:  v1alpha1.GatewayConfig{},
-			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8080},
-		},
-	}
-	v := &GatewayValidator{}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err == nil {
-		t.Error("expected error when openapi port collides with default gateway port 8080")
 	}
 }
 
@@ -230,12 +90,12 @@ func TestGatewayValidator_OpenAPIPortValid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config:  v1alpha1.GatewayConfig{},
 			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8090},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -246,7 +106,7 @@ func gwWithProbes(liveness, readiness *corev1.Probe, sidecarImage string) *v1alp
 	return &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			OpenAPI: &v1alpha1.OpenAPIExportSpec{
 				Enabled: true, Port: 8090, SidecarImage: sidecarImage,
@@ -324,7 +184,7 @@ func TestGatewayValidator_OpenAPIProbeRejected(t *testing.T) {
 		// readinessProbe is validated on the same terms.
 		{"readiness no handler", nil, &corev1.Probe{}, "", "readinessProbe"},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := v.ValidateCreate(context.Background(), gwWithProbes(tc.liveness, tc.readiness, tc.image))
@@ -368,7 +228,7 @@ func TestGatewayValidator_OpenAPIProbeAccepted(t *testing.T) {
 			GRPC: &corev1.GRPCAction{Port: 8090},
 		}}, nil, "ghcr.io/example/grpc-server:1.0"},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := v.ValidateCreate(context.Background(), gwWithProbes(tc.liveness, tc.readiness, tc.image)); err != nil {
@@ -387,46 +247,25 @@ func TestGatewayValidator_Update(t *testing.T) {
 		},
 	}
 	newGW := old.DeepCopy()
-	newGW.Spec.Edition = v1alpha1.EditionEE
-	v := &GatewayValidator{}
+	negative := resource.MustParse("-1Gi")
+	newGW.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true", TmpSizeLimit: &negative}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
-		t.Error("expected error on update to EE without license")
+		t.Error("expected error on update to a negative postRestartJob.tmpSizeLimit")
 	}
 }
 
 func TestGatewayValidator_Delete(t *testing.T) {
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), &v1alpha1.KrakenDGateway{})
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
 }
 
-func TestGatewayValidator_PostRestartJobEmptyScript(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-			PostRestartJob: &v1alpha1.PostRestartJobSpec{
-				Enabled: true,
-				Script:  "",
-			},
-		},
-	}
-	v := &GatewayValidator{}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err == nil {
-		t.Fatal("expected error for enabled postRestartJob with empty script")
-	}
-	if !strings.Contains(err.Error(), "script") {
-		t.Errorf("expected error about script, got: %v", err)
-	}
-}
-
-// TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns covers review id
-// 3804144425 (#4): overriding workingDir outside the /tmp emptyDir mount
+// TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns covers overriding
+// workingDir outside the /tmp emptyDir mount
 // while readOnlyRootFilesystem is effectively true (the hardened default)
 // must produce an admission warning, not silently pass — the container
 // starts fine and the failure (EROFS) only surfaces when the script runs.
@@ -443,7 +282,7 @@ func TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	warnings, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error (this is a warning, not a rejection), got: %v", err)
@@ -476,7 +315,7 @@ func TestGatewayValidator_WorkingDirOutsideTmpWithROFSDisabledNoWarning(t *testi
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	warnings, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -502,7 +341,7 @@ func TestGatewayValidator_WorkingDirUnderTmpNoWarning(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	warnings, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -512,8 +351,8 @@ func TestGatewayValidator_WorkingDirUnderTmpNoWarning(t *testing.T) {
 	}
 }
 
-// TestGatewayValidator_ContainerRunAsUserZeroRejected covers review id
-// 3805157408 (#1, ADMISSION REJECT — USER-CHOSEN fork): a container-level
+// TestGatewayValidator_ContainerRunAsUserZeroRejected covers the admission
+// reject (a deliberate choice): a container-level
 // securityContext.runAsUser: 0 with no explicit runAsNonRoot escape hatch
 // (at either container or pod scope) must be rejected outright, since the
 // resulting {runAsUser:0, runAsNonRoot:true} pair hangs the Job pod
@@ -533,7 +372,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroRejected(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for container runAsUser:0 with no runAsNonRoot escape hatch")
@@ -541,14 +380,14 @@ func TestGatewayValidator_ContainerRunAsUserZeroRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
 	}
-	// C4(ii): field.Path assertion on a container-path rejection — kills the
+	// field.Path assertion on a container-path rejection — kills the
 	// mutant of transposed containerPath/podPath arguments at the
 	// validateRunAsRootConflict call site.
 	if !strings.Contains(err.Error(), "spec.postRestartJob.securityContext.runAsUser") {
 		t.Errorf("expected the container-path rejection to point at "+
 			"spec.postRestartJob.securityContext.runAsUser, got: %v", err)
 	}
-	// C3: the scope-distinguishing clause must be present so a container-path
+	// The scope-distinguishing clause must be present so a container-path
 	// rejection doesn't misleadingly suggest a container-scope opt-out is a
 	// universal acknowledgment.
 	if !strings.Contains(err.Error(), "only acknowledges a container-scope runAsUser: 0") {
@@ -577,7 +416,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed(
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when podSecurityContext.runAsNonRoot:false is set, got: %v", err)
@@ -603,7 +442,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAl
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when container securityContext.runAsNonRoot:false is set, got: %v", err)
@@ -611,7 +450,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAl
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejected
-// covers review id 3807285645 (#6): the pod-scope hole. Unlike a fully
+// covers the pod-scope hole. Unlike a fully
 // unset podSecurityContext.runAsNonRoot (self-healed at build time by
 // job.go's mergePodSecurityContext fixup), an EXPLICIT
 // podSecurityContext.runAsNonRoot: true alongside podSecurityContext.
@@ -634,7 +473,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejec
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for pod-scope runAsUser:0 with explicit podSecurityContext.runAsNonRoot:true")
@@ -642,14 +481,14 @@ func TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejec
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
 	}
-	// C4(ii): field.Path assertion on a pod-path rejection — kills the mutant
+	// field.Path assertion on a pod-path rejection — kills the mutant
 	// of transposed containerPath/podPath arguments at the
 	// validateRunAsRootConflict call site.
 	if !strings.Contains(err.Error(), "spec.postRestartJob.podSecurityContext.runAsUser") {
 		t.Errorf("expected the pod-path rejection to point at "+
 			"spec.postRestartJob.podSecurityContext.runAsUser, got: %v", err)
 	}
-	// C3: the scope-distinguishing clause must be present so a pod-path
+	// The scope-distinguishing clause must be present so a pod-path
 	// rejection doesn't misleadingly suggest a container-scope opt-out would
 	// have sufficed.
 	if !strings.Contains(err.Error(), "only acknowledges a container-scope runAsUser: 0") {
@@ -658,7 +497,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejec
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed verifies
-// outcome 2 from review id 3807285645 (#6) is preserved: pod-scope
+// the second outcome of the pod-scope rule is preserved: pod-scope
 // runAsUser:0 with runAsNonRoot left unset everywhere is NOT rejected at
 // admission — job.go's mergePodSecurityContext fixup self-heals this
 // combination at build time (kept as defense-in-depth for webhook-bypass
@@ -678,7 +517,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no rejection for pod-scope runAsUser:0 with runAsNonRoot unset "+
@@ -687,8 +526,8 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSelfHeal
-// pins fix-round review 2's S1 change (the container-scope opt-out no
-// longer unconditionally short-circuits validateRunAsRootConflict) for the
+// pins that the container-scope opt-out no longer unconditionally
+// short-circuits validateRunAsRootConflict, for the
 // postRestartJob (job) lane specifically: a pod-scope runAsUser:0 combined
 // with a CONTAINER-scope runAsNonRoot:false (container runAsUser left
 // unset) must remain ADMITTED — but now via the SAME pod-scope-unset
@@ -699,7 +538,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 // container-scope runAsNonRoot:false does not itself trigger
 // containerAssertsTrue/podAssertsTrue (neither is true), so the self-heal
 // condition still evaluates true and the outcome is unchanged from before
-// S1 — see webhook.go's validateRunAsRootConflict doc for the full trace.
+// the opt-out rule was tightened — see webhook.go's validateRunAsRootConflict doc for the full trace.
 func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSelfHeal(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
@@ -718,28 +557,27 @@ func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSel
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected postRestartJob pod-scope runAsUser:0 with a container-scope "+
 			"runAsNonRoot:false opt-out to remain admitted via the pod-scope-unset self-heal "+
-			"carve-out (S1 must not change job-lane outcomes), got: %v", err)
+			"carve-out (the opt-out rule must not change job-lane outcomes), got: %v", err)
 	}
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected_JobLane
-// covers review round 3, C4(i): pins the 707166b behavior change for the
-// postRestartJob (job) lane. podSecurityContext{runAsUser:0,
+// pins the 707166b behavior change for the postRestartJob (job) lane. podSecurityContext{runAsUser:0,
 // runAsNonRoot:true} combined with a container-scope securityContext{
 // runAsNonRoot:false} (no container-scope runAsUser) must be REJECTED at
 // spec.postRestartJob.podSecurityContext.runAsUser: the pod scope's own
 // EXPLICIT runAsNonRoot:true means the pod-scope-unset self-heal carve-out
-// (allowPodScopeUnsetSelfHeal) does not apply, and — per the S1 fix shared
+// (allowPodScopeUnsetSelfHeal) does not apply, and — per the opt-out rule shared
 // with Dragonfly via validateRunAsRootConflict — a container-scope opt-out
 // only acknowledges a root request that itself came from the container
 // scope (fromContainer), which is false here (the container never sets its
 // own runAsUser). Before 707166b this combination was ADMITTED (the
-// pre-S1 `containerOptsOut || podOptsOut` logic accepted a container-scope
+// earlier `containerOptsOut || podOptsOut` logic accepted a container-scope
 // opt-out unconditionally, regardless of which scope produced the root
 // request).
 func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected_JobLane(t *testing.T) {
@@ -761,24 +599,24 @@ func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutReject
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
-			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true (S1, " +
-			"pinning the 707166b job-lane behavior change)")
+			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true " +
+			"(pinning the 707166b job-lane behavior change)")
 	}
 	if !strings.Contains(err.Error(), "spec.postRestartJob.podSecurityContext.runAsUser") {
 		t.Errorf("expected the rejection to point at spec.postRestartJob.podSecurityContext.runAsUser, got: %v", err)
 	}
-	// Review round 4, D4a: this shape's rejection message is load-bearing —
-	// it is the ONLY message text the user ever sees when the pod scope's
-	// own explicit runAsNonRoot:true blocks a container-scope opt-out that
-	// would otherwise short-circuit the check. Without the "Unless the Job
-	// container carries its own runAsNonRoot: false" qualifier, the message
-	// would read as an unconditional promise that a container-scope opt-out
-	// always works — which S1 (the fix pinned by this very test) made
-	// false for exactly this shape. Asserting the substring here means a
+	// This shape's rejection message is load-bearing — it is the ONLY
+	// message text the user ever sees when the pod scope's own explicit
+	// runAsNonRoot:true blocks a container-scope opt-out that would otherwise
+	// short-circuit the check. Without the "Unless the Job container carries
+	// its own runAsNonRoot: false" qualifier, the message would read as an
+	// unconditional promise that a container-scope opt-out always works —
+	// which the behavior pinned by this very test made false for exactly
+	// this shape. Asserting the substring here means a
 	// future edit that drops or waters down that qualifier fails this test,
 	// not just a manual doc review.
 	if !strings.Contains(err.Error(), "Unless the Job container carries its own runAsNonRoot: false") {
@@ -787,8 +625,8 @@ func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutReject
 	}
 }
 
-// TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers review
-// id 3811443593 (#6): every existing runAsUser:0 test above sets runAsUser
+// TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers the
+// cross-scope precedence: every existing runAsUser:0 test above sets runAsUser
 // at exactly one scope (container-only or pod-only), so none of them
 // discriminates the cross-scope PRECEDENCE effectiveRunAsRoot implements
 // (container wins over pod when container.RunAsUser is set) — the suite
@@ -872,7 +710,7 @@ func TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
 					},
 				},
 			}
-			v := &GatewayValidator{}
+			v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 			_, err := v.ValidateCreate(context.Background(), gw)
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected rejection (%s), got no error", tc.reason)
@@ -885,7 +723,7 @@ func TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
 }
 
 // TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed covers
-// review id 3807285627 (#2): a CR already carrying container
+// a CR already carrying container
 // securityContext.runAsUser:0 with no runAsNonRoot escape hatch — as
 // accepted by an OLDER operator version before this reject existed — must
 // not start failing on an UNRELATED update as long as the relevant
@@ -910,7 +748,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.
 	// fields stay exactly as they were.
 	newGW.Spec.PostRestartJob.Script = "npm install -g rdme && echo done"
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err != nil {
 		t.Fatalf("expected the pre-existing runAsUser:0 to be ratcheted (allowed) on an unrelated update, got: %v", err)
@@ -918,7 +756,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.
 }
 
 // TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected
-// covers the other half of review id 3807285627 (#2): the ratchet must NOT
+// covers the other half of the ratchet: it must NOT
 // apply when the update is what actually INTRODUCES the offending
 // combination — that must still be rejected exactly like a Create.
 func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *testing.T) {
@@ -938,7 +776,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *t
 		RunAsUser: new(int64(0)),
 	}
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: this update newly introduces runAsUser:0 with no escape hatch")
@@ -949,7 +787,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *t
 }
 
 // TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected covers
-// review id 3811443520 (#1): a spec stored with postRestartJob DISABLED
+// a spec stored with postRestartJob DISABLED
 // (never validated by any operator version, old or new) must not grandfather
 // its runAsUser:0 when the caller flips Enabled to true on the same update —
 // the ratchet only applies to a previously-ENABLED spec.
@@ -971,7 +809,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected(t *tes
 	newGW := old.DeepCopy()
 	newGW.Spec.PostRestartJob.Enabled = true
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: enabling a previously-disabled spec must not ratchet off its stored runAsUser:0")
@@ -989,7 +827,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -999,7 +837,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for dragonfly container runAsUser:0 with no runAsNonRoot escape hatch")
@@ -1007,14 +845,14 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
 	}
-	// C4(ii): field.Path assertion on a container-path rejection — kills the
+	// field.Path assertion on a container-path rejection — kills the
 	// mutant of transposed containerPath/podPath arguments at the
 	// validateRunAsRootConflict call site.
 	if !strings.Contains(err.Error(), "spec.dragonfly.containerSecurityContext.runAsUser") {
 		t.Errorf("expected the container-path rejection to point at "+
 			"spec.dragonfly.containerSecurityContext.runAsUser, got: %v", err)
 	}
-	// C6: the scope-distinguishing clause must be present so a container-path
+	// The scope-distinguishing clause must be present so a container-path
 	// rejection doesn't misleadingly suggest a pod-scope-only fix is required
 	// when a container-scope opt-out (together with the container's own
 	// runAsUser:0) would suffice.
@@ -1026,9 +864,8 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 // TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed
 // verifies the escape hatch: setting podSecurityContext.runAsNonRoot: false
 // alongside the container's runAsUser: 0 is accepted AT ADMISSION. This is
-// admission-only, though: before fix-round review 1's change #1 (the
-// container-scope uid0 fixup in mergeDragonflyContainerSecurityContext),
-// admission would allow this spec while the BUILDER still rendered the
+// admission-only, though: before the container-scope uid0 fixup in
+// mergeDragonflyContainerSecurityContext existed, admission would allow this spec while the BUILDER still rendered the
 // kubelet-rejected {runAsUser:0, runAsNonRoot:true} pair — the escape hatch
 // was a lie. Paired with the build-level assertion that the escape hatch
 // actually renders a startable container: see external_crd_test.go's
@@ -1037,7 +874,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFals
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1050,7 +887,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFals
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when podSecurityContext.runAsNonRoot:false is set, got: %v", err)
@@ -1064,7 +901,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRo
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1075,7 +912,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRo
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when container securityContext.runAsNonRoot:false is set, got: %v", err)
@@ -1087,8 +924,8 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRo
 // Dragonfly: podSecurityContext.runAsUser:0 with an explicit
 // podSecurityContext.runAsNonRoot:true must be rejected at admission, same
 // as the container-scope case. Note there is no self-heal fixup to
-// distinguish this from anymore (fix-round review 1, change #2 removed
-// mergeDragonflyPodSecurityContext's pod-scope fixup): a fully UNSET
+// distinguish this from anymore (mergeDragonflyPodSecurityContext has no
+// admission-time pod-scope fixup): a fully UNSET
 // podSecurityContext.runAsNonRoot alongside runAsUser:0 is now ALSO
 // rejected at admission — see the adjacent
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected.
@@ -1097,7 +934,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1108,7 +945,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for dragonfly pod-scope runAsUser:0 with explicit podSecurityContext.runAsNonRoot:true")
@@ -1119,7 +956,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected
-// covers fix-round review 1, change #2: unlike postRestartJob, the
+// covers that, unlike postRestartJob, the
 // pod-scope-unset case for Dragonfly is now REJECTED at admission (renamed
 // from ...Allowed). Dragonfly's container-scope default PINS RunAsNonRoot
 // (and RunAsUser/RunAsGroup) regardless of pod scope — container-scope
@@ -1128,10 +965,9 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 // only silently roots injected sidecars with no legitimate capability
 // gained. There is nothing to self-heal for admission purposes, so this
 // combination is rejected outright for any NEW or CHANGED spec
-// (allowPodScopeUnsetSelfHeal: false). Note (fix-round review 2 update):
-// mergeDragonflyPodSecurityContext's pod-scope fixup was restored in a
-// LATER fix-round as a build-time-only, cross-scope-aware fixup — but that
-// restoration serves GRANDFATHERED/webhook-bypassed CRs only (main-branch
+// (allowPodScopeUnsetSelfHeal: false). Note: mergeDragonflyPodSecurityContext
+// keeps a build-time-only, cross-scope-aware pod-scope fixup — but that
+// serves GRANDFATHERED/webhook-bypassed CRs only (main-branch
 // render parity), not this admission path; a brand-new spec with this exact
 // shape is still rejected here regardless of what the builder would later
 // do with it.
@@ -1139,7 +975,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1149,7 +985,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for dragonfly pod-scope runAsUser:0 with runAsNonRoot unset " +
@@ -1162,7 +998,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 		t.Errorf("expected the sanctioned error-path fix to point at "+
 			"spec.dragonfly.podSecurityContext.runAsUser (the field the user actually set), got: %v", err)
 	}
-	// C6: the scope-distinguishing clause must be present so a pod-path
+	// The scope-distinguishing clause must be present so a pod-path
 	// rejection doesn't misleadingly suggest a container-scope opt-out alone
 	// would acknowledge this pod-scope-originated request.
 	if !strings.Contains(err.Error(), "acknowledges only a container-scope runAsUser: 0") {
@@ -1171,9 +1007,9 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected
-// covers fix-round review 2, S1 (security-important): before this fix, a
-// CONTAINER-scope runAsNonRoot:false (with no container-scope runAsUser at
-// all) could mask a POD-scope root request — validateRunAsRootConflict's old
+// covers a security-important rule: a CONTAINER-scope runAsNonRoot:false
+// (with no container-scope runAsUser at all) must not mask a POD-scope root
+// request — validateRunAsRootConflict's old
 // `containerOptsOut || podOptsOut` accepted a container-scope opt-out
 // unconditionally, even though the effective uid0 came from the POD scope
 // (fromContainer: false) and the container never asked to run as root
@@ -1186,7 +1022,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1199,11 +1035,11 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
-			"mask a pod-scope runAsUser:0 root request (S1)")
+			"mask a pod-scope runAsUser:0 root request")
 	}
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
@@ -1211,7 +1047,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected
-// covers the self-contradictory variant of S1: pod scope explicitly asserts
+// covers the self-contradictory variant of that rule: pod scope explicitly asserts
 // runAsNonRoot:true (a hard, explicit acknowledgment that root is NOT
 // wanted) while root is requested via pod-scope runAsUser:0, and a
 // container-scope runAsNonRoot:false tries to opt out on the pod's behalf.
@@ -1222,7 +1058,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOpt
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1236,11 +1072,11 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOpt
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
-			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true (S1)")
+			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true")
 	}
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
@@ -1252,7 +1088,8 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOpt
 // securityContext.runAsUser:0 with no runAsNonRoot escape hatch — as
 // accepted before this reject existed — must not start failing on an
 // UNRELATED update as long as the relevant securityContext fields are
-// unchanged from the stored spec.
+// unchanged from the stored spec. The stored gateway runs CE, where an enabled
+// Dragonfly is no longer accepted when new: a legacy one keeps its ratchets.
 func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.T) {
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
@@ -1272,7 +1109,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t 
 	// fields stay exactly as they were.
 	newGW.Spec.Dragonfly.Image = "docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.2"
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err != nil {
 		t.Fatalf("expected the pre-existing dragonfly runAsUser:0 to be ratcheted (allowed) on an unrelated update, got: %v", err)
@@ -1280,17 +1117,17 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t 
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAllowed
-// covers item 5c of fix-round review 1: now that pod-scope runAsUser:0 with
-// runAsNonRoot unset is rejected at admission for NEW/changed specs (see
+// covers the ratchet for a grandfathered Dragonfly spec: now that pod-scope
+// runAsUser:0 with runAsNonRoot unset is rejected at admission for NEW/changed specs (see
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected),
-// a CR that already carries that shape — grandfathered from before this
-// fix-round's admission tightening — must still be ratcheted (allowed) on
+// a CR that already carries that shape — grandfathered from before the
+// admission tightening — must still be ratcheted (allowed) on
 // an update that leaves the relevant fields unchanged.
 func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.T) {
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1305,7 +1142,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAl
 	// stay exactly as they were.
 	newGW.Spec.Dragonfly.Image = "docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.2"
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err != nil {
 		t.Fatalf("expected the pre-existing grandfathered pod-scope dragonfly runAsUser:0 to be "+
@@ -1321,7 +1158,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetNewlyIntroducedUpdateReje
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1333,7 +1170,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetNewlyIntroducedUpdateReje
 		RunAsUser: new(int64(0)),
 	}
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: this update newly introduces dragonfly runAsUser:0 with no escape hatch")
@@ -1352,7 +1189,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledReject
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: false,
@@ -1365,7 +1202,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledReject
 	newGW := old.DeepCopy()
 	newGW.Spec.Dragonfly.Enabled = true
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: enabling a previously-disabled dragonfly spec must not ratchet off its stored runAsUser:0")
@@ -1385,23 +1222,21 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledReject
 // row below sets runAsUser at BOTH scopes to different values, so the
 // admit/reject outcome flips depending on which scope effectively wins.
 //
-// Review round 3, C1: the first two rows below used to assert ADMITTED —
-// "container.runAsUser:999 must win over pod.runAsUser:0" was true for
-// effectiveRunAsRoot's OWN precedence (the primary container's effective uid
-// really is 999, non-root), but that is no longer the whole admission
-// picture: the independent pod-scope acknowledgment gate added in
-// validateRunAsRootConflict now separately rejects the unacknowledged
+// The first two rows below are rejection tests: "container.runAsUser:999 must
+// win over pod.runAsUser:0" holds for effectiveRunAsRoot's OWN precedence (the
+// primary container's effective uid really is 999, non-root), but that is not
+// the whole admission picture: the independent pod-scope acknowledgment gate
+// in validateRunAsRootConflict separately rejects the unacknowledged
 // pod-scope runAsUser:0, because that value is still rendered on the shared
 // pod-level securityContext every OTHER container/sidecar in the pod
 // inherits when it sets nothing of its own — a hole the primary container's
-// own non-root effective uid does nothing to close. They are rewritten
-// below as rejection tests. Cross-scope-precedence coverage (the CONTAINER
-// side of the precedence — a container-scope root request winning over a
-// SAFE pod-scope value) is still fully exercised by the two container-root
-// rows further down, which this change does not affect (see
+// own non-root effective uid does nothing to close. Cross-scope-precedence
+// coverage (the CONTAINER side of the precedence — a container-scope root
+// request winning over a SAFE pod-scope value) is exercised by the two
+// container-root rows further down (see
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerRejected
 // and TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmitted
-// below for the two new C1-specific tests).
+// below for the two pod-scope gate tests).
 func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1409,7 +1244,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 		pod       *corev1.PodSecurityContext
 		wantErr   bool
 		reason    string
-		// wantDetail (review round 4, D4c), when non-empty, asserts the
+		// wantDetail, when non-empty, asserts the
 		// rejection message contains this substring — an empty wantDetail
 		// skips the check for rows where the message's exact conditional
 		// wording isn't load-bearing to this table's purpose.
@@ -1425,7 +1260,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 				RunAsNonRoot: new(true),
 			},
 			wantErr: true,
-			reason: "the independent pod-scope acknowledgment gate (C1) rejects the unacknowledged " +
+			reason: "the independent pod-scope acknowledgment gate rejects the unacknowledged " +
 				"pod.runAsUser:0 regardless of container.runAsUser:999's own non-root effective uid — " +
 				"other sidecars in the pod would still silently inherit the pod-scope root request",
 		},
@@ -1439,7 +1274,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 				RunAsUser: new(int64(0)),
 			},
 			wantErr: true,
-			reason: "the independent pod-scope acknowledgment gate (C1) rejects the unacknowledged " +
+			reason: "the independent pod-scope acknowledgment gate rejects the unacknowledged " +
 				"pod.runAsUser:0 regardless of container.runAsUser:999's own non-root effective uid — " +
 				"a container-scope runAsNonRoot:true is not a pod-scope acknowledgment",
 		},
@@ -1487,7 +1322,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 			gw := &v1alpha1.KrakenDGateway{
 				ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 				Spec: v1alpha1.KrakenDGatewaySpec{
-					Version: "2.13", Edition: v1alpha1.EditionCE,
+					Version: "2.13", Edition: v1alpha1.EditionEE,
 					Config: v1alpha1.GatewayConfig{},
 					Dragonfly: &v1alpha1.DragonflySpec{
 						Enabled:                  true,
@@ -1496,7 +1331,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 					},
 				},
 			}
-			v := &GatewayValidator{}
+			v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 			_, err := v.ValidateCreate(context.Background(), gw)
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected rejection (%s), got no error", tc.reason)
@@ -1514,9 +1349,9 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerRejected
-// covers review round 3, C1's headline case directly (the reject-test the
-// review asked for by shape: c{999}+p{0} unset): a pod-scope runAsUser:0
-// with runAsNonRoot left unset must be REJECTED even when the container
+// covers the pod-scope gate's headline case directly (c{999}+p{0} unset): a
+// pod-scope runAsUser:0 with runAsNonRoot left unset must be REJECTED even
+// when the container
 // scope sets its own non-zero, non-root runAsUser (999) — the container's
 // own safety does nothing to acknowledge the pod-scope root request that is
 // still rendered on the shared pod-level securityContext for any OTHER
@@ -1525,7 +1360,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerReje
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1538,7 +1373,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerReje
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: pod-scope runAsUser:0 with runAsNonRoot unset must be " +
@@ -1550,7 +1385,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerReje
 }
 
 // TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmitted
-// covers review round 3, C1's documented carve-out: the container-root
+// covers the pod-scope gate's documented carve-out: the container-root
 // recipe c{runAsUser:0,runAsNonRoot:false}+p{runAsUser:0} must remain
 // ADMITTED — the pod-scope gate's "unless the container scope carries its
 // own runAsUser: 0" clause routes this shape through the existing
@@ -1562,7 +1397,7 @@ func TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmit
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1576,7 +1411,7 @@ func TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmit
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected the documented container-root recipe "+
@@ -1585,8 +1420,8 @@ func TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmit
 	}
 }
 
-// TestGatewayValidator_NegativeTmpSizeLimitRejected covers review id
-// 3805157457 (#5): a negative tmpSizeLimit must be rejected.
+// TestGatewayValidator_NegativeTmpSizeLimitRejected covers that a negative
+// tmpSizeLimit must be rejected.
 func TestGatewayValidator_NegativeTmpSizeLimitRejected(t *testing.T) {
 	qty := resource.MustParse("-1Gi")
 	gw := &v1alpha1.KrakenDGateway{
@@ -1601,7 +1436,7 @@ func TestGatewayValidator_NegativeTmpSizeLimitRejected(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for negative tmpSizeLimit")
@@ -1629,7 +1464,7 @@ func TestEndpointValidator_Valid(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -1644,7 +1479,7 @@ func TestEndpointValidator_GatewayNotFound(t *testing.T) {
 			Endpoints:  []v1alpha1.EndpointEntry{},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient()}
+	v := &EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for missing gateway")
@@ -1672,58 +1507,10 @@ func TestEndpointValidator_PolicyNotFound(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for missing policy")
-	}
-}
-
-func TestEndpointValidator_ConflictWarning(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	existing := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "old-ep", Namespace: "default",
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
-		},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	newEP := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "new-ep", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gw, existing)}
-	warnings, err := v.ValidateCreate(context.Background(), newEP)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-	if len(warnings) == 0 {
-		t.Fatal("expected conflict warning")
-	}
-	w := warnings[0]
-	if !strings.Contains(w, "default/old-ep") {
-		t.Errorf("warning should reference existing endpoint, got: %s", w)
-	}
-	if !strings.Contains(w, "default/my-gw") {
-		t.Errorf("warning should reference gateway, got: %s", w)
 	}
 }
 
@@ -1735,15 +1522,17 @@ func TestEndpointValidator_Update(t *testing.T) {
 			Endpoints:  []v1alpha1.EndpointEntry{},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient()}
-	_, err := v.ValidateUpdate(context.Background(), ep, ep)
+	old := ep.DeepCopy()
+	old.Spec.GatewayRef.Name = "previous"
+	v := &EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+	_, err := v.ValidateUpdate(context.Background(), old, ep)
 	if err == nil {
-		t.Error("expected error on update")
+		t.Error("expected error on update to a missing gateway")
 	}
 }
 
 func TestEndpointValidator_Delete(t *testing.T) {
-	v := &EndpointValidator{}
+	v := &EndpointValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), &v1alpha1.KrakenDEndpoint{})
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -1758,93 +1547,10 @@ func TestPolicyValidator_Valid(t *testing.T) {
 			RateLimit:      &v1alpha1.RateLimitSpec{MaxRate: 100},
 		},
 	}
-	v := &PolicyValidator{}
+	v := &PolicyValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), p)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
-	}
-}
-
-func TestPolicyValidator_InvalidCB(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDBackendPolicySpec{
-			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{MaxErrors: 0, Interval: 0, Timeout: 0},
-		},
-	}
-	v := &PolicyValidator{}
-	_, err := v.ValidateCreate(context.Background(), p)
-	if err == nil {
-		t.Error("expected error for invalid CB")
-	}
-	if !strings.Contains(err.Error(), "maxErrors") {
-		t.Error("expected maxErrors in error")
-	}
-}
-
-func TestPolicyValidator_InvalidRL(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDBackendPolicySpec{
-			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 0},
-		},
-	}
-	v := &PolicyValidator{}
-	_, err := v.ValidateCreate(context.Background(), p)
-	if err == nil {
-		t.Error("expected error for invalid RL")
-	}
-}
-
-func TestPolicyValidator_DeleteBlocked(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
-	}
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{
-						Host: []string{"http://svc"}, URLPattern: "/",
-						PolicyRef: &v1alpha1.PolicyRef{Name: "my-policy"},
-					}}},
-			},
-		},
-	}
-	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p, ep)}
-	_, err := v.ValidateDelete(context.Background(), p)
-	if err == nil {
-		t.Error("expected error: policy referenced")
-	}
-	if !strings.Contains(err.Error(), "ep1") {
-		t.Errorf("expected ep1 in error, got: %v", err)
-	}
-}
-
-func TestPolicyValidator_DeleteAllowed(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
-	}
-	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p)}
-	_, err := v.ValidateDelete(context.Background(), p)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-}
-
-func TestPolicyValidator_Update(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDBackendPolicySpec{
-			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: -1},
-		},
-	}
-	v := &PolicyValidator{}
-	_, err := v.ValidateUpdate(context.Background(), p, p)
-	if err == nil {
-		t.Error("expected error on update")
 	}
 }
 
@@ -1887,133 +1593,6 @@ func TestAutoConfigValidator_GatewayNotFound(t *testing.T) {
 	}
 }
 
-func TestAutoConfigValidator_BothSources(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI: v1alpha1.OpenAPISource{
-				URL:          "https://example.com/api",
-				ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "cm"},
-			},
-			Trigger: v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for both sources")
-	}
-}
-
-func TestAutoConfigValidator_NoSource(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI:    v1alpha1.OpenAPISource{},
-			Trigger:    v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for no source")
-	}
-}
-
-func TestAutoConfigValidator_CMRequiresHostMapping(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI:    v1alpha1.OpenAPISource{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "cm"}},
-			Trigger:    v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for CM without hostMapping")
-	}
-}
-
-func TestAutoConfigValidator_PeriodicNoInterval(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
-			Trigger:    v1alpha1.TriggerPeriodic,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for periodic without interval")
-	}
-}
-
-func TestAutoConfigValidator_MutuallyExclusiveAuth(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI: v1alpha1.OpenAPISource{
-				URL: "https://example.com/api",
-				Auth: &v1alpha1.AuthConfig{
-					BearerTokenSecret: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: "t"},
-						Key:                  "k",
-					},
-					BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{Name: "b"},
-				},
-			},
-			Trigger: v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for mutually exclusive auth")
-	}
-}
-
 func TestAutoConfigValidator_Update(t *testing.T) {
 	ac := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
@@ -2023,10 +1602,12 @@ func TestAutoConfigValidator_Update(t *testing.T) {
 			Trigger:    v1alpha1.TriggerOnChange,
 		},
 	}
+	old := ac.DeepCopy()
+	old.Spec.GatewayRef.Name = "previous"
 	v := &AutoConfigValidator{Client: fakeClient()}
-	_, err := v.ValidateUpdate(context.Background(), ac, ac)
+	_, err := v.ValidateUpdate(context.Background(), old, ac)
 	if err == nil {
-		t.Error("expected error on update")
+		t.Error("expected error on update to a missing gateway")
 	}
 }
 
@@ -2039,7 +1620,7 @@ func TestAutoConfigValidator_Delete(t *testing.T) {
 }
 
 func TestEndpointValidator_DeleteNoOp(t *testing.T) {
-	v := &EndpointValidator{}
+	v := &EndpointValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), &v1alpha1.KrakenDEndpoint{})
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -2066,7 +1647,7 @@ func TestEndpointValidator_CrossNamespaceGatewayValid(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err != nil {
 		t.Errorf("expected no error for cross-ns gateway, got %v", err)
@@ -2089,7 +1670,7 @@ func TestEndpointValidator_CrossNamespaceGatewayNotFound(t *testing.T) {
 			Endpoints:  []v1alpha1.EndpointEntry{},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for gateway in wrong namespace")
@@ -2123,7 +1704,7 @@ func TestEndpointValidator_CrossNamespacePolicyValid(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw, pol)}
+	v := &EndpointValidator{Client: fakeClient(gw, pol), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err != nil {
 		t.Errorf("expected no error for cross-ns policy, got %v", err)
@@ -2151,89 +1732,10 @@ func TestEndpointValidator_CrossNamespacePolicyNotFound(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for cross-ns policy not found")
-	}
-}
-
-func TestEndpointValidator_ConflictSameNameDifferentNamespace(t *testing.T) {
-	// Two gateways named "my-gw" in different namespaces.
-	// Endpoints referencing each should NOT produce a conflict warning.
-	gwA := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "ns-a"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	gwB := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "ns-b"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	// Existing endpoint points to gw in ns-a.
-	existing := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ep-a", Namespace: "default",
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
-		},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "ns-a"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	// New endpoint points to gw in ns-b — same path, different gateway.
-	newEP := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep-b", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "ns-b"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gwA, gwB, existing)}
-	warnings, err := v.ValidateCreate(context.Background(), newEP)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Errorf("expected no conflict warning for different gateway namespaces, got %v", warnings)
-	}
-}
-
-func TestPolicyValidator_DeleteBlockedCrossNamespace(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "shared-policy", Namespace: "policies"},
-	}
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{
-						Host: []string{"http://svc"}, URLPattern: "/",
-						PolicyRef: &v1alpha1.PolicyRef{Name: "shared-policy", Namespace: "policies"},
-					}}},
-			},
-		},
-	}
-	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p, ep)}
-	_, err := v.ValidateDelete(context.Background(), p)
-	if err == nil {
-		t.Error("expected error: cross-ns policy still referenced")
-	}
-	if !strings.Contains(err.Error(), "ep1") {
-		t.Errorf("expected ep1 in error, got: %v", err)
 	}
 }
 
@@ -2276,86 +1778,6 @@ func TestAutoConfigValidator_CrossNamespaceGatewayNotFound(t *testing.T) {
 	}
 }
 
-func TestEndpointValidator_ConflictCrossNamespaceEndpoints(t *testing.T) {
-	// Two endpoints in DIFFERENT namespaces both targeting the same gateway.
-	// Same path/method → should produce a conflict warning.
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "shared-gw", Namespace: "infra"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	existing := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ep-tenant-a", Namespace: "tenant-a",
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
-		},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "shared-gw", Namespace: "infra"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	newEP := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep-tenant-b", Namespace: "tenant-b"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "shared-gw", Namespace: "infra"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gw, existing)}
-	warnings, err := v.ValidateCreate(context.Background(), newEP)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-	if len(warnings) == 0 {
-		t.Fatal("expected conflict warning for cross-namespace endpoints targeting same gateway")
-	}
-	w := warnings[0]
-	if !strings.Contains(w, "tenant-a/ep-tenant-a") {
-		t.Errorf("warning should include namespace-qualified conflicting endpoint, got: %s", w)
-	}
-	if !strings.Contains(w, "infra/shared-gw") {
-		t.Errorf("warning should include namespace-qualified gateway, got: %s", w)
-	}
-}
-
-func TestEndpointValidator_IntraCRDuplicate(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ep)
-	if err == nil {
-		t.Error("expected error for duplicate (endpoint, method) within same CR")
-	}
-	if !strings.Contains(err.Error(), "Duplicate") {
-		t.Errorf("expected Duplicate in error, got: %v", err)
-	}
-}
-
 func newAutoConfigForAdditional(eps []v1alpha1.AdditionalEndpoint) *v1alpha1.KrakenDAutoConfig {
 	return &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
@@ -2365,52 +1787,6 @@ func newAutoConfigForAdditional(eps []v1alpha1.AdditionalEndpoint) *v1alpha1.Kra
 			Trigger:             v1alpha1.TriggerOnChange,
 			AdditionalEndpoints: eps,
 		},
-	}
-}
-
-func TestAutoConfigValidator_AdditionalEndpointEmptyPath(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: ""}})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for empty endpoint")
-	}
-}
-
-func TestAutoConfigValidator_AdditionalEndpointBackendsAndShorthand(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{
-		Endpoint: "/x",
-		Host:     "http://svc",
-		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://y"}, URLPattern: "/x"}},
-	}})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for backends + shorthand")
-	}
-}
-
-func TestAutoConfigValidator_AdditionalEndpointDuplicate(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{
-		{Endpoint: "/live"}, {Endpoint: "/live"}, // both default to GET → duplicate
-	})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for duplicate endpoint/method")
-	}
-}
-
-func TestAutoConfigValidator_AdditionalEndpointNoLeadingSlash(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "liveness"}})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for endpoint without leading slash")
 	}
 }
 
@@ -2428,17 +1804,6 @@ func TestAutoConfigValidator_AdditionalEndpointValid(t *testing.T) {
 	}
 }
 
-func TestAutoConfigValidator_BasePathNoLeadingSlash(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}})
-	ac.Spec.AdditionalEndpointsBasePath = "api/v1" // no leading slash
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for base path without leading slash")
-	}
-}
-
 func TestAutoConfigValidator_BasePathValid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
 	v := &AutoConfigValidator{Client: fakeClient(gw)}
@@ -2450,14 +1815,900 @@ func TestAutoConfigValidator_BasePathValid(t *testing.T) {
 	}
 }
 
-func TestAutoConfigValidator_BasePathAndAddPathPrefixMutuallyExclusive(t *testing.T) {
+func TestAutoConfigValidator_OverrideAudienceMustBeList(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
 	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}})
-	ac.Spec.AdditionalEndpointsBasePath = "/custom"
-	ac.Spec.URLTransform = &v1alpha1.URLTransformSpec{AddPathPrefix: "/api/v1/quote"}
+	ac := newAutoConfigForAdditional(nil)
+	ac.Spec.Overrides = []v1alpha1.OperationOverride{{
+		OperationID: "listUsers",
+		ExtraConfig: &runtime.RawExtension{
+			Raw: []byte(`{"documentation/openapi":{"audience":{"internal":null}}}`),
+		},
+	}}
 
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error when both additionalEndpointsBasePath and urlTransform.addPathPrefix are set")
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err == nil {
+		t.Fatal("expected error for non-list override audience")
+	}
+	wantPath := `spec.overrides[0].extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestAutoConfigValidator_DefaultsEndpointAudienceMustBeList(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional(nil)
+	ac.Spec.Defaults = &v1alpha1.Defaults{
+		Endpoint: &v1alpha1.EndpointDefaults{
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"documentation/openapi":{"audience":"internal"}}`),
+			},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err == nil {
+		t.Fatal("expected error for non-list defaults.endpoint audience")
+	}
+	wantPath := `spec.defaults.endpoint.extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestAutoConfigValidator_AdditionalEndpointAudienceMustBeList(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{
+		Endpoint: "/liveness",
+		ExtraConfig: &runtime.RawExtension{
+			Raw: []byte(`{"documentation/openapi":{"audience":[1]}}`),
+		},
+	}})
+
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err == nil {
+		t.Fatal("expected error for non-list additionalEndpoints audience")
+	}
+	wantPath := `spec.additionalEndpoints[0].extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestEndpointValidator_EndpointAudienceMustBeList(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"}}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}},
+					ExtraConfig: &runtime.RawExtension{
+						Raw: []byte(`{"documentation/openapi":{"audience":"internal"}}`),
+					},
+				},
+			},
+		},
+	}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
+	_, err := v.ValidateCreate(context.Background(), ep)
+	if err == nil {
+		t.Fatal("expected error for non-list endpoint audience")
+	}
+	wantPath := `spec.endpoints[0].extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestValidateExtraConfigAudience(t *testing.T) {
+	p := field.NewPath("spec", "overrides").Index(0).Child("extraConfig")
+
+	tests := map[string]struct {
+		raw       string
+		wantError bool
+	}{
+		"list of strings": {
+			raw: `{"documentation/openapi":{"audience":["internal"]}}`,
+		},
+		"map instead of list": {
+			raw:       `{"documentation/openapi":{"audience":{"internal":null}}}`,
+			wantError: true,
+		},
+		"string instead of list": {
+			raw:       `{"documentation/openapi":{"audience":"internal"}}`,
+			wantError: true,
+		},
+		"list of non-strings": {
+			raw:       `{"documentation/openapi":{"audience":[1]}}`,
+			wantError: true,
+		},
+		"empty list": {
+			raw: `{"documentation/openapi":{"audience":[]}}`,
+		},
+		"null instead of list": {
+			raw:       `{"documentation/openapi":{"audience":null}}`,
+			wantError: true,
+		},
+		"list of null": {
+			raw:       `{"documentation/openapi":{"audience":[null]}}`,
+			wantError: true,
+		},
+		"list with a null item": {
+			raw:       `{"documentation/openapi":{"audience":["internal",null]}}`,
+			wantError: true,
+		},
+		"documentation/openapi block absent": {
+			raw: `{"qos/ratelimit/router":{"every":"2s"}}`,
+		},
+		"audience key absent": {
+			raw: `{"documentation/openapi":{"operation_id":"foo"}}`,
+		},
+		"empty object": {
+			raw: `{}`,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			ec := &runtime.RawExtension{Raw: []byte(tc.raw)}
+			errs := validateExtraConfigAudience(p, ec)
+			if tc.wantError && len(errs) == 0 {
+				t.Fatalf("expected an error, got none")
+			}
+			if !tc.wantError && len(errs) != 0 {
+				t.Fatalf("expected no error, got %v", errs)
+			}
+			if tc.wantError {
+				wantPath := `spec.overrides[0].extraConfig["documentation/openapi"].audience`
+				if !strings.Contains(errs[0].Error(), wantPath) {
+					t.Errorf("expected error path %q, got %q", wantPath, errs[0].Error())
+				}
+				if !strings.Contains(errs[0].Error(), `must be a list of strings, e.g. ["internal"]`) {
+					t.Errorf("expected message about list of strings, got %q", errs[0].Error())
+				}
+			}
+		})
+	}
+
+	t.Run("nil RawExtension", func(t *testing.T) {
+		if errs := validateExtraConfigAudience(p, nil); len(errs) != 0 {
+			t.Fatalf("expected no error for nil RawExtension, got %v", errs)
+		}
+	})
+
+	t.Run("empty raw", func(t *testing.T) {
+		if errs := validateExtraConfigAudience(p, &runtime.RawExtension{}); len(errs) != 0 {
+			t.Fatalf("expected no error for empty Raw, got %v", errs)
+		}
+	})
+}
+
+func TestGatewayValidator_WarnsWhenReplicasSetWithAutoscaling(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{},
+			Replicas:    ptr.To(int32(3)),
+			Autoscaling: &v1alpha1.AutoscalingSpec{MaxReplicas: 5},
+		},
+	}
+	warnings, err := (&GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected the combination to be admitted, got %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "spec.replicas is ignored") {
+		t.Errorf("warnings = %q, want one saying spec.replicas is ignored", warnings)
+	}
+}
+
+func TestGatewayValidator_NoReplicasWarningWithoutAutoscaling(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{},
+			Replicas: ptr.To(int32(3)),
+		},
+	}
+	warnings, err := (&GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
+	if err != nil || len(warnings) != 0 {
+		t.Errorf("warnings = %q, err = %v; want neither", warnings, err)
+	}
+}
+
+// A CE gateway can only carry an enabled spec.openapi when it was stored before
+// admission refused it and the update leaves it enabled; that is the case that
+// warns. Enabling it is rejected.
+func TestGatewayValidator_WarnsWhenOpenAPIIsStoredOnACEGateway(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		openapi *v1alpha1.OpenAPIExportSpec
+		want    int
+	}{
+		{"export enabled", &v1alpha1.OpenAPIExportSpec{Enabled: true}, 1},
+		{"export disabled", &v1alpha1.OpenAPIExportSpec{Enabled: false}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &v1alpha1.KrakenDGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+				Spec: v1alpha1.KrakenDGatewaySpec{
+					Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{}, OpenAPI: tc.openapi,
+				},
+			}
+			gw := old.DeepCopy()
+			gw.Spec.Replicas = ptr.To(int32(2))
+			warnings, err := (&GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), old, gw)
+			if err != nil {
+				t.Fatalf("expected the gateway to be admitted, got %v", err)
+			}
+			if len(warnings) != tc.want ||
+				(tc.want == 1 && !strings.Contains(warnings[0], "spec.openapi is ignored on CE gateways")) {
+				t.Errorf("warnings = %q, want %d saying spec.openapi is ignored on CE gateways", warnings, tc.want)
+			}
+		})
+	}
+}
+
+// A CE gateway keeps an enabled Dragonfly only when it was stored before
+// admission refused it and the update leaves it enabled; that is the case that
+// warns.
+func TestGatewayValidator_WarnsWhenDragonflyIsStoredOnACEGateway(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dragonfly *v1alpha1.DragonflySpec
+		want      int
+	}{
+		{"enabled", &v1alpha1.DragonflySpec{Enabled: true}, 1},
+		{"disabled", &v1alpha1.DragonflySpec{Enabled: false}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := testGateway()
+			old.Spec.Dragonfly = tc.dragonfly
+			gw := old.DeepCopy()
+			gw.Spec.Replicas = ptr.To(int32(2))
+			warnings, err := (&GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), old, gw)
+			if err != nil {
+				t.Fatalf("expected the gateway to be admitted, got %v", err)
+			}
+			if len(warnings) != tc.want ||
+				(tc.want == 1 && !strings.Contains(warnings[0], "spec.dragonfly.enabled has no effect on CE gateways")) {
+				t.Errorf("warnings = %q, want %d saying spec.dragonfly.enabled has no effect on CE gateways",
+					warnings, tc.want)
+			}
+		})
+	}
+}
+
+// terminating marks obj as being deleted, the state in which the API server
+// sends finalizer-removal UPDATEs.
+func terminating[T metav1.Object](obj T) T {
+	obj.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	obj.SetFinalizers([]string{"foregroundDeletion"})
+	return obj
+}
+
+// unfinalized returns a copy of obj with its finalizers removed, the new
+// object of a finalizer-removal UPDATE.
+func unfinalized[T client.Object](obj T) T {
+	c := obj.DeepCopyObject().(T)
+	c.SetFinalizers(nil)
+	return c
+}
+
+func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
+	ctx := context.Background()
+	gw := terminating(&v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionEE, Config: v1alpha1.GatewayConfig{}, // EE without a license
+		},
+	})
+	ep := terminating(&v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "deleted-gw"}},
+	})
+	policy := terminating(&v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: -1}},
+	})
+	ac := terminating(&v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "deleted-gw"},
+			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
+			Trigger:    v1alpha1.TriggerOnChange,
+		},
+	})
+	cases := []struct {
+		name     string
+		validate func() (admission.Warnings, error)
+	}{
+		{"gateway", func() (admission.Warnings, error) {
+			return (&GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(ctx, gw, unfinalized(gw))
+		}},
+		{"endpoint", func() (admission.Warnings, error) {
+			return (&EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(ctx, ep, unfinalized(ep))
+		}},
+		{"policy", func() (admission.Warnings, error) {
+			return (&PolicyValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).
+				ValidateUpdate(ctx, policy, unfinalized(policy))
+		}},
+		{"autoconfig", func() (admission.Warnings, error) {
+			return (&AutoConfigValidator{Client: fakeClient()}).ValidateUpdate(ctx, ac, unfinalized(ac))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			warnings, err := tc.validate()
+			if err != nil || len(warnings) != 0 {
+				t.Errorf("update of a terminating %s: warnings = %q, err = %v; want it admitted silently",
+					tc.name, warnings, err)
+			}
+		})
+	}
+}
+
+func TestGatewayValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
+	oldGW := terminating(&v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionCE},
+	})
+	newGW := oldGW.DeepCopy()
+	negative := resource.MustParse("-1Gi")
+	newGW.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true", TmpSizeLimit: &negative}
+
+	_, err := (&GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), oldGW, newGW)
+	if err == nil {
+		t.Fatal("a spec change to an invalid value on a terminating gateway was admitted; want it rejected")
+	}
+}
+
+func TestEndpointValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}}
+	oldEP := terminating(&v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"}},
+	})
+	newEP := oldEP.DeepCopy()
+	newEP.Spec.GatewayRef.Name = "missing-gw"
+
+	_, err := (&EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), oldEP, newEP)
+	if err == nil {
+		t.Fatal("a spec change to an invalid value on a terminating endpoint was admitted; want it rejected")
+	}
+}
+
+func TestAutoConfigValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}}
+	oldAC := terminating(&v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
+			Trigger:    v1alpha1.TriggerOnChange,
+		},
+	})
+	newAC := oldAC.DeepCopy()
+	newAC.Spec.GatewayRef.Name = "missing-gw"
+
+	_, err := (&AutoConfigValidator{Client: fakeClient(gw)}).ValidateUpdate(context.Background(), oldAC, newAC)
+	if err == nil {
+		t.Fatal("a spec change to an invalid value on a terminating autoconfig was admitted; want it rejected")
+	}
+}
+
+func TestTerminatingWithUnchangedSpec(t *testing.T) {
+	base := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 10}},
+	}
+	changed := base.DeepCopy()
+	changed.Spec.RateLimit.MaxRate = 20
+	unfinalizedTerminating := func(o *v1alpha1.KrakenDBackendPolicy) *v1alpha1.KrakenDBackendPolicy {
+		return unfinalized(terminating(o.DeepCopy()))
+	}
+
+	cases := []struct {
+		name           string
+		oldObj, newObj runtime.Object
+		want           bool
+	}{
+		{"terminating with the same spec", terminating(base.DeepCopy()), terminating(base.DeepCopy()), true},
+		{"terminating with a finalizer removed", terminating(base.DeepCopy()), unfinalizedTerminating(base), true},
+		{"not terminating", base.DeepCopy(), base.DeepCopy(), false},
+		{"terminating with a changed spec", terminating(base.DeepCopy()), terminating(changed), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := terminatingWithUnchangedSpec(tc.oldObj, tc.newObj); got != tc.want {
+				t.Errorf("terminatingWithUnchangedSpec = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGatewayValidator_WarnsAboutRedisSettingsWithNoEffect(t *testing.T) {
+	// KrakenD CE never uses the Redis pool, so the gateway is an EE one.
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionEE,
+			License: &v1alpha1.LicenseConfig{SecretRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "lic"}, Key: "LICENSE",
+			}},
+			Redis: &v1alpha1.RedisSpec{ConnectionPool: v1alpha1.RedisConnectionPool{
+				Addresses: []string{"redis:6379"}, ReadTimeout: "3s", WriteTimeout: "3s",
+				Password: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "p",
+				},
+				TLS: &v1alpha1.RedisTLSConfig{Enabled: true},
+			}},
+		},
+	}
+	warnings, err := (&GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"spec.redis.connectionPool.readTimeout", "spec.redis.connectionPool.writeTimeout",
+		"spec.redis.connectionPool.password", "spec.redis.connectionPool.tls",
+	} {
+		if !slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, field) }) {
+			t.Errorf("warnings %q do not mention %s", warnings, field)
+		}
+	}
+
+	// Dragonfly requires its password, which is not rendered into KrakenD's
+	// pool on EE; KrakenD CE never uses the pool.
+	ee := &v1alpha1.KrakenDGateway{Spec: v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionEE,
+		Dragonfly: &v1alpha1.DragonflySpec{Enabled: true, Authentication: &v1alpha1.DragonflyAuthSpec{
+			PasswordFromSecret: &corev1.SecretKeySelector{Key: "p"},
+		}},
+	}}
+	const dfPassword = "spec.dragonfly.authentication.passwordFromSecret"
+	if w := redisPoolWarnings(ee); len(w) != 1 || !strings.Contains(w[0], dfPassword) ||
+		!strings.Contains(w[0], "Dragonfly requires this password") || !strings.Contains(w[0], "refused") {
+		t.Errorf("EE Dragonfly password warnings = %q, want one naming %s and the refused connections", w, dfPassword)
+	}
+	ce := ee.DeepCopy()
+	ce.Spec.Edition = v1alpha1.EditionCE
+	if w := redisPoolWarnings(ce); len(w) != 0 {
+		t.Errorf("CE Dragonfly password warnings = %q, want none", w)
+	}
+}
+
+// A probe stored before the probe rules existed must not block other edits.
+func TestGatewayAdmission_RatchetsStoredFieldErrors(t *testing.T) {
+	old := gwWithProbes(nil, &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+		Host: "10.0.0.1", Path: "/", Port: intstr.FromInt32(8090)}}}, "")
+	edited := old.DeepCopy()
+	edited.Spec.Replicas = ptr.To[int32](3)
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Fatalf("unrelated edit denied: %+v", resp.Result)
+	}
+	worse := edited.DeepCopy()
+	worse.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true",
+		TmpSizeLimit: ptr.To(resource.MustParse("-1"))}
+	if resp := review(t, v, "alice", worse, old); resp.Allowed {
+		t.Error("newly introduced negative tmpSizeLimit admitted")
+	}
+}
+
+// A metadata-only update is not validated at all: no stored error, and no
+// warning, is reported again.
+func TestGatewayAdmission_UnchangedSpecIsNotValidated(t *testing.T) {
+	old := gwWithProbes(nil, &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+		Host: "10.0.0.1", Path: "/", Port: intstr.FromInt32(8090)}}}, "")
+	old.Spec.Replicas = ptr.To[int32](2)
+	old.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MaxReplicas: 5}
+	labeled := old.DeepCopy()
+	labeled.Labels = map[string]string{"team": "edge"}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", labeled, old)
+	if !resp.Allowed {
+		t.Errorf("label-only update denied: %+v", resp.Result)
+	}
+	if len(resp.Warnings) != 0 {
+		t.Errorf("label-only update warned: %q", resp.Warnings)
+	}
+}
+
+// An error without a value (Forbidden) reads the same before and after a
+// change, so a probe that changed is judged again whatever the stored one said.
+func TestGatewayAdmission_ChangedProbeIsRechecked(t *testing.T) {
+	probeAt := func(host string) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+			Host: host, Path: "/", Port: intstr.FromInt32(8090)}}}
+	}
+	old := gwWithProbes(nil, probeAt("10.0.0.1"), "")
+	swapped := gwWithProbes(nil, probeAt("10.0.0.2"), "")
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", swapped, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		resp.Result.Details.Causes[0].Field != "spec.openapi.readinessProbe.httpGet.host" {
+		t.Errorf("probe host 10.0.0.1 -> 10.0.0.2: %+v, want 422 on spec.openapi.readinessProbe.httpGet.host", resp.Result)
+	}
+}
+
+func TestGatewayAdmission_ChangedTerminationGracePeriodIsRechecked(t *testing.T) {
+	readinessWith := func(grace int64) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: tcpHandler(), TerminationGracePeriodSeconds: ptr.To(grace)}
+	}
+	old := gwWithProbes(nil, readinessWith(30), "")
+	changed := gwWithProbes(nil, readinessWith(60), "")
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", changed, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		resp.Result.Details.Causes[0].Field != "spec.openapi.readinessProbe.terminationGracePeriodSeconds" {
+		t.Errorf("readiness grace 30 -> 60: %+v, want 422 on its terminationGracePeriodSeconds", resp.Result)
+	}
+	scaled := old.DeepCopy()
+	scaled.Spec.Replicas = ptr.To[int32](3)
+	if resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", scaled, old); !resp.Allowed {
+		t.Errorf("unrelated edit with an unchanged probe denied: %+v", resp.Result)
+	}
+}
+
+func TestAutoConfigAdmission_RatchetsGatewayRefAndFields(t *testing.T) {
+	old := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gone"}, Trigger: v1alpha1.TriggerOnChange,
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"},
+			Overrides: []v1alpha1.OperationOverride{{OperationID: "getA",
+				ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":{"audience":"x"}}`)}}},
+		},
+	}
+	v := &AutoConfigValidator{Client: fakeClient()}
+
+	edited := old.DeepCopy()
+	edited.Spec.Filter = &v1alpha1.FilterSpec{IncludeTags: []string{"public"}}
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("unrelated edit denied: %+v", resp.Result)
+	}
+
+	moved := edited.DeepCopy()
+	moved.Spec.GatewayRef.Name = "other"
+	if resp := review(t, v, "alice", moved, old); resp.Allowed {
+		t.Error("gatewayRef changed to a missing gateway admitted")
+	}
+
+	worse := edited.DeepCopy()
+	worse.Spec.Overrides[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"audience":"y"}}`)}
+	if resp := review(t, v, "alice", worse, old); resp.Allowed {
+		t.Error("a different malformed audience admitted")
+	}
+}
+
+// The runAs errors carry the same text for every violating shape, so a stored
+// one must not hide a changed securityContext that still violates the rule.
+func TestGatewayAdmission_ChangedDragonflyRunAsStillUnacknowledgedIsRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionEE,
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled:            true,
+				PodSecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To(int64(0))},
+			},
+		},
+	}
+	changed := old.DeepCopy()
+	changed.Spec.Dragonfly.PodSecurityContext.RunAsNonRoot = ptr.To(true)
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", changed, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Errorf("changed, still unacknowledged dragonfly runAsUser 0: %+v, want 422", resp.Result)
+	}
+}
+
+func TestGatewayAdmission_ChangedPostRestartRunAsStillUnacknowledgedIsRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true, Script: "true",
+				SecurityContext: &corev1.SecurityContext{RunAsUser: ptr.To(int64(0))},
+			},
+		},
+	}
+	changed := old.DeepCopy()
+	changed.Spec.PostRestartJob.SecurityContext.RunAsNonRoot = ptr.To(true)
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", changed, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Errorf("changed, still unacknowledged postRestartJob runAsUser 0: %+v, want 422", resp.Result)
+	}
+}
+
+func TestNewValidators_HandTheCheckerToTheEndpointValidator(t *testing.T) {
+	chk := &scriptedChecker{}
+
+	v := NewValidators(fakeClient(), fakeClient(), chk, "", nil)
+
+	if v.Endpoint.Checker != ConfigChecker(chk) {
+		t.Errorf("the endpoint validator's checker = %v, want the one passed in", v.Endpoint.Checker)
+	}
+}
+
+func TestNewValidators_HandTheCheckerToThePolicyValidator(t *testing.T) {
+	chk := &scriptedChecker{}
+
+	v := NewValidators(fakeClient(), fakeClient(), chk, "", nil)
+
+	if v.Policy.Checker != ConfigChecker(chk) {
+		t.Errorf("the policy validator's checker = %v, want the one passed in", v.Policy.Checker)
+	}
+}
+
+func TestNewValidators_GiveTheEndpointValidatorAVerdictMemo(t *testing.T) {
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "", nil)
+
+	if v.Endpoint.Memo == nil {
+		t.Error("the endpoint validator has no verdict memo, so every write runs every check again")
+	}
+}
+
+func TestNewValidators_GiveTheGatewayValidatorAVerdictMemo(t *testing.T) {
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "", nil)
+
+	if v.Gateway.Memo == nil {
+		t.Error("the gateway validator has no verdict memo, so every write runs every check again")
+	}
+}
+
+func TestNewValidators_GiveThePolicyValidatorAVerdictMemo(t *testing.T) {
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "", nil)
+
+	if v.Policy.Memo == nil {
+		t.Error("the policy validator has no verdict memo, so every write runs every check again")
+	}
+}
+
+func TestAutoConfigAdmission_OverrideOperationIDs(t *testing.T) {
+	ac := func(ids ...string) *v1alpha1.KrakenDAutoConfig {
+		a := &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+			Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+				OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+		}
+		for _, id := range ids {
+			a.Spec.Overrides = append(a.Spec.Overrides, v1alpha1.OperationOverride{OperationID: id})
+		}
+		return a
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+	tests := []struct {
+		name   string
+		obj    *v1alpha1.KrakenDAutoConfig
+		reject string
+	}{
+		{"distinct", ac("getA", "getB"), ""},
+		{"duplicate", ac("getA", "getA"), "Duplicate value"},
+		{"collide after sanitizing", ac("get_a", "get-a"), `collides with operationId "get_a"`},
+		{"collide after lowercasing", ac("getA", "geta"), `collides with operationId "getA"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := review(t, v, "alice", tt.obj, nil)
+			if tt.reject == "" {
+				if !resp.Allowed {
+					t.Errorf("denied: %+v", resp.Result)
+				}
+				return
+			}
+			if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) == 0 ||
+				resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" ||
+				!strings.Contains(resp.Result.Details.Causes[0].Message, tt.reject) {
+				t.Errorf("response = %+v, want %q on spec.overrides[1].operationId", resp.Result, tt.reject)
+			}
+		})
+	}
+}
+
+func TestAutoConfigAdmission_WarnsOnMissingPolicyRefs(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+			Defaults: &v1alpha1.Defaults{PolicyRef: &v1alpha1.PolicyRef{Name: "missing-default"}},
+			Overrides: []v1alpha1.OperationOverride{
+				{OperationID: "getA", PolicyRef: &v1alpha1.PolicyRef{Name: "present"}}},
+		},
+	}
+	present := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "present", Namespace: "default"}}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway(), present)}, "alice", ac, nil)
+	if !resp.Allowed {
+		t.Fatalf("denied: %+v", resp.Result)
+	}
+	if len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "spec.defaults.policyRef") ||
+		!strings.Contains(resp.Warnings[0], "missing-default") {
+		t.Errorf("warnings = %v, want one naming spec.defaults.policyRef", resp.Warnings)
+	}
+}
+
+func TestAutoConfigAdmission_UpdateWarnsOnMissingPolicyRefsOnlyWhenTheSpecChanges(t *testing.T) {
+	old := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+
+	unchanged := old.DeepCopy()
+	unchanged.Labels = map[string]string{"a": "b"}
+	unchanged.Spec.Defaults = &v1alpha1.Defaults{PolicyRef: &v1alpha1.PolicyRef{Name: "gone"}}
+	unchangedOld := unchanged.DeepCopy()
+	if resp := review(t, v, "alice", unchanged, unchangedOld); len(resp.Warnings) != 0 {
+		t.Errorf("an update that leaves the spec alone warned: %v", resp.Warnings)
+	}
+
+	resp := review(t, v, "alice", unchanged, old)
+	if !resp.Allowed || len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "gone") {
+		t.Errorf("response = %+v, warnings = %v, want one naming the missing policy", resp.Result, resp.Warnings)
+	}
+}
+
+func TestAutoConfigAdmission_RatchetsAStoredOverrideCollision(t *testing.T) {
+	stored := func(ids ...string) *v1alpha1.KrakenDAutoConfig {
+		a := &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+			Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+				OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+		}
+		for _, id := range ids {
+			a.Spec.Overrides = append(a.Spec.Overrides, v1alpha1.OperationOverride{OperationID: id})
+		}
+		return a
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+	old := stored("get_a", "get-a")
+
+	edited := old.DeepCopy()
+	edited.Spec.Filter = &v1alpha1.FilterSpec{IncludeTags: []string{"public"}}
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("unrelated edit of an object with a stored collision denied: %+v", resp.Result)
+	}
+
+	shifted := stored("getB", "get_a", "get-a")
+	if resp := review(t, v, "alice", shifted, old); resp.Allowed {
+		t.Error("an override inserted above the colliding pair admitted: the error moved to a new index")
+	}
+}
+
+// Additional endpoints are a map list keyed by endpoint and method, so a stored
+// audience error follows its entry when earlier entries are removed or the
+// list is reordered. A new entry, or a changed one, is checked in full.
+func TestAutoConfigAdmission_RatchetsAnAdditionalEndpointAudienceByItsKey(t *testing.T) {
+	badAudience := func(audience string) *runtime.RawExtension {
+		return &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":{"audience":"` + audience + `"}}`)}
+	}
+	entry := func(path, method string, extra *runtime.RawExtension) v1alpha1.AdditionalEndpoint {
+		return v1alpha1.AdditionalEndpoint{Endpoint: path, Method: method, ExtraConfig: extra}
+	}
+	acWith := func(entries ...v1alpha1.AdditionalEndpoint) *v1alpha1.KrakenDAutoConfig {
+		return &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+			Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+				OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+				AdditionalEndpoints: entries},
+		}
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+	a, b := entry("/a", "GET", nil), entry("/b", "GET", badAudience("x"))
+	old := acWith(a, b)
+
+	tests := []struct {
+		name   string
+		edited *v1alpha1.KrakenDAutoConfig
+		denied string
+	}{
+		{name: "removing an earlier entry", edited: acWith(b)},
+		{name: "reordering the entries", edited: acWith(b, a)},
+		{name: "inserting an entry above", edited: acWith(entry("/c", "GET", nil), a, b)},
+		{name: "an unset method is GET", edited: acWith(entry("/b", "", badAudience("x")))},
+		{name: "changing the entry's audience", edited: acWith(a, entry("/b", "GET", badAudience("y"))),
+			denied: "spec.additionalEndpoints[1]"},
+		{name: "adding a new entry with a bad audience", edited: acWith(b, a, entry("/c", "GET", badAudience("x"))),
+			denied: "spec.additionalEndpoints[2]"},
+		{name: "the same path under another method is a new entry",
+			edited: acWith(a, b, entry("/b", "POST", badAudience("x"))), denied: "spec.additionalEndpoints[2]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := review(t, v, "alice", tt.edited, old)
+			if tt.denied == "" {
+				if !resp.Allowed {
+					t.Errorf("denied: %+v", resp.Result)
+				}
+				return
+			}
+			if resp.Allowed || !strings.Contains(resp.Result.Message, tt.denied) {
+				t.Errorf("response = %+v, want a denial naming %s", resp.Result, tt.denied)
+			}
+		})
+	}
+
+	t.Run("a stored duplicate key does not grandfather an added copy", func(t *testing.T) {
+		stored := acWith(b, b)
+		if resp := review(t, v, "alice", acWith(b, b, b), stored); resp.Allowed {
+			t.Error("a third copy of a stored entry with a bad audience admitted")
+		}
+	})
+}
+
+// Names are cut at 253 characters after the AutoConfig name is prefixed, so two
+// long operationIds can give one generated endpoint name.
+func TestAutoConfigAdmission_RejectsOverridesThatGenerateOneEndpointName(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+			Overrides: []v1alpha1.OperationOverride{{OperationID: long + "a"}, {OperationID: long + "b"}}},
+	}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
+	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) == 0 ||
+		resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" {
+		t.Errorf("response = %+v, want a collision on spec.overrides[1].operationId", resp.Result)
+	}
+}
+
+func TestAutoConfigAdmission_WarnsOnMissingPolicyRefsInFieldOrder(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+	}
+	for i := range 11 {
+		ac.Spec.Overrides = append(ac.Spec.Overrides, v1alpha1.OperationOverride{
+			OperationID: fmt.Sprintf("op%d", i), PolicyRef: &v1alpha1.PolicyRef{Name: "gone"}})
+	}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
+	if len(resp.Warnings) < 3 || !strings.HasPrefix(resp.Warnings[2], "spec.overrides[2].policyRef") {
+		t.Errorf("warnings = %v, want them in the order of the overrides", resp.Warnings)
+	}
+}
+
+func TestAutoConfigAdmission_BoundsTheMissingPolicyRefWarnings(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+	}
+	for i := range 8 {
+		ac.Spec.Overrides = append(ac.Spec.Overrides, v1alpha1.OperationOverride{
+			OperationID: fmt.Sprintf("op%d", i), PolicyRef: &v1alpha1.PolicyRef{Name: "gone"}})
+	}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
+	if len(resp.Warnings) != maxPolicyWarnings+1 || !strings.HasPrefix(resp.Warnings[maxPolicyWarnings], "3 more") {
+		t.Errorf("warnings = %v, want %d, then one counting the other 3", resp.Warnings, maxPolicyWarnings)
+	}
+}
+
+func TestAutoConfigAdmission_WarnsOnMissingAdditionalEndpointPolicyRefs(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+			AdditionalEndpoints: []v1alpha1.AdditionalEndpoint{{Endpoint: "/x", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"},
+					{Host: []string{"http://svc"}, URLPattern: "/y",
+						PolicyRef: &v1alpha1.PolicyRef{Name: "gone", Namespace: "other"}}}}}},
+	}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
+	if len(resp.Warnings) != 1 ||
+		!strings.HasPrefix(resp.Warnings[0], "spec.additionalEndpoints[0].backends[1].policyRef") ||
+		!strings.Contains(resp.Warnings[0], "other/gone") {
+		t.Errorf("warnings = %v, want one naming the backend and other/gone", resp.Warnings)
 	}
 }

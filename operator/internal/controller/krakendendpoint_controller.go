@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,32 +32,44 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // KrakenDEndpointReconciler reconciles a KrakenDEndpoint object.
-// It validates gateway and policy references, maintaining endpoint
-// status. Config rendering is handled by the gateway controller.
+// It resolves gateway and policy references into ResolvedRefs, and derives
+// Ready and phase. Config rendering, and the Accepted condition, belong to
+// the gateway controller.
 type KrakenDEndpointReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// Tracer records the reconcile's spans; nil records none.
+	Tracer trace.Tracer
 }
 
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints/status,verbs=patch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendgateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile validates the gateway and policy references for a
-// KrakenDEndpoint and updates its status accordingly.
-func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// Reconcile resolves the gateway and policy references of a KrakenDEndpoint
+// into its ResolvedRefs condition, and derives Ready and phase from
+// ResolvedRefs and the gateway-owned Accepted condition. It patches status
+// with an optimistic lock, only when the status changed, so it never
+// overwrites the gateway's Accepted condition. The legacy Available condition
+// is dropped on the first reconcile.
+func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, retErr error) {
+	ctx, span := startReconcile(ctx, r.Tracer, "KrakenDEndpoint", req)
+	defer func() { tracing.End(span, retErr) }()
 	log := logf.FromContext(ctx)
 
 	var ep v1alpha1.KrakenDEndpoint
@@ -66,170 +79,124 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 		return ctrl.Result{}, fmt.Errorf("getting endpoint %s: %w", req.NamespacedName, err)
 	}
+	spanGeneration(ctx, ep.Generation)
+	base := ep.DeepCopy()
 
-	// Capture original status for change detection
-	origPhase := ep.Status.Phase
-	origGeneration := ep.Status.ObservedGeneration
-	origCount := ep.Status.EndpointCount
-	origMethods := ep.Status.Methods
-	origConditions := ep.Status.DeepCopy().Conditions
-
-	// Initialize phase on first reconcile
-	if ep.Status.Phase == "" {
-		ep.Status.Phase = v1alpha1.EndpointPhasePending
+	resolved, err := r.resolveRefs(ctx, &ep)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	// Validate gateway reference exists
-	var gw v1alpha1.KrakenDGateway
-	gwKey := types.NamespacedName{
-		Name:      ep.Spec.GatewayRef.Name,
-		Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
+	applyEndpointStatus(&ep, resolved)
+	if endpointStatusEqual(&base.Status, &ep.Status) {
+		log.V(1).Info("endpoint status unchanged", "phase", ep.Status.Phase)
+		return ctrl.Result{}, nil
 	}
-	if err := r.Get(ctx, gwKey, &gw); err != nil {
-		if errors.IsNotFound(err) {
-			return r.setDetached(ctx, &ep, "GatewayNotFound",
-				fmt.Sprintf("gateway %s/%s not found", gwKey.Namespace, gwKey.Name))
+	sctx, status := tracing.Start(ctx, r.Tracer, "endpoint.status")
+	patchErr := r.Status().Patch(sctx, &ep, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+	tracing.End(status, patchErr)
+	if patchErr != nil {
+		if errors.IsConflict(patchErr) {
+			return lostWriteRace(ctx, patchErr)
 		}
-		return ctrl.Result{}, fmt.Errorf("getting gateway %s: %w", gwKey, err)
+		return ctrl.Result{}, fmt.Errorf("patching endpoint status: %w", patchErr)
 	}
 
-	// Validate all policy references exist (deduplicated)
-	policyKeys := make(map[string]types.NamespacedName)
-	for _, entry := range ep.Spec.Endpoints {
-		for _, be := range entry.Backends {
-			if be.PolicyRef != nil {
-				mapKey := be.PolicyRef.PolicyKey(ep.Namespace)
-				if _, ok := policyKeys[mapKey]; !ok {
-					policyKeys[mapKey] = types.NamespacedName{
-						Name:      be.PolicyRef.Name,
-						Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
-					}
-				}
-			}
-		}
-	}
-	for _, policyKey := range policyKeys {
-		var policy v1alpha1.KrakenDBackendPolicy
-		if err := r.Get(ctx, policyKey, &policy); err != nil {
-			if errors.IsNotFound(err) {
-				return r.setInvalid(ctx, &ep, "PolicyNotFound",
-					fmt.Sprintf("policy %q not found in namespace %q", policyKey.Name, policyKey.Namespace))
-			}
-			return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", policyKey, err)
-		}
-	}
-
-	// All references valid — set Active
-	ep.Status.Phase = v1alpha1.EndpointPhaseActive
-	ep.Status.ObservedGeneration = ep.Generation
-	ep.Status.EndpointCount = int32(len(ep.Spec.Endpoints))
-	ep.Status.Methods = distinctMethods(ep.Spec.Endpoints)
-	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionAvailable,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: ep.Generation,
-		Reason:             "ReferencesValid",
-		Message:            "All gateway and policy references are valid",
-	})
-
-	// Only write status if it actually changed
-	statusChanged := ep.Status.Phase != origPhase ||
-		ep.Status.ObservedGeneration != origGeneration ||
-		ep.Status.EndpointCount != origCount ||
-		ep.Status.Methods != origMethods ||
-		!conditionsEqual(origConditions, ep.Status.Conditions)
-	if statusChanged {
-		if err := r.Status().Update(ctx, &ep); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating endpoint status to Active: %w", err)
-		}
-	}
+	recordConditionTransition(r.Recorder, &ep,
+		meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionResolvedRefs), resolved)
 
 	log.V(1).Info("endpoint reconciled", "phase", ep.Status.Phase, "endpoints", ep.Status.EndpointCount)
 	return ctrl.Result{}, nil
 }
 
-// Field index keys for efficient watch-to-reconcile mapping.
-const (
-	// EndpointGatewayIndex is the field index key for looking up endpoints
-	// by their gateway reference. Exported for use by the webhook package.
-	EndpointGatewayIndex = ".spec.gatewayRef.namespacedName"
-
-	// EndpointPolicyIndex is the field index key for looking up endpoints
-	// by their policy references. Exported for use by the webhook package.
-	EndpointPolicyIndex = ".spec.endpoints.backends.policyRef.namespacedName"
-)
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := EnsureEndpointIndexes(mgr); err != nil {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.KrakenDEndpoint{},
-			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
-		).
+		For(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(endpointPredicate())).
 		Watches(
 			&v1alpha1.KrakenDGateway{},
 			handler.EnqueueRequestsFromMapFunc(r.gatewayToEndpoints),
+			builder.WithPredicates(existencePredicate()),
 		).
 		Watches(
 			&v1alpha1.KrakenDBackendPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.policyToEndpoints),
+			builder.WithPredicates(existencePredicate()),
 		).
 		Named("krakendendpoint").
 		Complete(r)
 }
 
-func (r *KrakenDEndpointReconciler) setDetached(
-	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, reason, message string,
-) (ctrl.Result, error) {
-	return r.setErrorPhase(ctx, ep, v1alpha1.EndpointPhaseDetached, reason, message)
-}
-
-func (r *KrakenDEndpointReconciler) setInvalid(
-	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, reason, message string,
-) (ctrl.Result, error) {
-	return r.setErrorPhase(ctx, ep, v1alpha1.EndpointPhaseInvalid, reason, message)
-}
-
-// setErrorPhase sets the endpoint to the given error phase with change detection.
-func (r *KrakenDEndpointReconciler) setErrorPhase(
-	ctx context.Context,
-	ep *v1alpha1.KrakenDEndpoint,
-	phase v1alpha1.EndpointPhase,
-	reason, message string,
-) (ctrl.Result, error) {
-	origPhase := ep.Status.Phase
-	origCount := ep.Status.EndpointCount
-	origMethods := ep.Status.Methods
-	origConditions := ep.Status.DeepCopy().Conditions
-
-	ep.Status.Phase = phase
-	ep.Status.ObservedGeneration = ep.Generation
-	ep.Status.EndpointCount = int32(len(ep.Spec.Endpoints))
-	ep.Status.Methods = distinctMethods(ep.Spec.Endpoints)
-	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionAvailable,
-		Status:             metav1.ConditionFalse,
+// resolveRefs returns the ResolvedRefs condition for ep. It is False when its
+// gateway or any policy it references does not exist. A lookup error other
+// than NotFound is returned, so the reconcile is retried.
+func (r *KrakenDEndpointReconciler) resolveRefs(
+	ctx context.Context, ep *v1alpha1.KrakenDEndpoint,
+) (_ metav1.Condition, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "endpoint.resolve_refs")
+	defer func() { tracing.End(span, retErr) }()
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionResolvedRefs,
+		Status:             metav1.ConditionTrue,
 		ObservedGeneration: ep.Generation,
-		Reason:             reason,
-		Message:            message,
-	})
-
-	if origPhase != phase {
-		r.Recorder.Event(ep, "Warning", reason, message)
+		Reason:             v1alpha1.ReasonRefsResolved,
+		Message:            "Gateway and all policy references resolved",
 	}
-	changed := ep.Status.Phase != origPhase ||
-		ep.Status.EndpointCount != origCount ||
-		ep.Status.Methods != origMethods ||
-		!conditionsEqual(origConditions, ep.Status.Conditions)
-	if changed {
-		if err := r.Status().Update(ctx, ep); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating endpoint status to %s: %w", phase, err)
+	gwKey := types.NamespacedName{
+		Name:      ep.Spec.GatewayRef.Name,
+		Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
+	}
+	var gw v1alpha1.KrakenDGateway
+	if err := r.Get(ctx, gwKey, &gw); err != nil {
+		if !errors.IsNotFound(err) {
+			return cond, fmt.Errorf("getting gateway %s: %w", gwKey, err)
+		}
+		cond.Status, cond.Reason = metav1.ConditionFalse, v1alpha1.ReasonGatewayNotFound
+		cond.Message = fmt.Sprintf("gateway %s/%s not found", gwKey.Namespace, gwKey.Name)
+		return cond, nil
+	}
+	// policyRefsFromEndpoint lists each referenced policy once, in spec
+	// order, so the first missing policy (and the message) is stable.
+	for _, ref := range policyRefsFromEndpoint(ep) {
+		var policy v1alpha1.KrakenDBackendPolicy
+		if err := r.Get(ctx, ref.NamespacedName, &policy); err != nil {
+			if !errors.IsNotFound(err) {
+				return cond, fmt.Errorf("getting policy %s: %w", ref.NamespacedName, err)
+			}
+			cond.Status, cond.Reason = metav1.ConditionFalse, v1alpha1.ReasonPolicyNotFound
+			cond.Message = fmt.Sprintf("policy %q not found in namespace %q", ref.Name, ref.Namespace)
+			return cond, nil
 		}
 	}
-	return ctrl.Result{}, nil
+	return cond, nil
+}
+
+// endpointPredicate gates the primary KrakenDEndpoint watch. It passes spec
+// changes (generation bumps) and changes to the gateway-owned Accepted
+// condition, from which Ready and phase are derived. The controller's own
+// status writes change neither, so they do not enqueue the endpoint again.
+func endpointPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{UpdateFunc: acceptedChanged},
+	)
+}
+
+// acceptedChanged reports whether an update changed the endpoint's Accepted
+// condition, ignoring its lastTransitionTime.
+func acceptedChanged(e event.UpdateEvent) bool {
+	oldEp, okOld := e.ObjectOld.(*v1alpha1.KrakenDEndpoint)
+	newEp, okNew := e.ObjectNew.(*v1alpha1.KrakenDEndpoint)
+	if !okOld || !okNew {
+		return false
+	}
+	return !sameCondition(
+		meta.FindStatusCondition(oldEp.Status.Conditions, v1alpha1.ConditionAccepted),
+		meta.FindStatusCondition(newEp.Status.Conditions, v1alpha1.ConditionAccepted),
+	)
 }
 
 // gatewayToEndpoints maps a Gateway event to endpoints that reference it via field index.
@@ -239,7 +206,7 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 	log := logf.FromContext(ctx)
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{EndpointGatewayIndex: obj.GetNamespace() + "/" + obj.GetName()},
+		client.MatchingFields{fieldindex.EndpointGateway: obj.GetNamespace() + "/" + obj.GetName()},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for gateway mapping", "gateway", obj.GetName())
 		return nil
@@ -264,7 +231,7 @@ func (r *KrakenDEndpointReconciler) policyToEndpoints(
 	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{EndpointPolicyIndex: indexKey},
+		client.MatchingFields{fieldindex.EndpointPolicy: indexKey},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for policy mapping", "policy", obj.GetName())
 		return nil
@@ -294,4 +261,29 @@ func distinctMethods(entries []v1alpha1.EndpointEntry) string {
 	}
 	sort.Strings(methods)
 	return strings.Join(methods, ",")
+}
+
+// applyEndpointStatus sets resolved on ep, drops the legacy Available
+// condition, and derives Ready and phase from ResolvedRefs and the
+// gateway-owned Accepted condition, which it leaves untouched.
+func applyEndpointStatus(ep *v1alpha1.KrakenDEndpoint, resolved metav1.Condition) {
+	meta.SetStatusCondition(&ep.Status.Conditions, resolved)
+	meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAvailable)
+	status, reason, message := v1alpha1.EndpointReady(ep.Status.Conditions)
+	setReadyCondition(&ep.Status.Conditions, ep.Generation, status, reason, message)
+	ep.Status.Phase = v1alpha1.EndpointPhaseFromReady(status, reason)
+	ep.Status.ObservedGeneration = ep.Generation
+	ep.Status.EndpointCount = int32(len(ep.Spec.Endpoints))
+	ep.Status.Methods = distinctMethods(ep.Spec.Endpoints)
+}
+
+// endpointStatusEqual reports whether a and b have the same content.
+// Conditions are compared with conditionsEqual, which ignores
+// LastTransitionTime.
+func endpointStatusEqual(a, b *v1alpha1.KrakenDEndpointStatus) bool {
+	return a.Phase == b.Phase &&
+		a.ObservedGeneration == b.ObservedGeneration &&
+		a.EndpointCount == b.EndpointCount &&
+		a.Methods == b.Methods &&
+		conditionsEqual(a.Conditions, b.Conditions)
 }

@@ -22,7 +22,7 @@ This document describes the Go application architecture for the KrakenD Operator
 6. [Endpoint Controller](#6-endpoint-controller)
 7. [Policy Controller](#7-policy-controller)
 8. [AutoConfig Controller](#8-autoconfig-controller)
-9. [License Monitor](#9-license-monitor)
+9. [License Evaluation](#9-license-evaluation)
 10. [Configuration Rendering Pipeline](#10-configuration-rendering-pipeline)
 11. [Resource Builders](#11-resource-builders)
 12. [Webhook Validation](#12-webhook-validation)
@@ -48,7 +48,7 @@ These principles govern all application code. They complement the Go coding stan
 | Deterministic output | The rendering pipeline produces byte-identical JSON for identical CRD state. Maps are serialized with sorted keys, slices are sorted by defined criteria. |
 | Fail fast at boundaries | Webhook validation rejects invalid CRs before they reach etcd. Controllers validate preconditions at the top of `Reconcile()` before mutating cluster state. |
 | No global state | No `init()` functions except for scheme registration (standard Kubebuilder convention). All other state is owned by structs wired in `main.go`. |
-| Testable by default | Every function that performs I/O accepts an interface parameter. Integration tests use envtest; unit tests use fakes and mocks. |
+| Testable by default | Every function that performs I/O accepts an interface parameter. Integration tests run against an ephemeral K3s cluster; unit tests use fakes and mocks. |
 
 ---
 
@@ -60,107 +60,147 @@ The entrypoint is responsible for wiring dependencies, registering controllers w
 
 ```mermaid
 flowchart TD
-    A[main] --> B[Parse flags and load config]
-    B --> C[Create controller-runtime Manager]
+    A[main] --> B[Parse flags]
+    B --> T[Set up telemetry from OTEL_* and the log flags, and route every logger through it]
+    T --> G0[Load the Kubernetes client config]
+    G0 --> C[Create controller-runtime Manager]
     C --> D[Register API scheme]
     D --> E[Create shared dependencies]
     E --> F[Register Gateway Controller]
     E --> G[Register Endpoint Controller]
     E --> H[Register Policy Controller]
     E --> I[Register AutoConfig Controller]
-    E --> J[Register License Monitor]
     E --> K[Register Webhooks]
-    F & G & H & I & J & K --> L[manager.Start context]
+    F & G & H & I & K --> L[manager.Start context]
+    L --> M[Flush telemetry, at most 5 s]
 ```
+
+`run()` registers grpc-go's logger first, because it must be set before any gRPC call, then parses the flags, because the log level and format come from them, and only then sets telemetry up and installs the loggers. The flush is deferred, so it runs on every return, and a failed set-up exits with status 1 before anything else starts.
 
 ### Manager Configuration
 
 ```go
-mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-    Scheme:                  scheme,
-    Metrics:                 metricsserver.Options{BindAddress: metricsAddr},
-    HealthProbeBindAddress:  probeAddr,
-    LeaderElection:          true,
-    LeaderElectionID:        "krakend-operator-leader",
-    LeaderElectionNamespace: leaderElectionNamespace,
+restConfig, err := ctrl.GetConfig()
+telemetry.TraceKubeAPI(restConfig, tel.TracerProvider)
+mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+    Scheme:    scheme,
+    NewClient: newManagerClient,
+    // Secrets and ConfigMaps are read live, never from the cache, and the
+    // cache keeps their metadata without annotations and managedFields.
+    Client: client.Options{
+        Cache: &client.CacheOptions{DisableFor: controller.UncachedObjects()},
+    },
+    Cache:                  cache.Options{ByObject: controller.CacheByObject()},
+    Metrics:                metricsServerOptions,
+    WebhookServer:          webhookServer, // telemetry.TraceWebhookServer(webhook.NewServer(...), tel.TracerProvider)
+    HealthProbeBindAddress: probeAddr,
+    LeaderElection:         enableLeaderElection, // --leader-elect, off by default
+    LeaderElectionID:       "krakend-operator-leader",
 })
 ```
+
+`GetConfig` returns an error that `run()` logs before exiting with status 1, where `GetConfigOrDie` exited itself, so the deferred telemetry flush still runs. `telemetry.TraceKubeAPI` wraps the `rest.Config` transport, so every request the manager's clients, the cache and the reader send under an active span is a client span of it, and the trace context is passed to the API server. `newManagerClient` builds the manager's client as controller-runtime does and wraps it in `telemetry.ReadEvents`, which adds a `k8s.client.get` or `k8s.client.list` event to the active span for each read, because a read the cache answers sends no request. `telemetry.TraceWebhookServer` wraps the webhook server so each admission request is a server span that continues the API server's trace.
+
+The controllers watch Secrets and ConfigMaps as metadata only (`builder.OnlyMetadata`), so no Secret `data` or ConfigMap payload is cached. `UncachedObjects` makes every `Get` and `List` of those kinds through the manager's client a live API request, and `CacheByObject` strips the annotations and `managedFields` from the metadata that is cached: a client-side `kubectl apply` repeats the whole object, data included, in the `kubectl.kubernetes.io/last-applied-configuration` annotation. The names, labels and owner references of every Secret and ConfigMap in the cluster stay cached, because the watches cannot select the user-named license Secrets and plugin ConfigMaps they follow. The same options are set on the integration suite's manager, which records any typed Secret or ConfigMap cache request (`TestManager_CachesNoSecretOrConfigMapContent`).
+
+The serving certificates are handed to the servers, not to watchers added to the manager. With `--webhook-cert-path` (webhooks enabled) or `--metrics-cert-path` set, `webhookServerOptions` and `metricsServerOptions` (`cmd/serving.go`) put the directory, file name and key name into `webhook.Options` and `metricsserver.Options` (`CertDir`, `CertName`, `KeyName`) and set no `GetCertificate`. Each server then starts its own certificate watcher, which runs on every replica: the webhook server is in the manager's webhook group and the metrics server does not need leader election, whereas a `certwatcher.CertWatcher` added with `mgr.Add` has no `NeedLeaderElection` and would run only on the leader, leaving a standby with the certificate it read at startup. With webhooks disabled no serving certificate is read.
 
 ### Shared Dependency Wiring
 
-All controllers receive their dependencies via struct fields set in `main.go`. There is no service locator or dependency injection container.
+All controllers and validators receive their dependencies via struct fields set in `cmd/`. There is no service locator or dependency injection container. `main.go` builds the renderer, the validator and the `instrumentation` (the pod's one tracer and one `OperatorMetrics`), then hands them to `wireValidation` (`wiring.go`), which builds the one `configcheck.Checker` of the pod and every part that holds it:
 
 ```go
-clock := utilclock.RealClock{}
-recorder := mgr.GetEventRecorderFor("krakend-operator")
-httpClient := buildSafeHTTPClient()
-
-fetcher := autoconfig.NewHTTPFetcher(httpClient)
-cueEval := autoconfig.NewCUEEvaluator()
-filter := autoconfig.NewFilter()
-generator := autoconfig.NewGenerator()
-
 rend := renderer.New(renderer.Options{})
-val := renderer.NewValidator(renderer.ValidatorOptions{
-    Executor:   renderer.NewKrakenDExecutor("/usr/local/bin/krakend"),
-    BinaryPath: "/usr/local/bin/krakend",
-})
+// newKrakenDValidator wraps the krakend executor in telemetry.TraceExecutor, so
+// each krakend run is a span of the tracer it is given.
+val := newKrakenDValidator("/usr/local/bin/krakend", inst.Tracer)
 
-gatewayCtrl := &controller.GatewayReconciler{
-    Client:    mgr.GetClient(),
-    Scheme:    mgr.GetScheme(),
-    Recorder:  recorder,
-    Renderer:  rend,
-    Validator: val,
-    Clock:     clock,
-}
-
-autoconfigCtrl := &controller.AutoConfigReconciler{
-    Client:       mgr.GetClient(),
-    Scheme:       mgr.GetScheme(),
-    Recorder:     recorder,
-    Fetcher:      fetcher,
-    CUEEvaluator: cueEval,
-    Filter:       filter,
-    Generator:    generator,
-    Clock:        clock,
-}
-
-policyCtrl := &controller.PolicyReconciler{
-    Client:   mgr.GetClient(),
-    Scheme:   mgr.GetScheme(),
-    Recorder: recorder,
-}
-
-endpointCtrl := &controller.EndpointReconciler{
-    Client:   mgr.GetClient(),
-    Scheme:   mgr.GetScheme(),
-    Recorder: recorder,
-}
-
-licenseMonitor := &controller.LicenseMonitor{
-    Client:        mgr.GetClient(),
-    Recorder:      recorder,
-    LicenseParser: util.NewX509LicenseParser(),
-    Clock:         clock,
-    CheckInterval: 5 * time.Minute,  // operator architecture §9
-    SafetyBuffer:  1 * time.Hour,    // pre-expiry safety window
-}
-// Register all controllers
-for _, ctrl := range []interface{ SetupWithManager(ctrl.Manager) error }{
-    gatewayCtrl, endpointCtrl, policyCtrl, autoconfigCtrl,
-} {
-    if err := ctrl.SetupWithManager(mgr); err != nil {
-        setupLog.Error(err, "unable to create controller")
-        os.Exit(1)
+// wireValidation builds one checker for the whole pod: its slots bound
+// concurrent krakend executions across the gateway controller, the AutoConfig
+// controller, the policy controller and the admission webhooks, so they must
+// share it.
+func wireValidation(
+    mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, inst instrumentation,
+) validation {
+    checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, inst.Tracer) // configCheckSlots = 3
+    // The AutoConfig prechecks and the policy checks hold at most
+    // autoConfigCheckSlots (1) of the checker's slots between them:
+    // configCheckSlots - 1 for admission - 1 for the gateway controller,
+    // however many workers there are.
+    controllerSlots := make(chan struct{}, autoConfigCheckSlots)
+    return validation{
+        Checker: checker,
+        Gateway: &controller.KrakenDGatewayReconciler{
+            Client:        mgr.GetClient(),
+            Scheme:        mgr.GetScheme(),
+            Recorder:      mgr.GetEventRecorderFor("krakendgateway-controller"),
+            Renderer:      r,
+            Checker:       checker,
+            Clock:         clock.RealClock{},
+            APIReader:     mgr.GetAPIReader(),
+            LicenseParser: licenseutil.NewX509LicenseParser(),
+            // each reconcile holds one checker slot
+            MaxConcurrentReconciles: gatewayCheckWorkers, // 1
+            Metrics:                 inst.gatewayMetrics(),
+            Tracer:                  inst.Tracer,
+        },
+        AutoConfig: &controller.KrakenDAutoConfigReconciler{
+            Client:       mgr.GetClient(),
+            Scheme:       mgr.GetScheme(),
+            Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
+            Fetcher:      autoconfig.NewFetcher(mgr.GetClient(), inst.Tracer),
+            CUEEvaluator: autoconfig.NewCUEEvaluator(),
+            Filter:       autoconfig.NewFilter(),
+            Generator:    autoconfig.NewGenerator(),
+            Checker:      checker,
+            CheckSlots:   controllerSlots,
+            Clock:        clock.RealClock{},
+            Metrics:      inst.autoConfigMetrics(),
+            Tracer:       inst.Tracer,
+        },
+        Policy: &controller.KrakenDBackendPolicyReconciler{
+            Client:     mgr.GetClient(),
+            Scheme:     mgr.GetScheme(),
+            Recorder:   mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+            APIReader:  mgr.GetAPIReader(), // releases the protection finalizer only after an uncached list
+            Tracer:     inst.Tracer,
+            Checker:    checker,
+            Memo:       configcheck.NewLRUMemo(policyMemoSize), // 256 verdicts
+            CheckSlots: controllerSlots,
+        },
+        Validators: webhooksetup.NewValidators(
+            mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, inst.Tracer),
     }
 }
-// Register license monitor as a Runnable (not a standard controller)
-if err := mgr.Add(licenseMonitor); err != nil {
-    setupLog.Error(err, "unable to register license monitor")
-    os.Exit(1)
-}
 ```
+
+`inst.gatewayMetrics()` and `inst.autoConfigMetrics()` are the `OperatorMetrics` behind the controller package's ports, or nil without one, so a reconciler given none records nothing. `operatorUsername` is the `--operator-username` flag, which defaults to the pod's ServiceAccount (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`) and is empty when either variable is unset. `wireEndpointController` builds the endpoint reconciler, which resolves references and holds no config checker. The policy reconciler is built in `wireValidation`, because it judges each policy with the pod's checker and holds the controllers' check slot. Both take the manager's client, scheme and a recorder, plus what they need:
+
+```go
+wired := wireValidation(mgr, rend, val, operatorUsername, inst)
+wired.AutoConfig.MaxConcurrentReconciles = autoConfigMaxConcurrentReconciles // --autoconfig-max-concurrent-reconciles, default 4
+
+wired.Gateway.SetupWithManager(mgr)
+
+// wireEndpointController:
+endpoints := wireEndpointController(mgr, inst)
+// endpoints = &controller.KrakenDEndpointReconciler{
+//     Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
+//     Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"), Tracer: inst.Tracer,
+// }
+endpoints.SetupWithManager(mgr)
+wired.Policy.SetupWithManager(mgr)
+
+wired.AutoConfig.SetupWithManager(mgr)
+
+// Registers the four validators, and a `webhook` readiness check that passes once the
+// webhook server accepts connections, only when --enable-webhooks is true (the default).
+registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
+    return webhooksetup.SetupWebhooks(m, wired.Validators)
+})
+```
+
+Each `SetupWithManager` returns an error that `main` logs before it exits with status 1.
 
 ### Scheme Registration
 
@@ -486,6 +526,7 @@ Status types use Kubernetes `metav1.Condition` for all conditions described in t
 type KrakenDGatewayStatus struct {
     Phase              GatewayPhase       `json:"phase,omitempty"`
     ConfigChecksum     string             `json:"configChecksum,omitempty"`
+    ConfigEdition      Edition            `json:"configEdition,omitempty"` // the edition configChecksum was validated for
     ObservedGeneration int64              `json:"observedGeneration,omitempty"`
     Conditions         []metav1.Condition `json:"conditions,omitempty"`
     Replicas           int32              `json:"replicas,omitempty"`
@@ -523,6 +564,9 @@ const (
 // +kubebuilder:validation:Enum=Pending;Fetching;Rendering;Synced;Error
 type AutoConfigPhase string
 
+// The phase is derived from the Synced condition and is empty before the
+// first sync; the controller writes only Synced and Error. Pending, Fetching
+// and Rendering remain in the enum for compatibility.
 const (
     AutoConfigPhasePending   AutoConfigPhase = "Pending"
     AutoConfigPhaseFetching  AutoConfigPhase = "Fetching"
@@ -547,34 +591,90 @@ const (
     ConditionProgressing              = "Progressing"
     ConditionSpecAvailable            = "SpecAvailable"
     ConditionSynced                   = "Synced"
+    ConditionEndpointsReady           = "EndpointsReady" // AutoConfig: every generated endpoint is Ready
+    ConditionReady                    = "Ready"
+    ConditionPluginsResolved          = "PluginsResolved"
+    ConditionResourcesControlled      = "ResourcesControlled"
+    ConditionCEFallbackApplied        = "CEFallbackApplied"
+    ConditionResolvedRefs             = "ResolvedRefs" // endpoints
+    ConditionAccepted                 = "Accepted"     // endpoints, written by the gateway controller
+    // gateway: True while it leaves out endpoints that fail validation on
+    // their own (Accepted EndpointInvalid or PolicyInvalid); absent otherwise
+    ConditionEndpointsExcluded        = "EndpointsExcluded"
 )
 ```
 
 ### Event Reason Constants
 
+This is the set of reasons the controllers actually emit — `internal/webhook`
+validation errors are reported through the admission response, not events, so
+they carry no reason constant.
+
 ```go
 const (
-    ReasonConfigDeployed          = "ConfigDeployed"
-    ReasonConfigValidationFailed  = "ConfigValidationFailed"
-    ReasonLicenseExpiringSoon     = "LicenseExpiringSoon"
-    ReasonLicenseFallbackCE       = "LicenseFallbackCE"
-    ReasonLicenseExpiredNoFallback = "LicenseExpiredNoFallback"
-    ReasonLicenseRestored         = "LicenseRestored"
-    ReasonDragonflyNotReady       = "DragonflyNotReady"
-    ReasonIstioVSCreated          = "IstioVirtualServiceCreated"
-    ReasonEndpointConflict        = "EndpointConflict"
-    ReasonLicenseSecretSyncFailed = "LicenseSecretSyncFailed"
-    ReasonLicenseSecretMissing    = "LicenseSecretMissing"
-    ReasonSpecFetched             = "SpecFetched"
-    ReasonSpecFetchFailed         = "SpecFetchFailed"
-    ReasonEndpointsGenerated      = "EndpointsGenerated"
-    ReasonOperationFiltered       = "OperationFiltered"
-    ReasonMissingOperationId      = "MissingOperationId"
-    ReasonDuplicateOperationId    = "DuplicateOperationId"
-    ReasonRolloutFailed           = "RolloutFailed"
-    ReasonCUEEvaluationFailed     = "CUEEvaluationFailed"
+    ReasonConfigDeployed                = "ConfigDeployed"
+    // ConfigValid=False: the gateway root fails on its own; no endpoint is
+    // judged and the applied config keeps serving
+    ReasonGatewayRootInvalid            = "GatewayRootInvalid"
+    // ConfigValid=False: every endpoint passes on its own but the config
+    // fails with them together; the output is only in the operator log
+    ReasonCombinedConfigInvalid         = "CombinedConfigInvalid"
+    // EndpointsExcluded=True
+    ReasonInvalidEndpointsExcluded      = "InvalidEndpointsExcluded"
+    // Accepted=False: the endpoint fails krakend check on its own (the
+    // gateway root with it and its policies); the gateway leaves it out
+    ReasonEndpointInvalid               = "EndpointInvalid"
+    // Accepted=False: a policy the endpoint references fails on its own, or
+    // the endpoint fails only together with a policy of another namespace;
+    // the message names the policy and never quotes it
+    ReasonPolicyInvalid                 = "PolicyInvalid"
+    ReasonLicenseExpiringSoon           = "LicenseExpiringSoon"
+    ReasonLicenseFallbackCE             = "LicenseFallbackCE"
+    ReasonLicenseExpiredNoFallback      = "LicenseExpiredNoFallback"
+    ReasonLicenseRestored               = "LicenseRestored"
+    ReasonDragonflyNotReady             = "DragonflyNotReady"
+    ReasonIstioVSCreated                = "IstioVirtualServiceCreated"
+    ReasonEndpointConflict              = "EndpointConflict"
+    ReasonPartiallyAccepted             = "PartiallyAccepted"
+    ReasonLicenseSecretMissing          = "LicenseSecretMissing"
+    ReasonValidatorUnavailable          = "ValidatorUnavailable"
+    ReasonConfigPublishFailed           = "ConfigPublishFailed"
+    ReasonConfigMapTampered             = "ConfigMapTampered"
+    ReasonConfigMapNotFound             = "ConfigMapNotFound"
+    ReasonConfigMapsFound               = "ConfigMapsFound"
+    ReasonCRDNotInstalled               = "CRDNotInstalled"
+    ReasonEEFeaturesStripped            = "EEFeaturesStripped"
+    ReasonSpecFetched                   = "SpecFetched"
+    ReasonSpecFetchFailed               = "SpecFetchFailed"
+    ReasonEndpointsGenerated            = "EndpointsGenerated"
+    ReasonDuplicateOperationId          = "DuplicateOperationId"
+    ReasonRolloutFailed                 = "RolloutFailed"
+    ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
+    ReasonSpecWarning                   = "SpecWarning"
+    ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
+    ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
+    ReasonUnmatchedOverride             = "UnmatchedOverride"
+    ReasonAmbiguousOverride             = "AmbiguousOverride"
+    ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
+    ReasonOperationsFailed              = "OperationsFailed"
+    ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
+    ReasonPostRestartJobCreated         = "PostRestartJobCreated"
+    ReasonPostRestartJobAdopted         = "PostRestartJobAdopted"
+    ReasonPostRestartJobROFSEnabled     = "ReadOnlyRootFilesystemEnabled"
+    ReasonPostRestartJobROFSDisabled    = "ReadOnlyRootFilesystemDisabled"
+    ReasonDragonflyRunAsRootUnacknowledged = "RunAsRootUnacknowledged"
+    ReasonDragonflyRunAsRootAcknowledged   = "RunAsRootAcknowledged"
+    ReasonDragonflyRunAsRootNoRequest      = "NoRunAsRootRequest"
 )
 ```
+
+`ReasonLicenseSecretSyncFailed`, `ReasonOperationFiltered`, and
+`ReasonMissingOperationId` are declared in `shared_types.go` but never
+emitted by any controller, so they are left out of this list. The reasons
+`ConfigValidationFailed` (an AutoConfig hold reason), `EndpointRejected`, `UnsupportedMethod`, `AllEndpointsReady`,
+`EndpointsNotReady` and `SchemaNameConflict` appear in statuses and
+conditions only, and are not events. `SchemaNameConflict` emits none of its
+own, except the usual recovery event when the endpoint was not accepted before.
 
 ### KrakenDEndpoint Type
 
@@ -686,12 +786,29 @@ type CUESpec struct {
     Environment string `json:"environment,omitempty"`
 }
 
+// OperationStatus reports one OpenAPI operation the AutoConfig skipped or could
+// not converge. Message is cut to 256 bytes.
+type OperationStatus struct {
+    Method      string `json:"method"`
+    Path        string `json:"path"`
+    OperationID string `json:"operationId,omitempty"`
+    Endpoint    string `json:"endpoint,omitempty"` // the generated KrakenDEndpoint, when the problem concerns it
+    Reason      string `json:"reason"`
+    Message     string `json:"message,omitempty"`
+}
+
 type KrakenDAutoConfigStatus struct {
     Phase              AutoConfigPhase    `json:"phase,omitempty"`
+    ObservedGeneration int64              `json:"observedGeneration,omitempty"`
     LastSyncTime       *metav1.Time       `json:"lastSyncTime,omitempty"`
     SpecChecksum       string             `json:"specChecksum,omitempty"`
     GeneratedEndpoints int                `json:"generatedEndpoints,omitempty"`
-    SkippedOperations  int                `json:"skippedOperations,omitempty"`
+    ReadyEndpoints     int                `json:"readyEndpoints,omitempty"`   // generated endpoints whose Ready is True for their generation
+    SkippedOperations  int                `json:"skippedOperations,omitempty"` // counts every Skipped entry, listed or not
+    // Skipped, FailedOperations and Warnings list at most 20 entries.
+    Skipped            []OperationStatus  `json:"skipped,omitempty"`          // UnsupportedMethod, DuplicateOperationId
+    FailedOperations   []OperationStatus  `json:"failedOperations,omitempty"` // CUEEvaluationFailed, ConfigValidationFailed, EndpointRejected
+    Warnings           []string           `json:"warnings,omitempty"`         // spec problems that do not stop a sync
     Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }
 ```
@@ -760,31 +877,66 @@ type Reconciler interface {
 Each controller exposes a `SetupWithManager` method that configures watches:
 
 ```go
-func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
-    return ctrl.NewControllerManagedBy(mgr).
+func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
+
+    b := ctrl.NewControllerManagedBy(mgr).
         For(&v1alpha1.KrakenDGateway{}).
         Owns(&appsv1.Deployment{}).
         Owns(&corev1.Service{}).
-        Owns(&corev1.ConfigMap{}).
+        Owns(&corev1.ConfigMap{}, builder.OnlyMetadata).
         Owns(&corev1.ServiceAccount{}).
         Owns(&policyv1.PodDisruptionBudget{}).
         Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
-        Owns(&dragonflyv1alpha1.Dragonfly{}).
-        Owns(&esv1.ExternalSecret{}).
-        Owns(&istiov1.VirtualService{}).
+        Owns(&batchv1.Job{}).
         Watches(
             &v1alpha1.KrakenDEndpoint{},
             handler.EnqueueRequestsFromMapFunc(r.endpointToGateway),
+            builder.WithPredicates(predicate.GenerationChangedPredicate{}),
         ).
         Watches(
             &v1alpha1.KrakenDBackendPolicy{},
             handler.EnqueueRequestsFromMapFunc(r.policyToGateways),
+            builder.WithPredicates(predicate.GenerationChangedPredicate{}),
         ).
         Watches(
             &corev1.Secret{},
             handler.EnqueueRequestsFromMapFunc(r.licenseSecretToGateway),
+            builder.OnlyMetadata,
         ).
-        Complete(r)
+        Watches(
+            &corev1.ConfigMap{},
+            handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
+            builder.OnlyMetadata,
+        ).
+        // The backoff is capped at the license recheck interval (5 minutes), and
+        // each reconcile holds one checker slot, so the workers bound the slots
+        // the gateway controller takes.
+        WithOptions(crcontroller.Options{
+            RateLimiter:             newGatewayRateLimiter(),
+            MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+        }).
+        Named("krakendgateway")
+
+    // Dragonfly, ExternalSecret and VirtualService are owned as unstructured
+    // objects watched as metadata only, and only when their CRDs exist at
+    // startup. The delete path of a disabled feature reads their children
+    // from that metadata cache.
+    installed, _, err := installedOptionalKinds(mgr.GetRESTMapper())
+    if err != nil {
+        return err
+    }
+    r.optionalCache = mgr.GetCache()
+    r.cachedOptionalKinds = make(map[schema.GroupVersionKind]struct{}, len(installed))
+    for _, gvk := range installed {
+        r.cachedOptionalKinds[gvk] = struct{}{}
+        u := &unstructured.Unstructured{}
+        u.SetGroupVersionKind(gvk)
+        b = b.Owns(u, builder.OnlyMetadata)
+    }
+    return b.Complete(r)
 }
 ```
 
@@ -793,11 +945,10 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 ```mermaid
 graph TB
     subgraph "Controllers"
-        GC[GatewayReconciler]
-        EC[EndpointReconciler]
-        PC[PolicyReconciler]
-        ACC[AutoConfigReconciler]
-        LM[LicenseMonitor]
+        GC[KrakenDGatewayReconciler]
+        EC[KrakenDEndpointReconciler]
+        PC[KrakenDBackendPolicyReconciler]
+        ACC[KrakenDAutoConfigReconciler]
     end
 
     subgraph "Shared Dependencies"
@@ -807,6 +958,9 @@ graph TB
         CL[Clock]
         REC[EventRecorder]
         HC[HTTP Client]
+        LP[License Parser]
+        AR[API Reader]
+        CK[Checker]
     end
 
     subgraph "AutoConfig Subsystem"
@@ -817,12 +971,15 @@ graph TB
     end
 
     GC --> R
-    GC --> V
     GC --> RB
     GC --> CL
     GC --> REC
-    LM --> CL
-    LM --> REC
+    GC --> LP
+    GC --> AR
+    GC --> CK
+    CK --> R
+    CK --> V
+    ACC --> CK
     ACC --> FE
     ACC --> CUE_E
     ACC --> FI
@@ -837,20 +994,45 @@ graph TB
 
 ## 5. Gateway Controller
 
-**File:** `internal/controller/gateway_controller.go`
+**Files:** `internal/controller/krakendgateway_controller.go`, `gateway_config.go` (the config stage), `gateway_license.go`, `gateway_optional.go`, `gateway_events.go`, `gateway_validation.go` (the per-endpoint pipeline and the exclusion signals), `verdict_memo.go`
 
-The gateway controller is the primary reconciler. It orchestrates the full rendering pipeline (operator architecture §10), manages all owned Kubernetes resources, and handles edition-specific logic.
+The gateway controller is the primary reconciler. It orchestrates the full rendering pipeline (operator architecture §10), manages all owned Kubernetes resources, and handles edition-specific logic. Each reconcile runs two stages: the config stage decides and publishes the applied config, and the infrastructure stage always runs and deploys it.
 
 ### Reconciler Struct
 
 ```go
-type GatewayReconciler struct {
+type KrakenDGatewayReconciler struct {
     client.Client
-    Scheme    *runtime.Scheme
-    Recorder  record.EventRecorder
-    Renderer  renderer.Renderer
-    Validator renderer.Validator
-    Clock     clock.Clock
+    Scheme   *runtime.Scheme
+    Recorder record.EventRecorder
+    Renderer renderer.Renderer
+    // Checker gathers the render inputs and validates the render, behind the
+    // slots every config check in the pod shares
+    Checker ConfigChecker
+    Clock   clock.Clock
+    // APIReader reads uncached from the API server (ReplicaSets for config GC)
+    APIReader client.Reader
+    // LicenseParser reads EE license certificates
+    LicenseParser license.LicenseParser
+    // MaxConcurrentReconciles is how many gateways reconcile at once; zero
+    // means one. Each reconcile holds one config checker slot at a time.
+    MaxConcurrentReconciles int
+
+    // verdicts remembers, per gateway, the config checks its last pass ran,
+    // so a gateway whose inputs did not change runs none
+    verdicts verdictMemo
+}
+
+// ConfigChecker is the controller's port to configcheck.Checker: the gateway
+// root alone, each endpoint alone, and the whole render.
+type ConfigChecker interface {
+    Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error)
+    CheckRoot(ctx context.Context, root configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+        memo configcheck.Memo) (configcheck.EndpointVerdict, error)
+    CheckRendered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
+        memo configcheck.Memo) (configcheck.Verdict, error)
 }
 ```
 
@@ -860,90 +1042,109 @@ The `Reconcile` method follows the pipeline described in operator architecture �
 
 ```mermaid
 flowchart TD
-    A[Fetch KrakenDGateway] --> B{Found?}
-    B -->|No| Z[Return — deleted via ownerRef GC]
-    B -->|Yes| B1{phase == empty?}
-    B1 -->|Yes| B2[Set phase=Pending]
-    B2 --> C
-    B1 -->|No| C[List KrakenDEndpoints by gatewayRef]
-    C --> C1[Fetch referenced KrakenDBackendPolicies]
-    C1 --> C2[Determine CEFallback from<br/>status conditions LicenseDegraded]
-    C2 --> F[Call Renderer.Render<br/>passes endpoints + policies +<br/>CEFallback. Renderer handles<br/>conflict detection internally]
-    F --> F1[Update endpoint statuses from<br/>RenderOutput.ConflictedEndpoints<br/>and InvalidEndpoints]
-    F1 --> G{Checksum changed?}
-    G -->|No| G1{Image drift?}
-    G1 -->|No| G2{Plugin checksum changed?}
-    G2 -->|No| H[Reconcile owned resources]
-    H --> H1{Phase not Degraded,<br/>Error, or Deploying?}
-    H1 -->|Yes| H2[Set phase=Running]
-    H1 -->|No| SKIP[No phase change]
-    H2 --> R
-    SKIP --> R
-    G2 -->|Yes| G5[Set phase=Deploying,<br/>Progressing=True]
-    G5 --> I[Patch pod annotation]
-    G1 -->|Yes| G4[Set phase=Deploying,<br/>Progressing=True]
-    G4 --> I
-    G -->|Yes| G3[Set phase=Rendering]
-    G3 --> G6[Set phase=Validating]
-    G6 --> J0[PrepareValidationCopy:<br/>strip wildcards if EE<br/>and CE fallback not active]
-    J0 --> J[Validate via krakend check -tlc]
-    J --> K{Valid?}
-    K -->|No| L[Set ConfigValid=False, phase=Error, emit event, return]
-    K -->|Yes| M[Update ConfigMap, set ConfigValid=True,<br/>phase=Deploying, Progressing=True]
-    M --> I
-    I --> N[Reconcile Deployment, Service, SA, PDB, HPA]
-    N --> O[Reconcile Dragonfly CR if enabled]
-    O --> P[Reconcile ExternalSecret if enabled]
-    P --> Q[Reconcile VirtualService if Istio enabled]
-    Q --> R[Update gateway status]
+    A[Fetch KrakenDGateway] --> B{Found and<br/>not terminating?}
+    B -->|No| Z[Forget the gateway<br/>metrics and verdict memo<br/>Return]
+    B -->|Yes| C[Checker.Gather: list KrakenDEndpoints by gatewayRef,<br/>fetch referenced KrakenDBackendPolicies]
+    C --> C2[reconcileLicense: License* conditions<br/>and the CE fallback verdict,<br/>which replaces the one Gather read from status]
+    C2 --> C3[Gather plugin ConfigMaps, set PluginsResolved,<br/>detect the Dragonfly state]
+    C3 --> F[Call Renderer.Render for the edition:<br/>CE for a CE gateway or a CE fallback, else EE.<br/>The renderer detects conflicts internally]
+    F --> G{Render and edition<br/>are the applied config?}
+    G -->|Yes| G1[Judge the endpoints that lost an entry,<br/>from the verdict memo]
+    G1 --> G2{Any fails on its own?}
+    G2 -->|No| H[Republish the ConfigMap if it is missing or<br/>its payload does not hash to the checksum,<br/>then ConfigValid=True, or ConfigPublishFailed if that fails]
+    G2 -->|Yes| J
+    G -->|No| J[decide, every check through the verdict memo<br/>and holding one of the pod's 3 slots:<br/>root alone, then the whole render with krakend check -t -n -c,<br/>then each endpoint alone: all on failure,<br/>those that lost an entry on success.<br/>Exclude the failures, render the rest, full check again]
+    J --> K{Verdict?}
+    K -->|Root fails alone, or the<br/>endpoints fail only together| L[ConfigValid=False<br/>GatewayRootInvalid or CombinedConfigInvalid,<br/>Warning event only if the verdict changed,<br/>keep the applied config]
+    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config and exclusions,<br/>one Warning event on entering,<br/>the error is returned after the infrastructure stage]
+    K -->|Valid| K2{Publish the immutable ConfigMap<br/>gateway-config-hash?}
+    K2 -->|Published| M[recordApplied writes status.configChecksum,<br/>configEdition and ConfigValid=True at once,<br/>on a copy with Progressing=True reason ConfigDeployed;<br/>a failed write undoes them and the pass keeps the stored config]
+    K2 -->|Failed| L3[Set ConfigValid=Unknown<br/>reason ConfigPublishFailed,<br/>Ready Unknown, keep applied config,<br/>one Warning event on a change of reason,<br/>the error is returned after the infrastructure stage]
+    H --> N
+    L --> N
+    L2 --> N
+    L3 --> N
+    M --> N[Report CEFallbackApplied. Record Accepted on each endpoint,<br/>EndpointInvalid or PolicyInvalid on one that fails on its own,<br/>then reportExclusions sets EndpointsExcluded and the gauge]
+    N --> I[Infrastructure stage on the applied config:<br/>SA, Service, PDB, Deployment unless held, config GC,<br/>HPA, post-restart Job, Dragonfly CR,<br/>ExternalSecret, VirtualService.<br/>An existing object the gateway does not control is refused,<br/>and the HPA and VirtualService follow the Deployment and Service they name.<br/>Children of disabled features are deleted]
+    I --> R[Inspect the Deployment status, then derive Ready and<br/>the phase from the conditions via gatewayReadinessFor<br/>and update the gateway status only if it changed]
+    R --> S[Return the config, acceptance and infrastructure<br/>errors if any, otherwise RequeueAfter<br/>the license's next stage boundary]
 ```
+
+- Record `Accepted`; an endpoint that fails on its own gets `EndpointInvalid` or `PolicyInvalid`, worded "Not served by gateway …" when the pass applied its config and "Will not be served when gateway … next applies its config" otherwise (`configResult.served`: the second wording appears whenever the pass applied nothing new, while the gateway keeps serving its last config, and a validator outage never lifts an exclusion, except that a gateway that has never applied a config drops every `Accepted`). `reportExclusions` sets `EndpointsExcluded` and the excluded-endpoints gauge from the endpoints' `Accepted` reasons, and emits a Warning event `InvalidEndpointsExcluded` when the condition appears or its message changes (`GatewayRootInvalid`/`CombinedConfigInvalid` have their own Warning when the verdict changes, and an endpoint's change to `EndpointInvalid`/`PolicyInvalid` its own).
+- The root and endpoint checks carry the Dragonfly state the reconcile detected (`configcheck.Root.Dragonfly`, `EndpointUnit.Dragonfly`); admission and the AutoConfig precheck pass none.
 
 ### Key Implementation Details
 
-**Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(endpoint, method)` tuples across all CRs. When multiple entries from different `KrakenDEndpoint` resources share the same path and method, all conflicting `KrakenDEndpoint` resources except the oldest (by `creationTimestamp`) are excluded from the rendered config. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then updates the statuses of those endpoints (marking them `Conflicted` or `Invalid`) and emits `Warning` events with reason `EndpointConflict`.
+**Admission** rejects new conflicts before they reach the renderer: `validateRouteUniqueness` rejects each added or changed entry whose `(route shape, method)` another entry on the gateway already has, in another KrakenDEndpoint or in the same one (`Duplicate value`, naming the owner and the clashing path). Against other KrakenDEndpoints it considers only routes new to the stored object; same-shape entries inside the KrakenDEndpoint itself are always checked when an entry changes. Endpoints with the same controller are exempt: while a KrakenDAutoConfig renames an operation, its new endpoint and the old one can share a route, and the admission cache can lag the deletion of the old one. Same-shape entries of one AutoConfig are thus caught by no admission rule: the AutoConfig controller holds all but the one the renderer serves (`routeCollisions`), and the renderer's conflict report stays as the fallback for pairs stored before. The denial names the claimant the renderer serves (oldest, then name, then entry position). A stored conflict with another KrakenDEndpoint is re-reported only when an edit adds a route the object did not have, or when the object moves to another gateway. The detection below stays as the fallback for concurrent applies and for conflicts stored before the rule. It also diverges in one case: it drops an endpoint with a missing `policyRef` before grouping, while admission still counts that endpoint as a claimant, so admission can reject a route the controller would serve until the policy exists.
 
-**Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer marks the owning endpoint as `Invalid` and excludes it from the rendered config.
+**Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(route shape, method)` across all CRs, where the route shape (`ConflictKey`) erases parameter names, so `/users/{id}` and `/users/{name}` collide. When multiple entries share a route shape and method, all but the oldest `KrakenDEndpoint`'s entry (by `creationTimestamp`) are excluded from the rendered config; between two entries of one `KrakenDEndpoint` the earlier spec entry wins. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `True` (`PartiallyAccepted`) for one that lost some but not all of its routes, `False` (`EndpointConflict`) for one that lost all of them, and no `Accepted` condition for one excluded by a missing policy. `RenderOutput.EntryConflicts` names each lost entry once for every `KrakenDEndpoint` it loses to (the winner: an older endpoint, or the endpoint itself when an earlier entry of its own won; the winner's entry may itself be left out), and the gateway controller writes them to `status.conflicts` in the same optimistic-lock patch as `Accepted`. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted when an endpoint becomes fully conflicted, a `Warning` event with reason `PartiallyAccepted` when it becomes partly conflicted (from `Accepted`, from no condition, or from `EndpointConflict`), and a `Normal` `Accepted` event when it is served whole again.
 
-**CE fallback determination** — Before calling `Renderer.Render`, the controller reads `gw.Status.Conditions` to determine whether `LicenseDegraded=True`. This value is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
+**Policy resolution** — The controller gathers all referenced `KrakenDBackendPolicy` resources through `Checker.Gather` before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
 
-**Checksum comparison** — After rendering, the controller compares the new SHA-256 checksum against `status.configChecksum`. If unchanged, it skips ConfigMap update and validation. It still reconciles owned resources (Deployment, Service, etc.) to handle drift.
+**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict replaces the `CEFallback` that `Checker.Gather` read from status (`in.CEFallback`) and is passed on as `RenderInput.CEFallback`, which makes the renderer strip every Enterprise-only feature (wildcard endpoints and Enterprise-only `extra_config`). The image does not follow the verdict directly: `appliedImage` takes it from the applied config's edition (see "Image follows the applied edition" below).
 
-**Image drift detection** — Even when the config checksum is unchanged, the controller compares the desired container image (determined by edition, CE fallback state, and user overrides) against the current Deployment's container image. A mismatch triggers a Deployment patch to correct the image. This is the mechanism by which CE fallback and EE recovery change the running image.
+**Applied config** — The config stage (`reconcileConfig`) is the only code that decides the applied config. `status.configChecksum` is the checksum of the render the gateway serves and `status.configEdition` the edition it was validated for. `decide` judges a render that is not the applied one (a different checksum, or the same checksum for another edition) as the edition it was rendered for, in this order: the gateway root on its own (a failure is `GatewayRootInvalid`, blames no endpoint, and judges nothing more), the whole render with `krakend check -t -n`, then each endpoint on its own (`judgeEndpoints`, `configcheck.CheckEndpoint`): every endpoint when the whole render failed, otherwise those that lost an entry in it, because a passing check says nothing about the entries it left out. An endpoint that fails on its own is excluded, and the render without the excluded endpoints is checked once more (not when it is the applied config). When that still fails, or the whole render failed and no endpoint fails alone, the endpoints that pass on their own fail together: `CombinedConfigInvalid` (endpoints that fail on their own are excluded first), whose message quotes nothing, the output being logged. When the render is the applied config, only the endpoints that lost an entry are judged first, normally from the memo; if one fails, `decide` goes on to the root, the whole render, each endpoint and the safety re-check, and the checks also run whenever the memo misses (after a restart, for example). Only a passing render, less its excluded endpoints, is published and recorded as applied. A root or combined failure (`ConfigValid=False`) or a render that could not be judged (`ConfigValid=Unknown`) leaves the applied config in place, and the infrastructure stage still runs, so the other resources keep converging and an image, plugin or license change still rolls. A validator that cannot run excludes no endpoint and lifts no exclusion.
 
-**Plugin checksum** — Computed from ConfigMap data hashes and OCI image tags. Changes trigger a rolling restart via pod annotation patch, independent of config checksum.
+**Applied record** — The applied config is recorded before anything acts on it. Right after `publishConfig`, `recordApplied` writes `status.configChecksum`, `status.configEdition` and `ConfigValid=True` to the status, before endpoint acceptance and before the Deployment step: a later pass reads `status.configChecksum` as what is applied, and must not find pods already moved off it. The Deployment still runs the previous config then, so the write is a copy with `Progressing=True` (reason `ConfigDeployed`, `configRolloutNote`), from which `Ready` derives as `False` and the phase as `Deploying`, or whatever condition outranks it; the in-memory gateway keeps its own state and takes the copy's `resourceVersion`. When the write fails (typically a conflict, because the gateway changed during the pass), the in-memory apply is undone and `keepApplied` serves the stored config: no endpoint is accepted against the new config, the Deployment is not moved, and the error is returned, so the next pass applies it from a fresh read. A pass that applies the config already stored writes nothing extra, so the record costs one status write per newly applied config. At the end of the pass, a Deployment step or a ServiceAccount step that failed without a refusal raises `Progressing` while the Deployment is missing or does not mount the applied config, unless a lost availability or a missed progress deadline is reported instead; a refusal raises nothing, since `ResourcesControlled=False` outranks `Progressing`. A pass that applies nothing guards the other direction: when the Deployment carries a config checksum other than the cached gateway's, `confirmStoredConfig` reads the stored checksum through `APIReader`. If the cache is behind, the pass returns `the cached gateway is behind its stored status` before acceptance and the infrastructure stage, changing nothing, and is retried; otherwise the Deployment is re-pointed to the stored config, which also reverts a `kubectl rollout undo`.
 
-**Phase transitions** — The controller sets `status.phase` to track the gateway through the pipeline:
+**`verdictMemo`** — Every check answers from a per-gateway memo of verdicts keyed by content (`<sha256 of the render>/<edition>/<lint|validate>`). A pass keeps the checks it used, so the memo never holds more than the last pass's; a pass that fails keeps the union with what the last pass kept, so verdicts judged before the failure are not run again. It is dropped with the gateway, lives in memory only, and each remembered verdict keeps at most 16 KiB of output. `Verdict.Masked` is computed from each call's own render and never remembered, because the same content can come from inputs that mask different endpoints. A memo is untrusted: an entry that is neither a plain acceptance nor a plain rejection is a miss and the check runs again. A steady gateway runs no check, even while it excludes endpoints. The gateway root and endpoint checks use a `countedPass` (`config_validation_failures_total` counts a fresh rejection there once; the AutoConfig and admission do not count); the full checks use the plain `passMemo` and are never counted.
 
-| Phase | Set When |
+**Cost of the memo being in memory** — After a restart, a leader failover, or an edit of the root or edition, a gateway whose full render fails runs every endpoint check once more, serially on the gateway worker (about 0.1 s each at the 500m CPU limit, about 50–60 s for 500 endpoints). The checks are neither split into groups, run in parallel, nor stored in status.
+
+**Content-addressed config ConfigMaps** — `publishConfig` creates the ConfigMap `<gateway>-config-<10 hex of the checksum>`. It is immutable, owned by the gateway and carries the checksum in an annotation; an existing one is verified, never updated: the gateway must control it, its annotation must hold the checksum, and its `krakend.json` must hash (SHA-256) to the checksum, because the owner reference and the annotation can be copied and the payload cannot (`verifyExistingConfigMap`, `verifyPayload`). The payload of any ConfigMap at that name is hashed, whatever its owner or annotation, because the pods load the payload. One that fails the hash is deleted, with a UID precondition, and created again, and a Warning event `ConfigMapTampered` on the gateway names it; if it cannot be deleted, the failure is a publish failure. One that holds the right bytes but is not the gateway's copy is not deleted: it is a publish failure, and the Deployment is held as it is, mounting the right bytes. The full read happens once per stored version: `verifiedConfigMaps` keeps, per gateway and in memory, the UID and resource version of each ConfigMap it hashed or created, so a steady pass reads only metadata. The Deployment mounts the applied config's ConfigMap by name, so a config change is a pod-template change and rolls like any other. `collectConfigMaps` deletes the gateway's config ConfigMaps that nothing can still mount: it keeps the applied one, the most recent revisions (three in all), the one the Deployment template mounts while the Deployment is held or refused, and every ConfigMap that a live ReplicaSet of the Deployment mounts (ReplicaSets are read through `APIReader`, never cached). It runs after a successful Deployment step, on a plugin or ServiceAccount hold (the config stage keeps publishing one ConfigMap per applied config meanwhile), and beside a refused Deployment, which another controller may have claimed with the gateway's ConfigMap still mounted. The ConfigMap an earlier operator version kept under the gateway's own name is seeded into the new name when the first render after an upgrade is rejected, and collected on the same terms.
+
+**Taking over existing objects** — The gateway writes its children by name, so an object with that name may already exist. `applyOwned`, and the Deployment write in `reconcileDeployment`, decide inside the `CreateOrUpdate` mutate function, on the object as fetched and before the builder rewrites its labels (`refuseUncontrolled`): the gateway writes it only when it already controls it, or when it has no controller and carries the consent labels the operator's builder stamps on that kind, `app.kubernetes.io/instance=<gateway>` (`<gateway>-dragonfly` for the Dragonfly) and `app.kubernetes.io/managed-by=krakend-operator`, which each call site passes as `applyOwned`'s `consent` argument. Anything else is refused with a `notControlledError`, which names the kind, `<namespace>/<name>`, the controller if any and the consent labels, and is not written. The decision is made on the version the write would replace, so a stale cache read cannot bypass it. `setResourcesControlled` turns the refusals of a pass (`notControlledIn`, which walks the joined error tree) into `ResourcesControlled=False` with reason `ResourceNotControlled` and a Warning event on the transition, and `gatewayReadinessFor` folds it into `Ready` after `PluginsResolved` and before `Available`, with phase `Error`. The condition turns `True` only on a pass that refused nothing, failed nothing and wrote the Deployment; otherwise it keeps its value. Children that name a sibling follow its control. `reconcileHPA` writes no HPA, and deletes the one the gateway controls, while the Deployment named like the gateway is one it may not take over: the Deployment step refused it (`deploymentObservation.refused`), or the pass's read of it in `deployedChecksums` says so (`foreign`, carried as `infraInputs.deploymentForeign`), which decides on a hold where the step does not run; the ServiceAccount hold runs the HPA step for that case alone. Only the step's refusal reaches `ResourcesControlled`. Beside a refused Deployment `inspectDeploymentStatus` raises no owed `Progressing`, and `collectConfigMaps` still runs. The core resources step runs on every pass, and while it refused the Service, `reconcileVirtualService` writes no VirtualService, deletes the one the gateway controls and sets `IstioConfigured=False/ResourceNotControlled`. `detectDragonflyState` applies `refuseUncontrolled` to the Dragonfly it reads before the render: a refused one reads `DragonflyReady=False/ResourceNotControlled`, clears `status.dragonflyAddress`, and is not passed to the render, which falls back to `spec.redis`.
+
+**ServiceAccount hold** — The Deployment and the post-restart Job run as the ServiceAccount named like the gateway, so `reconcileInfrastructure` holds both while `reconcileCoreResources` reports the ServiceAccount as not controlled by the gateway: it was refused (another controller owns it, or nothing does and it lacks the consent labels), or its write failed (decided from the ServiceAccount step's own error and the object `CreateOrUpdate` left behind, never from a cached read). The hold logs `holding the Deployment and the post-restart Job`, returns an error, collects config ConfigMaps (keeping the revision the held template mounts), and still reconciles Dragonfly, the ExternalSecret and the VirtualService. Backoff retries it. A refusal is reported by `ResourcesControlled=False`, so `Ready` reads `ResourceNotControlled`. A write that failed otherwise marks the observation `unreconciled`, which raises `Progressing` while the Deployment does not mount the applied config, so `Ready` is not `True` beside a new checksum; `ResourcesControlled` keeps its value.
+
+**Held Deployment** — `reconcileDeploymentUnlessHeld` creates or updates the Deployment only once a config has been applied, and leaves it exactly as it is while no ConfigMap holds the applied config or while a plugin ConfigMap is missing (`PluginsResolved=False`, which names it). The ServiceAccount hold above holds it too.
+
+**Image follows the applied edition** — `appliedImage` resolves the image of the edition of the applied config, so CE pods never load a config validated only as EE. While the edition rendered now differs from the applied one (a CE fallback whose render is rejected, or a `spec.edition` change), version and custom-image changes wait too. This is the mechanism by which CE fallback and EE recovery change the running image: once a render validated for the new edition is applied, the image follows.
+
+**Plugin and license checksums** — The plugin checksum is computed from ConfigMap data hashes and OCI image tags, and the license checksum from the license bytes read. Each is a pod-template annotation, so a change rolls the Deployment independently of the config checksum.
+
+**Phase transitions** — The controller does not latch `status.phase` at points in the pipeline. At the end of each reconcile it derives `Ready` and the phase from the gateway's conditions (`ConfigValid`, `PluginsResolved`, `ResourcesControlled`, `Available`, `Progressing`, `LicenseExpired`, `LicenseDegraded`, `CEFallbackApplied`) with `gatewayReadinessFor`, and writes status only when something changed. The gateway reconcile evaluates the license itself, writes the `License*` conditions, and turns them into `Ready` and the phase. The phase is the compatibility view of `Ready`:
+
+| Phase | Derived When |
 |---|---|
-| `Pending` | Initial state after CR creation, before first reconcile |
-| `Rendering` | Config checksum changed — entering rendering pipeline |
-| `Validating` | Running `krakend check -tlc` on the rendered config |
-| `Deploying` | ConfigMap updated or Deployment patched — rolling update in progress |
-| `Running` | Deployment is fully rolled out (all replicas ready) and not in Degraded/Error |
-| `Degraded` | CE fallback is active (`LicenseDegraded=True`) |
-| `Error` | Config validation failed, or license expired with `fallbackToCE=false` |
+| `Pending` | No configuration has been validated or rolled out yet |
+| `Rendering` | No longer written by the operator; kept only for status values persisted by older versions |
+| `Validating` | No longer written by the operator; kept only for status values persisted by older versions |
+| `Deploying` | A rollout is in progress (`Progressing=True`: the Deployment was created, its pod template was written, or old pods remain beside updated ones), or the Deployment is not yet available |
+| `Running` | Config valid, the applied config rolled out to every replica, the Deployment available, and no license condition degrading it |
+| `Degraded` | CE fallback is active (`CEFallbackApplied` or `LicenseDegraded` is `True`) |
+| `Error` | Config validation failed, a plugin ConfigMap is missing (`PluginsResolved=False`), an existing object the gateway will not take over (`ResourcesControlled=False`), the rollout failed or the Deployment lost availability (`Available=False`), or the license expired with `fallbackToCE=false` |
+
+A configuration that could not be validated because the validator was unavailable leaves `Ready` Unknown with reason `ValidatorUnavailable` and keeps the serving phase. A configuration that passed validation but whose ConfigMap could not be published, or whose applied ConfigMap fails the payload hash and cannot be replaced, does the same with reason `ConfigPublishFailed` (`handleConfigPublishFailed`).
+
+`Progressing` follows the Deployment, not the detection of a change. `inspectDeploymentStatus` reads the Deployment that this pass's `CreateOrUpdate` returned, not the cache (a pass whose Deployment step failed, such as a stale-object Conflict, leaves `Available` untouched and raises `Progressing` only while it owes the rollout of the applied config, never for a refused Deployment; a pass that holds the Deployment reads the cache) and raises `Progressing=True` when the pass created it, its write changed the pod template (compared with the server's response), the template is not the wanted one (annotations, mounted ConfigMap), or `updatedReplicas < replicas`. A generation the Deployment controller has not observed is not a signal, because an HPA scale bumps it without touching the template. `Progressing` is lowered to `RolloutComplete` only once `deploymentConverged` holds, which includes `observedGeneration >= generation`. The reason is the one change detection chose (`ConfigDeployed` or `DeploymentUpdated`, with its event), else the reason already reported, else `DeploymentUpdated`; `reportConfigRollout` and `noteRollout` supply only the event, message and reason. `ProgressDeadlineExceeded` counts (`Progressing=False`, `Available=False`, both `RolloutFailed`) only while it describes the current rollout: the Deployment has observed its latest generation and carries the wanted template. Otherwise an `Available=False`/`RolloutFailed` left by an earlier pass is reset (to `True` when the Deployment reports itself available, otherwise removed), so a fix pushed during a stuck rollout reads `Deploying` and fires no second `RolloutFailed` event. A pass that holds the Deployment for a missing plugin ConfigMap, or because it refused the ServiceAccount, never raises `Progressing`; one whose ServiceAccount write failed otherwise raises it while it owes the rollout (see *Applied record*).
+
+`status.observedGeneration` and `Ready`'s `observedGeneration` hold their previous value on a pass that returns an infrastructure error (the stage attempts every independent child and joins the errors, so one failing child cannot starve the rest; the post-restart Job and the deletion of an unwanted HPA wait for a successful Deployment step, and ConfigMap collection runs after it, on a plugin or ServiceAccount hold, and beside a refused Deployment) and on a pass that holds the Deployment although the render is the applied config (its ConfigMap cannot be published or verified). A rejected render, an unavailable validator and a missing plugin ConfigMap do not hold it back. The status is otherwise written in full, and the returned error requeues the gateway.
 
 ### Watch Triggers
 
 | Source | Event | Controller Action |
 |---|---|---|
 | KrakenDGateway | Create/Update/Delete | Full reconcile |
-| Owned Deployment | Update (status change) | Update replicas/readyReplicas, `Available` condition. On rollout converge: set `Progressing=False`, `phase=Running`. On `ProgressDeadlineExceeded`: set `phase=Error`, `Progressing=False`, `Available=False`, emit `RolloutFailed` |
+| Owned Deployment | Update (status change) | Update replicas/readyReplicas. A rollout counts as converged only when the Deployment has observed its latest generation, its pod template carries the applied config checksum and mounts the applied config's ConfigMap, and replicas, updated replicas and available replicas all equal the desired count; then `Progressing=False` and `Available=True`. A Deployment `Available=False` outside a rollout is mirrored into the gateway's `Available` condition. On `ProgressDeadlineExceeded` for the current rollout: `Progressing=False`, `Available=False`, emit `RolloutFailed`. `Ready` and the phase are re-derived from the conditions |
 | Owned Service | Update | Reconcile to correct drift |
-| Owned ConfigMap | Update | Reconcile to correct drift |
-| Owned Dragonfly CR | Status update | Update `DragonflyReady` condition on gateway; emit `DragonflyNotReady` Warning event on phase regression |
+| Owned ConfigMap | Update/Delete | Reconcile to correct drift; a deleted config ConfigMap is published again from the render when the render is the applied config (`publishApplied`); while a newer render is rejected or could not be judged, `appliedConfigMapName` can only re-seed it from the old `<gateway>` ConfigMap when that holds exactly the applied config, otherwise no ConfigMap holds it and the Deployment is held |
+| Owned Dragonfly CR | Status update | Update `DragonflyReady` condition on gateway; emit `DragonflyNotReady` Warning event on phase regression. Watched when the Dragonfly CRD existed at operator startup |
 | Owned HPA | Update | Reconcile to correct drift |
-| Owned ExternalSecret | Update | Reconcile to correct drift |
-| Owned VirtualService | Update | Reconcile to correct drift |
+| Owned Job (post-restart) | Update | Reconcile the post-restart Job decision |
+| Owned ExternalSecret | Update | Reconcile to correct drift. Watched when the ExternalSecret CRD existed at operator startup |
+| Owned VirtualService | Update | Reconcile to correct drift. Watched when the VirtualService CRD existed at operator startup |
+| Plugin ConfigMap (via mapper) | Create/Update/Delete | Enqueue the gateways that reference it in `spec.plugins.sources[].configMapRef`; creating a missing one lifts the hold |
 | KrakenDEndpoint (via mapper) | Create/Update/Delete | Enqueue owning gateway — re-render config |
 | KrakenDBackendPolicy (via mapper) | Update/Delete | Enqueue all gateways whose endpoints reference this policy |
-| License Secret (via mapper) | Update | Enqueue gateway — license monitor may trigger CE fallback/recovery |
+| License Secret (via mapper) | Update | Enqueue gateway — the license is re-evaluated in the reconcile and may trigger CE fallback/recovery |
+
+The three optional kinds (Dragonfly, ExternalSecret, VirtualService) are registered with `Owns()` at startup only when their CRDs are installed (`installedOptionalKinds`); a CRD installed later is watched after an operator restart, and until then its objects are still reconciled on every gateway event.
 
 ### Mapper Functions
 
 ```go
-func (r *GatewayReconciler) endpointToGateway(
+func (r *KrakenDGatewayReconciler) endpointToGateway(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
     ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
@@ -953,48 +1154,47 @@ func (r *GatewayReconciler) endpointToGateway(
     return []reconcile.Request{{
         NamespacedName: types.NamespacedName{
             Name:      ep.Spec.GatewayRef.Name,
-            Namespace: ep.Namespace,
+            Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
         },
     }}
 }
 
-func (r *GatewayReconciler) policyToGateways(
+func (r *KrakenDGatewayReconciler) policyToGateways(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
-    // List all endpoints in the same namespace as the policy
+    // The policy field index finds the endpoints that reference the policy,
+    // whatever their namespace
     var endpoints v1alpha1.KrakenDEndpointList
-    if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+    if err := r.List(ctx, &endpoints, client.MatchingFields{
+        fieldindex.EndpointPolicy: obj.GetNamespace() + "/" + obj.GetName(),
+    }); err != nil {
         return nil
     }
     seen := map[types.NamespacedName]struct{}{}
     var requests []reconcile.Request
     for i := range endpoints.Items {
         ep := &endpoints.Items[i]
-        for _, entry := range ep.Spec.Endpoints {
-            for _, be := range entry.Backends {
-                if be.PolicyRef != nil && be.PolicyRef.Name == obj.GetName() {
-                    nn := types.NamespacedName{
-                        Name:      ep.Spec.GatewayRef.Name,
-                        Namespace: ep.Namespace,
-                    }
-                    if _, ok := seen[nn]; !ok {
-                        seen[nn] = struct{}{}
-                        requests = append(requests, reconcile.Request{NamespacedName: nn})
-                    }
-                }
-            }
+        nn := types.NamespacedName{
+            Name:      ep.Spec.GatewayRef.Name,
+            Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
+        }
+        if _, ok := seen[nn]; !ok {
+            seen[nn] = struct{}{}
+            requests = append(requests, reconcile.Request{NamespacedName: nn})
         }
     }
     return requests
 }
 ```
 
+`pluginConfigMapToGateway` follows the same shape for ConfigMaps: it lists the gateways in the ConfigMap's namespace and enqueues each one whose `spec.plugins.sources[].configMapRef` names it.
+
 ### licenseSecretToGateway Mapper
 
 The `licenseSecretToGateway` mapper maps Secret changes to the gateways that reference them:
 
 ```go
-func (r *GatewayReconciler) licenseSecretToGateway(
+func (r *KrakenDGatewayReconciler) licenseSecretToGateway(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
     // List all KrakenDGateways in the Secret's namespace
@@ -1031,6 +1231,8 @@ func (r *GatewayReconciler) licenseSecretToGateway(
 }
 ```
 
+The Secret and ConfigMap watches are metadata-only, so the mappers receive a `*metav1.PartialObjectMetadata`, never a typed object. They use only `GetName` and `GetNamespace` (`TestGatewayMappers_AcceptMetadataOnlyObjects`), and a mapper must not type-assert `*corev1.Secret` or `*corev1.ConfigMap`. The `Owns(&v1alpha1.KrakenDEndpoint{})` watches elsewhere stay typed: their predicates and the controller-UID index read the typed object.
+
 ### Owned Resource Reconciliation
 
 For each owned resource, the controller follows the **create-or-update** pattern using `controllerutil.CreateOrUpdate`:
@@ -1041,7 +1243,7 @@ dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
     Namespace: gw.Namespace,
 }}
 op, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-    resources.BuildDeployment(dep, gw, configChecksum, pluginChecksum, desiredImage)
+    resources.BuildDeployment(dep, gw, inputs) // inputs: applied checksum, plugins, license, image of the applied edition
     return controllerutil.SetControllerReference(gw, dep, r.Scheme)
 })
 ```
@@ -1052,14 +1254,14 @@ This ensures idempotent reconciliation: the same `Reconcile` call can be retried
 
 ## 6. Endpoint Controller
 
-**File:** `internal/controller/endpoint_controller.go`
+**File:** `internal/controller/krakendendpoint_controller.go`
 
-The endpoint controller is lightweight. Its primary purpose is maintaining endpoint status and triggering gateway reconciliation via the mapper.
+The endpoint controller is lightweight. It resolves the endpoint's gateway and policy references into the `ResolvedRefs` condition and derives `Ready` and the phase. The `Accepted` condition belongs to the gateway controller, which this controller never overwrites; status is patched with an optimistic lock, and only when it changed.
 
 ### Reconciler Struct
 
 ```go
-type EndpointReconciler struct {
+type KrakenDEndpointReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
@@ -1072,54 +1274,73 @@ type EndpointReconciler struct {
 flowchart TD
     A[Fetch KrakenDEndpoint] --> B{Found?}
     B -->|No| Z[Return]
-    B -->|Yes| B1{phase == empty?}
-    B1 -->|Yes| B2[Set phase=Pending]
-    B2 --> C
-    B1 -->|No| C[Validate gatewayRef exists]
+    B -->|Yes| C[Validate gatewayRef exists]
     C --> D{Gateway exists?}
-    D -->|No| E[Set status: Detached<br/>reason: GatewayNotFound]
+    D -->|No| E[ResolvedRefs=False<br/>reason GatewayNotFound]
     D -->|Yes| F[Validate policyRef exists<br/>for each backend in each<br/>endpoints entry]
     F --> G{All policies exist?}
-    G -->|No| H[Set status: Invalid<br/>reason: PolicyNotFound]
-    G -->|Yes| I[Set status: Active]
+    G -->|No| H[ResolvedRefs=False<br/>reason PolicyNotFound]
+    G -->|Yes| I[ResolvedRefs=True<br/>reason RefsResolved]
+    E --> J
+    H --> J
+    I --> J[Drop the legacy Available condition,<br/>derive Ready and the phase from<br/>ResolvedRefs and Accepted<br/>via v1alpha1.EndpointReady]
+    J --> K{Status changed?}
+    K -->|Yes| L[Patch status with optimistic lock,<br/>emit an event on a ResolvedRefs transition]
+    K -->|No| Z
 ```
 
+`Ready` is `False` with the failing condition's reason when `ResolvedRefs` is `False` (`ResolvedRefs` is checked before `Accepted`), `Unknown` with reason `Pending` until the gateway has reported `Accepted` for the endpoint's current generation, and otherwise follows `Accepted`. The phase is the compatibility view of `Ready`: `Active` when `Ready` is `True`, `Pending` when it is `Unknown`, `Detached` for `GatewayNotFound`, `Conflicted` for `EndpointConflict` or `PartiallyAccepted`, and `Invalid` for any other failure. `ResolvedRefs` events fire on transitions only: a `Warning` with reason `GatewayNotFound` or `PolicyNotFound` when the references stop resolving, and a `Normal` `RefsResolved` when they resolve again.
 The endpoint controller does NOT render config or manage Kubernetes resources. Config rendering is exclusively the gateway controller's responsibility, triggered when the gateway controller's endpoint watch fires.
 
 ### SetupWithManager
 
 ```go
-func (r *EndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
     return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.KrakenDEndpoint{}).
+        For(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(endpointPredicate())).
         Watches(
             &v1alpha1.KrakenDGateway{},
             handler.EnqueueRequestsFromMapFunc(r.gatewayToEndpoints),
+            builder.WithPredicates(existencePredicate()),
         ).
+        Watches(
+            &v1alpha1.KrakenDBackendPolicy{},
+            handler.EnqueueRequestsFromMapFunc(r.policyToEndpoints),
+            builder.WithPredicates(existencePredicate()),
+        ).
+        Named("krakendendpoint").
         Complete(r)
 }
 ```
 
-The `gatewayToEndpoints` mapper re-queues all endpoints targeting a gateway when the gateway is updated or deleted (e.g., so endpoints can transition to `Detached` phase if the gateway is removed):
+Each watch carries a predicate so the controller's own writes do not enqueue it again:
+
+- `endpointPredicate` gates the primary watch. It passes spec changes (generation bumps) and changes to the gateway-owned `Accepted` condition, ignoring its `lastTransitionTime`. The controller's own status writes change neither.
+- `existencePredicate` gates the gateway and policy watches. It passes create and delete events only, because an update never changes whether the referenced object exists, which is all `ResolvedRefs` depends on.
+
+The `gatewayToEndpoints` mapper re-queues all endpoints targeting a gateway through the gateway field index when the gateway is created or deleted (e.g., so endpoints can transition to `Detached` if the gateway is removed). The `policyToEndpoints` mapper does the same for the endpoints that reference a created or deleted policy, through the policy field index:
 
 ```go
-func (r *EndpointReconciler) gatewayToEndpoints(
+func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
     var endpoints v1alpha1.KrakenDEndpointList
-    if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+    if err := r.List(ctx, &endpoints,
+        client.MatchingFields{fieldindex.EndpointGateway: obj.GetNamespace() + "/" + obj.GetName()},
+    ); err != nil {
         return nil
     }
-    var requests []reconcile.Request
+    requests := make([]reconcile.Request, 0, len(endpoints.Items))
     for i := range endpoints.Items {
-        if endpoints.Items[i].Spec.GatewayRef.Name == obj.GetName() {
-            requests = append(requests, reconcile.Request{
-                NamespacedName: types.NamespacedName{
-                    Name:      endpoints.Items[i].Name,
-                    Namespace: endpoints.Items[i].Namespace,
-                },
-            })
-        }
+        requests = append(requests, reconcile.Request{
+            NamespacedName: types.NamespacedName{
+                Name:      endpoints.Items[i].Name,
+                Namespace: endpoints.Items[i].Namespace,
+            },
+        })
     }
     return requests
 }
@@ -1129,17 +1350,31 @@ func (r *EndpointReconciler) gatewayToEndpoints(
 
 ## 7. Policy Controller
 
-**File:** `internal/controller/policy_controller.go`
+**File:** `internal/controller/krakendbackendpolicy_controller.go`
 
-The policy controller maintains the `referencedBy` count in policy status and triggers gateway re-renders when policies change.
+The policy controller maintains the `referencedBy` count and the `Ready` condition in policy status. Gateway re-renders on policy changes are the gateway controller's job (`policyToGateways`).
 
 ### Reconciler Struct
 
 ```go
-type PolicyReconciler struct {
+type KrakenDBackendPolicyReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
+    // APIReader reads uncached; the finalizer is released only after it
+    // confirms that no endpoint references the policy.
+    APIReader client.Reader
+    // Tracer records the reconcile's spans; nil records none.
+    Tracer trace.Tracer
+    // Checker judges the policy on its own (the PolicyChecker port);
+    // nil checks only the typed fields.
+    Checker PolicyChecker
+    // Memo remembers a policy's verdict by its content (an LRU of 256 in the
+    // pod); nil remembers nothing.
+    Memo configcheck.Memo
+    // CheckSlots bounds the checks this controller holds at once, shared with
+    // the AutoConfig controller; nil is unbounded.
+    CheckSlots chan struct{}
 }
 ```
 
@@ -1149,73 +1384,72 @@ type PolicyReconciler struct {
 flowchart TD
     A[Fetch KrakenDBackendPolicy] --> B{Found?}
     B -->|No| Z[Return]
-    B -->|Yes| C[List KrakenDEndpoints<br/>in namespace]
-    C --> D[Count endpoints where<br/>any backend references this policy]
-    D --> E[Update status.referencedBy]
+    B -->|Yes| C[List KrakenDEndpoints through the<br/>fieldindex.EndpointPolicy field index]
+    C --> D[Count the endpoints where any<br/>backend references this policy]
+    D --> P{deletionTimestamp set?}
+    P -->|No| Q[Add the protection finalizer if missing]
+    P -->|Yes, still referenced| R[Emit a DeletionBlocked event, keep the policy]
+    P -->|Yes, no cached reference| S[List endpoints uncached]
+    S -->|Still unreferenced| T[Remove the finalizer, return]
+    S -->|Referenced| U[Keep the policy, no event]
+    Q --> E[Update status.referencedBy]
+    R --> E
     E --> F{Validate policy fields}
-    F -->|Invalid| G[Set condition Valid=False<br/>Emit PolicyInvalid]
-    F -->|Valid| H[Set condition Valid=True]
+    F -->|Invalid| G[Set Ready=False with the<br/>InvalidCircuitBreaker or<br/>InvalidRateLimit reason]
+    F -->|Valid| L[Render the policy alone and check it<br/>through the memo, on a controller check slot]
+    L -->|Fails| M[Set Ready=False reason PolicyInvalid,<br/>the policy's own bounded output]
+    L -->|Cannot run| N[Set Ready=Unknown reason ValidatorUnavailable,<br/>return the error: retry with backoff, capped at 5 min]
+    L -->|Passes| H[Set Ready=True<br/>reason Ready]
+    G --> J[Drop the legacy PolicyValid condition,<br/>write status only if it changed]
+    M --> J
+    N --> J
+    H --> J
+    J --> K[Emit an event on a Ready transition]
 ```
 
-The policy controller's reconciliation is straightforward. The `referencedBy` count scans all `KrakenDEndpoint` resources in the namespace and counts how many have at least one `backend[].policyRef.name` matching this policy. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
+`Ready` replaces the earlier `PolicyValid` condition, which is removed from policies written by earlier versions. It is `False` when `circuitBreaker.maxErrors`, `interval` or `timeout` is not positive (`InvalidCircuitBreaker`) or `rateLimit.maxRate` is not positive (`InvalidRateLimit`), and the field checks run first. A policy whose fields are in range is then rendered alone, on a default CE gateway in its own namespace, and checked with `krakend check` (`Checker.CheckPolicy`, a `configcheck.CheckPolicy` span under the reconcile span). When it fails, `Ready` is `False` with reason `PolicyInvalid` and the message `fails krakend check on its own:` plus the policy's own output, bounded like the endpoint's message; its owner may read it, and every endpoint that references it is excluded by the gateway controller. When the check cannot run (no binary, a timeout, or the reconcile cancelled while it waits for a slot, which otherwise only delays the check), `Ready` is `Unknown` with reason `ValidatorUnavailable` and the reconcile returns the error, so it retries with backoff capped at 5 minutes; this is never reported as the policy's failure. Otherwise `Ready` is `True`. The verdict is memoized by the content that was checked, so a reconcile of unchanged content (an endpoint change that re-queues the policy, a resync) runs no krakend; after a restart each policy is checked once while the memo holds its verdict (an LRU of the 256 most recent contents, `policyMemoSize`), and one evicted from it is checked again on its next reconcile. Events fire on transitions only: a `Warning` with the invalid reason when `Ready` becomes `False` or changes reason, and a `Normal` `Ready` when it returns to `True` from `False` or `Unknown`. Entering `Unknown` raises no event.
+
+The policy controller's reconciliation is straightforward. The `referencedBy` count is the number of `KrakenDEndpoint` resources the `fieldindex.EndpointPolicy` field index returns for the policy's `namespace/name`: those with at least one `backend[].policyRef` that resolves to this policy, in any namespace. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper, which uses the same index: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
+
+### Protection finalizer
+
+Every policy that is not being deleted carries the finalizer `gateway.krakend.io/policy-protection` (`v1alpha1.PolicyProtectionFinalizer`), added with an `Update` of the object (RBAC: `update` on `krakendbackendpolicies`). Deleting a policy is always accepted, because the policy webhook is not registered for DELETE. A terminating policy that endpoints still reference keeps serving: the controller keeps reporting `referencedBy`, emits a `DeletionBlocked` warning event that names up to five referencing endpoints, and leaves the finalizer. The endpoint watch enqueues the policy when its last reference is deleted or repointed, and the controller then removes the finalizer. The cached index can lag a reference created a moment ago, so before it releases a policy its cache shows unreferenced the controller lists the endpoints through `APIReader` (a field index exists only in the cache, so it filters the list with `fieldindex.EndpointPolicyKeys`). Admission rejects a new reference to a terminating policy. Admission narrows the matching race. The endpoint webhook reads a policy through the cache at the start of the request, and the render check that follows can take seconds (up to the 12 s budget with slot waits), so after the check the validator re-reads each newly referenced policy through the manager's uncached reader (`EndpointValidator.APIReader`) and refuses the write when the policy is missing or terminating (an uncached read error is a retryable 500). The residual window runs from that uncached read until the endpoint is persisted, plus the controller's own release check: a reference persisted after the controller's uncached list but admitted before the deletion was visible there. The endpoint then reports `PolicyNotFound` and drops out of the render. A policy is also unprotected until its first reconcile adds the finalizer, including during an upgrade rollout, where the new webhook configuration drops DELETE before the new leader has added finalizers.
 
 ### SetupWithManager
 
 ```go
-func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
     return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.KrakenDBackendPolicy{}).
+        For(&v1alpha1.KrakenDBackendPolicy{},
+            builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+        ).
         Watches(
             &v1alpha1.KrakenDEndpoint{},
-            handler.EnqueueRequestsFromMapFunc(r.endpointToReferencedPolicies),
+            r.endpointPolicyHandler(),
+            builder.WithPredicates(policyEndpointPredicate()),
         ).
+        Named("krakendbackendpolicy").
         Complete(r)
 }
 ```
 
-The `Watches(&v1alpha1.KrakenDEndpoint{})` ensures that when an endpoint is created, updated, or deleted, the policies it references are re-reconciled to update their `referencedBy` counts:
-
-```go
-func (r *PolicyReconciler) endpointToReferencedPolicies(
-    ctx context.Context, obj client.Object,
-) []reconcile.Request {
-    ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-    if !ok {
-        return nil
-    }
-    seen := map[string]struct{}{}
-    var requests []reconcile.Request
-    for _, entry := range ep.Spec.Endpoints {
-        for _, be := range entry.Backends {
-            if be.PolicyRef != nil {
-                if _, ok := seen[be.PolicyRef.Name]; !ok {
-                    seen[be.PolicyRef.Name] = struct{}{}
-                    requests = append(requests, reconcile.Request{
-                        NamespacedName: types.NamespacedName{
-                            Name:      be.PolicyRef.Name,
-                            Namespace: ep.Namespace,
-                        },
-                    })
-                }
-            }
-        }
-    }
-    return requests
-}
-```
+The `Watches(&v1alpha1.KrakenDEndpoint{})` ensures that when an endpoint is created or deleted, or its spec changes (a generation bump; `policyEndpointPredicate` drops status-only updates), the policies it references are re-reconciled to update their `referencedBy` counts. `endpointPolicyHandler` enqueues the policies of the endpoint on a create or delete, and on an update the union of the old and the new references, so a removed reference is recounted too. `policyRefsFromEndpoint` extracts the deduplicated requests, resolving each reference's namespace with `PolicyRef.ResolvedNamespace`.
 
 ---
 
 ## 8. AutoConfig Controller
 
-**File:** `internal/controller/autoconfig_controller.go`
+**File:** `internal/controller/krakendautoconfig_controller.go`
 
 The autoconfig controller watches `KrakenDAutoConfig` resources and orchestrates the OpenAPI-to-endpoint pipeline described in operator architecture §16. The controller uses CUE as its transformation engine: OpenAPI spec data is unified with CUE definitions to produce `KrakenDEndpointSpec` objects.
 
 ### Reconciler Struct
 
 ```go
-type AutoConfigReconciler struct {
+type KrakenDAutoConfigReconciler struct {
     client.Client
     Scheme       *runtime.Scheme
     Recorder     record.EventRecorder
@@ -1223,7 +1457,21 @@ type AutoConfigReconciler struct {
     CUEEvaluator autoconfig.CUEEvaluator
     Filter       autoconfig.Filter
     Generator    autoconfig.Generator
+    Checker      AutoConfigChecker  // the pod's one configcheck.Checker, over the endpoints a sync is about to write
+    CheckSlots   chan struct{}      // bounds this reconciler's concurrent checks (1 of the checker's 3 slots); nil is unbounded
     Clock        clock.Clock
+    MaxConcurrentReconciles int     // --autoconfig-max-concurrent-reconciles, default 4; below 1 means 1
+    FetchTimeout time.Duration      // spec fetch plus external $ref resolution; zero means defaultFetchTimeout (2 minutes)
+}
+
+// AutoConfigChecker is declared by the AutoConfig controller, which consumes it.
+type AutoConfigChecker interface {
+    Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (configcheck.RouteConflicts, error)
+    CheckRoot(ctx context.Context, r configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckGroup(ctx context.Context, g configcheck.Group, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+        memo configcheck.Memo) (configcheck.EndpointVerdict, error)
 }
 ```
 
@@ -1233,152 +1481,164 @@ type AutoConfigReconciler struct {
 flowchart TD
     A[Fetch KrakenDAutoConfig] --> B{Found?}
     B -->|No| Z[Return]
-    B -->|Yes| B1{phase == empty?}
-    B1 -->|Yes| B2[Set phase=Pending<br/>return requeue]
-    B1 -->|No| C[Set phase=Fetching]
-    C --> D[Fetch OpenAPI spec<br/>via Fetcher]
+    B -->|Yes| BD{deletionTimestamp set?}
+    BD -->|Yes| Z
+    BD -->|No| D[Fetch OpenAPI spec via Fetcher<br/>2 minute deadline over the fetch<br/>and the external $ref resolution]
     D --> E{Fetch OK?}
-    E -->|No| F[Set SpecAvailable=False<br/>phase=Error<br/>Emit SpecFetchFailed]
-    E -->|Yes| G[Compute spec checksum +<br/>CUE definitions resourceVersion]
-    G --> H{Checksum or CUE defs changed?}
-    H -->|No| I[No-op: set phase=Synced]
-    H -->|Yes| J[Set phase=Rendering]
-    J --> J1[Load default CUE definitions<br/>from krakend-cue-definitions ConfigMap]
+    E -->|No| F[Set SpecAvailable=False<br/>Fail sync:<br/>SpecFetchFailed]
+    E -->|Yes| G[Resolve external $refs, strip servers,<br/>dereference parameter $refs<br/>Set SpecAvailable=True<br/>collect spec notes]
+    G --> H[Combined checksum: spec checksum +<br/>CUE definitions resourceVersion + generation<br/>inputsChanged = differs from status.specChecksum]
+    H --> J1[Load default CUE definitions<br/>from krakend-cue-definitions ConfigMap<br/>or the embedded defaults]
     J1 --> J2{Custom CUE ConfigMap<br/>referenced?}
     J2 -->|Yes| J3[Load custom CUE definitions]
-    J2 -->|No| J4[CUE Evaluator: unify<br/>spec + defaults + CR overrides]
+    J2 -->|No| J4[CUE Evaluator: unify<br/>spec + defaults + CR overrides<br/>an entry that fails CUE is Failed<br/>HEAD, OPTIONS, TRACE entries are Skipped]
     J3 --> J4
-    J4 --> J5{CUE evaluation OK?}
-    J5 -->|No| J6[Set phase=Error<br/>Emit CUEEvaluationFailed]
-    J5 -->|Yes| M[Apply include/exclude filters]
+    J4 --> J5{Whole-evaluation<br/>CUE OK?}
+    J5 -->|No| J6[Fail sync:<br/>CUEEvaluationFailed]
+    J5 -->|Yes| J8{Every override matched an<br/>operationId and backend index?}
+    J8 -->|No| J9[Fail sync:<br/>UnmatchedOverride]
+    J8 -->|Yes| J10{Override operationId declared<br/>by more than one operation?}
+    J10 -->|Yes| J11[Fail sync:<br/>AmbiguousOverride]
+    J10 -->|No| M[Apply include/exclude filters<br/>to entries, Skipped and Failed]
     M --> M2{additionalEndpoints set?}
     M2 -->|No| O
     M2 -->|Yes| M3[BuildAdditionalEntries<br/>synthesize AdditionalEndpoint specs]
     M3 --> M4[ApplyURLTransformToEntries<br/>apply same urlTransform as spec-derived]
     M4 --> MB{Resolve base path:<br/>manual → addPathPrefix → DeriveBasePath}
-    MB -->|indeterminate| ME[Set phase=Error<br/>Emit AdditionalEndpointScopeFailed]
+    MB -->|indeterminate| ME[Fail sync:<br/>AdditionalEndpointScopeFailed]
     MB -->|resolved| MS[ScopeAdditionalEntries<br/>prepend base to public paths]
     MS --> M5[MergeAdditional<br/>additional wins on endpoint:method collision]
-    M5 --> M6[Emit AdditionalEndpointOverride<br/>Warning for each replaced entry]
-    M6 --> O[Generate KrakenDEndpoints<br/>via Generator]
-    O --> P[Diff against existing generated endpoints]
-    P --> Q[Create / Update / Delete endpoints]
-    Q --> R[Set phase=Synced<br/>Emit EndpointsGenerated]
+    M5 --> M6[Buffer AdditionalEndpointOverride Warning<br/>per replaced entry if inputsChanged]
+    M6 --> O[Generate KrakenDEndpoints<br/>via Generator<br/>per-endpoint schema closure<br/>duplicates skipped]
+    O --> O1{Generate OK?}
+    O1 -->|No| O2[Fail sync:<br/>CUEEvaluationFailed]
+    O1 -->|Yes| O3[Buffer SpecWarning and DuplicateOperationId<br/>events if inputsChanged]
+    O3 --> K[List the endpoints the AutoConfig controls<br/>by controller UID, adopt label-matched<br/>orphans it does not write]
+    K --> K1[Hold desired endpoints that lose their route<br/>to another desired endpoint:<br/>ConfigValidationFailed]
+    K1 --> K2[Precheck: CE namespace holds, router clash holds,<br/>then root alone, candidates together,<br/>each candidate alone when they fail or lost an entry.<br/>Candidates carry their creation time,<br/>stale endpoints modelled as gone unless this pass keeps them<br/>CE gateway: Enterprise-only namespaces are held<br/>as EndpointRejected without a write]
+    K2 --> K3{Check could run?}
+    K3 -->|No| K4[Fail sync:<br/>ValidatorUnavailable]
+    K3 -->|Yes| Q[Write every endpoint that is not held<br/>CreateOrUpdate: merged labels, spec by JSON value,<br/>controller reference<br/>an invalid rejection is held as EndpointRejected]
+    Q --> Q0[Delete stale endpoints only when no<br/>operation is held and no write failed]
+    Q0 --> Q1{Transient write, adopt<br/>or delete error?}
+    Q1 -->|Yes| Q2[Fail sync:<br/>EndpointReconcileFailed]
+    Q1 -->|No| Q3{Only Conflict or<br/>AlreadyExists?}
+    Q3 -->|Yes| Q4[Requeue quietly after 1s]
+    Q3 -->|No| R[Set Synced, specChecksum, endpoint counts,<br/>skipped, failedOperations, warnings,<br/>readyEndpoints and EndpointsReady<br/>Synced=False OperationsFailed while any operation is held<br/>Ready and phase are derived when status is written]
+    R --> R1{inputsChanged or<br/>any endpoint write?}
+    R1 -->|Yes| R2[Set lastSyncTime]
+    R1 -->|No| R3
+    R2 --> R3{Status differs from the<br/>status read at the start?}
+    R3 -->|Yes| R4[Write status]
+    R3 -->|No| R5
+    R4 --> R5[Emit buffered warnings, OperationsFailed if held<br/>and Synced or failedOperations changed,<br/>and EndpointsGenerated if inputsChanged<br/>or any endpoint write<br/>Log every held cause once per change per process]
+    R5 --> R6[RequeueAfter periodic.interval<br/>or 5m for OnChange]
 ```
 
-**Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. After applying the URL transform, additional endpoints are scoped under the application's base path — `spec.additionalEndpointsBasePath` if set, else `urlTransform.addPathPrefix` (already applied, so no further scoping), else the common parent directory derived from the generated endpoints (`DeriveBasePath`). If none of these resolves to a non-empty base, the sync fails with `AdditionalEndpointScopeFailed`. Scoping prepends the base to the public path only; backend `urlPattern` is unchanged. `ApplyURLTransformToEntries` is called before scoping and `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. On collision, the additional entry wins and the controller emits an `AdditionalEndpointOverride` Warning event.
+Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: the `Synced` condition `False` with that reason (so `Ready` is `False` and the derived phase is `Error`), and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. Every failure path also refreshes `status.readyEndpoints` and `EndpointsReady` from the endpoints the AutoConfig controls (`refreshReadiness`: the controller UID index, no adoption; the last values stay when the list fails). A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync (any failure but `OperationsFailed`, which reaches its endpoint writes and records its inputs like a successful sync) leaves `status.specChecksum` at the last successful sync's value: a spec fetch, whole-evaluation CUE, unmatched or ambiguous override, or base-path failure stops the pipeline before any endpoint is touched, and a transient write failure or an unavailable check (`ValidatorUnavailable`) keeps every stale endpoint. `phase` never passes through `Fetching` or `Rendering`. It is derived from the `Synced` condition each time status is written, and every status write sets `Synced`, so the phase is empty before the first write and is then only `Synced` or `Error`; `Ready` is absent until the first sync, because every status write sets `Synced`.
 
-### Periodic Trigger
+A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under foreground deletion it lingers while garbage collection deletes its endpoints, each delete re-enqueues it through the `Owns` watch, and converging would recreate the endpoint just collected.
 
-When `trigger: Periodic`, the controller returns `ctrl.Result{RequeueAfter: interval}` from `Reconcile`, causing controller-runtime to re-enqueue the resource after the specified interval. The spec checksum check prevents unnecessary endpoint churn when the spec hasn't changed.
+### Per-Operation Holds, Write Order and Ownership
+
+**Files:** `internal/controller/autoconfig_endpoints.go`, `autoconfig_status.go`, `schema_conflicts.go`
+
+`Reconcile` splits an operation's fate from the sync's. An operation that fails CUE evaluation (`CUEOutput.Failed`, reason `CUEEvaluationFailed`), fails krakend check on its own, would take part in a new router clash, or loses its route to another desired endpoint (`routeCollisions`, `precheck`, reason `ConfigValidationFailed`), or whose endpoint the API server rejects as invalid or another object controls (`endpointOutcome.record`, reason `EndpointRejected`), is held: `reconcileEndpoints` does not write it, so its endpoint stays as it was, and it deletes no stale endpoint while `held || outcome.failed()`. `recordSync` then sets `Synced` `False` with reason `OperationsFailed` (`syncedCondition`, naming at most 5 operations) and lists each operation in `status.failedOperations` (`rejectedStatuses` for the endpoint holds, `operationStatuses` for the CUE ones). The reconcile returns no error, so a held operation is not retried with backoff. Operations `spec.filter` excludes are dropped first (`inScope`), so they are neither listed nor hold anything.
+
+`reconcileEndpoints` orders its work for make-before-break:
+
+1. `claimEndpoints` lists the endpoints the AutoConfig controls through the `fieldindex.EndpointController` index (namespace-scoped), and adopts each label-matched orphan it does not itself want to write (both managed labels, no controller, not terminating) as a ReplicaSet adopts pods. An endpoint controlled by another object is never touched.
+2. `planEndpoints` splits the desired endpoints into writes (missing, label-short or spec-different by JSON value) and stale endpoints.
+3. `routeCollisions` groups the desired endpoints by method and `renderer.ConflictKey` of the path. The survivor of a group is the one the renderer serves (the oldest stored `creationTimestamp`, then the lowest name; `creationOrder` takes the stored time of every controlled endpoint and of every existing desired endpoint that no other object controls (`withUncontrolled`: an orphan `writeEndpoint` takes over, or an unlabelled endpoint of that name), and a new one sorts last). Every other member is held, written or not. The holds enter `precheck` as holds, so the stale endpoints stay in the check.
+4. `precheck` holds, in order: the candidates that use Enterprise-only namespaces on a CE gateway; the candidates that would newly clash in the router (`routerClashes`: `configcheck.NewClashes` over `Conflicts` before and after, every write held when the render's clash resolution is capped); then `judgeCandidates` (the gateway root alone, which when it fails holds nobody; the root with every candidate together; each candidate alone when they fail, or each candidate that lost an entry when they pass). Every krakend check goes through `withCheckSlot` (`CheckSlots`) and the AutoConfig's verdict memo; `Conflicts` renders in process, holds no slot and uses no memo. After any hold, the clash check runs again over the remaining writes, with the stale endpoints and the held candidates' stored versions kept, until it holds no more. When the sync will also delete the stale endpoints, the first clash render sees them as empty copies (`checkSet`); they stay when an operation is held or a write names an endpoint the last status recorded as `EndpointRejected` (`recursRejection`). `checkSet` also gives each candidate the creation time the cluster will give it (`creationOrder.timestamp`: an existing endpoint's own, a new one after every existing one), because the renderer serves the oldest of the endpoints that share a route. A rename and a brand-new rejection in one pass is not predicted: the gateway renders the old and the new endpoints together, and the older one's entry is served until the cause is fixed. A hold quotes only the candidate's own output, cut to fit the 256-byte status entry (`holdMessageLimit`; the log keeps the full text), or names the policy at fault, so no other endpoint's content reaches this AutoConfig's status. A gateway that does not exist is not checked.
+5. `writeEndpoint` writes every candidate that passed with `CreateOrUpdate`: it merges the managed labels into the live ones and makes the AutoConfig its controller. `endpointOutcome.record` classifies each failure: `Conflict` and `AlreadyExists` as raced (a quiet requeue), `IsInvalid` and `AlreadyOwnedError` as rejected (held), anything else as transient (`EndpointReconcileFailed`, with backoff, naming five failures and counting the rest).
+6. `deleteEndpoint` removes each stale endpoint, preconditioned on its UID, only when nothing is held and no write failed.
+
+`logHeldCauses` then logs the full cause of every held operation, a CUE failure or a rejection, at Info when the causes differ from what this process last logged for the AutoConfig (a `sync.Map` of digests keyed by namespace and name, so a recreated AutoConfig overwrites its predecessor, dropped when the AutoConfig is deleted or holds nothing). `summarizeReadiness` judges the endpoints the AutoConfig controls afterwards, a written one from the object its write returned, and `endpointsReadyCondition` sets `EndpointsReady`; `autoConfigReady` derives `Ready` from `SpecAvailable`, `Synced` and `EndpointsReady`.
+
+**Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. After applying the URL transform, additional endpoints are scoped under the application's base path — `spec.additionalEndpointsBasePath` if set, else `urlTransform.addPathPrefix` (already applied, so no further scoping), else the common parent directory derived from the generated endpoints and the paths of the in-scope held operations (`DeriveBasePath`). If none of these resolves to a non-empty base, the sync fails with `AdditionalEndpointScopeFailed`. Scoping prepends the base to the public path only; backend `urlPattern` is unchanged. `ApplyURLTransformToEntries` is called before scoping and `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. On collision, the additional entry wins and, when the inputs changed since the last successful sync, the controller emits an `AdditionalEndpointOverride` Warning event.
+
+### Periodic Trigger and Resync
+
+A successful reconcile returns `ctrl.Result{RequeueAfter: interval}`: `spec.periodic.interval` for `trigger: Periodic`, otherwise `defaultResyncInterval` (5 minutes), so `OnChange` AutoConfigs are also re-polled without a watch event and upstream spec changes are picked up. A resync runs the same full pipeline as a watch-triggered reconcile.
+
+`status.specChecksum` records which inputs the last sync that reached its endpoint writes used (a sync that holds operations included); it does not gate evaluation. A sync whose combined checksum differs from it, or that wrote an endpoint, sets `lastSyncTime` and emits `EndpointsGenerated`; the `SpecWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warnings are emitted only when the checksum differs (at most 20 events per sync). Churn is avoided by comparison instead: endpoint labels are compared with `maps.Equal` and specs by decoded JSON value (`endpointSpecEqual`, so the API server's re-encoding of raw `extraConfig` doesn't count as a change), `CreateOrUpdate` writes nothing for an endpoint already in the desired state, and status is written only when it differs semantically from the status read at the start of the reconcile. A steady-state reconcile writes nothing and emits no event.
 
 ### SetupWithManager
 
 ```go
-func (r *AutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
     return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.KrakenDAutoConfig{}).
-        Owns(&v1alpha1.KrakenDEndpoint{}).
+        // autoConfigPredicate: generation, label or annotation changes
+        For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(autoConfigPredicate())).
+        Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(ownedEndpointPredicate())).
         Watches(
             &corev1.ConfigMap{},
-            handler.EnqueueRequestsFromMapFunc(r.cueConfigMapToAutoConfig),
+            handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
+            builder.OnlyMetadata,
         ).
+        WithOptions(crcontroller.Options{
+            RateLimiter:             newAutoConfigRateLimiter(), // per-item backoff capped at defaultResyncInterval
+            MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+        }).
+        Named("krakendautoconfig").
         Complete(r)
 }
 ```
 
-The `Owns(&v1alpha1.KrakenDEndpoint{})` watch ensures that if a generated endpoint is manually deleted, the autoconfig controller re-reconciles and recreates it. The `Watches(&corev1.ConfigMap{})` watch detects changes to CUE definition ConfigMaps (both the default `krakend-cue-definitions` and any custom ConfigMap referenced by `cue.definitionsConfigMapRef`), triggering re-evaluation when definitions change.
+The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current (a failed sync refreshes it too, from the endpoints the AutoConfig controls then). `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`. The watch is metadata-only, so `configMapToAutoConfigs` reads only the ConfigMap's name and namespace (`TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly`). The AutoConfig controller reads its Secrets and ConfigMaps live: each reconcile reads the namespace's `krakend-cue-definitions` ConfigMap once, in full (falling back to the embedded definitions when it is absent), and the `cue.definitionsConfigMapRef` ConfigMap once, in full, when it is set (a missing one fails the sync with `CUEEvaluationFailed`, with no fallback), and their resource versions feed the sync checksum; the spec and auth sources are read in full when it fetches them.
 
 ---
 
-## 9. License Monitor
+## 9. License Evaluation
 
-**File:** `internal/controller/license_monitor.go`
+**Files:** `internal/controller/gateway_license.go`, `internal/util/license/window.go`
 
-The license monitor runs as a periodic reconciler independent of the main gateway reconciliation loop, implementing the state machine described in operator architecture §9.
+The gateway reconcile evaluates an EE gateway's license before it renders, because the result decides whether the render is CE. There is no separate license goroutine: gateway status has a single writer, and the reconcile writes nothing to the user's KrakenDGateway object.
 
 ### Design
 
-The license monitor is NOT implemented as a standard controller-runtime reconciler. Instead, it runs as a goroutine started via `manager.Add(runnable)` with a 5-minute tick interval:
+`reconcileLicense(ctx, gw)` returns a `licenseVerdict`:
 
 ```go
-type LicenseMonitor struct {
-    client.Client
-    Recorder        record.EventRecorder
-    Clock           clock.Clock
-    LicenseParser   util.LicenseParser
-    CheckInterval   time.Duration
-    SafetyBuffer    time.Duration // default: 1 hour
-
-    mu              sync.Mutex
-    lastWarningSent map[types.NamespacedName]time.Time // rate-limit LicenseExpiringSoon to once per 24h
-}
-
-// Start implements manager.Runnable
-func (m *LicenseMonitor) Start(ctx context.Context) error {
-    ticker := m.Clock.NewTicker(m.CheckInterval)
-    defer ticker.Stop()
-    for {
-        select {
-        case <-ctx.Done():
-            return nil
-        case <-ticker.C():
-            m.checkAll(ctx)
-        }
-    }
+type licenseVerdict struct {
+    ceFallback          bool          // render and run CE instead of EE
+    requeueAfter        time.Duration // when to look at the license again
+    licenseChecksum     string        // SHA-256 of the license bytes the pods must run with
+    keepDeployedLicense bool          // license unreadable: keep the checksum the Deployment carries
 }
 ```
 
-`checkAll` lists all EE KrakenDGateways and calls `checkGateway` for each one. `checkGateway(ctx, gw)` implements the per-gateway license state machine below, reading `gw.Spec.License.ExpiryWarningDays` to determine the warning threshold for each gateway individually.
+The stage comes from `license.Window{Warning, SafetyBuffer}.StageAt(notAfter, now)`: `StageValid`, `StageExpiringSoon`, `StagePreExpiry` or `StageExpired`. `Warning` is `spec.license.expiryWarningDays` (default 30 days) and must stay longer than `SafetyBuffer` (1 hour); a compile-time constant check enforces this. The reconcile requeues at the next stage boundary (`Window.NextChange`), and at least every 5 minutes (`licenseRecheckInterval`). A Secret change enqueues the gateway through the Secret watch. If the license cannot be read, `LicenseValid` is `Unknown` unless the last known expiry in `status.licenseExpiry` is already inside the safety buffer or past, in which case the stage verdict (`False`) applies and the CE fallback happens as for a readable license; otherwise the last fallback decision is kept. The gateway controller's retry backoff is capped at the same 5 minutes (`newGatewayRateLimiter`, built with `cappedRateLimiter`). CE gateways return an empty verdict.
+
+The license is mounted with `subPath`, so a renewed Secret never reaches running pods by itself. `licenseChecksum` is the SHA-256 of the license bytes read, set for every EE gateway whose license was read, CE fallback or not, because the license stays mounted under fallback; the gateway controller passes it through `infraInputs` to `resources.BuildDeployment`, which writes it as the `krakend.io/checksum-license` pod-template annotation. A changed value rolls the Deployment (`Progressing=True/DeploymentUpdated`, and `deploymentConverged` waits for it). When the license is unreadable, `keepDeployedLicense` makes the controller reuse the annotation the live Deployment carries, so nothing rolls. The post-restart Job identity does not include it.
 
 ### License Check Logic
 
 ```mermaid
 flowchart TD
-    A[List all KrakenDGateways<br/>with edition=EE] --> B[For each gateway:<br/>call checkGateway]
-    B --> C[Read license Secret]
-    C --> D{Secret exists?}
-    D -->|No| E[Set LicenseSecretUnavailable=True]
-    D -->|Yes| F[Parse X.509 certificate<br/>extract notAfter]
-    F --> F1[Read gw.Spec.License.<br/>ExpiryWarningDays]
-    F1 --> G{expiry ≤ now?}
-    G -->|Yes| H[LicenseExpired path]
-    G -->|No| I{expiry ≤ now + safetyBuffer?}
-    I -->|Yes| J[PreExpiry path]
-    I -->|No| K{expiry ≤ now + warningDays?}
-    K -->|Yes| L[EEWarning: emit LicenseExpiringSoon<br/>rate-limited 24h]
-    L --> L1{Currently Degraded<br/>or Error<br/>license-caused?}
-    L1 -->|Yes| L2[Trigger EE recovery<br/>emit LicenseRestored]
-    L1 -->|No| DONE[Done]
-    K -->|No| M[EERunning: license healthy]
-    M --> M1{Currently Degraded<br/>or Error<br/>license-caused?}
-    M1 -->|Yes| M2[Trigger EE recovery<br/>emit LicenseRestored]
-    M1 -->|No| DONE
+    A[Gateway reconcile, edition=EE] --> C[Read license Secret]
+    C --> D{Secret readable<br/>and parseable?}
+    D -->|No| E[Set LicenseSecretUnavailable=True,<br/>emit LicenseSecretMissing once,<br/>LicenseValid=Unknown unless the last known<br/>expiry is in the safety buffer or past,<br/>then apply that stage;<br/>otherwise keep the last fallback decision;<br/>keep the deployed license checksum;<br/>requeue at the next boundary, at most 5 minutes]
+    D -->|Yes| F[Set licenseExpiry and the<br/>krakend_operator_license_expiry_seconds metric]
+    F --> G{Stage}
+    G -->|Valid| M[LicenseValid=True LicenseOK]
+    G -->|ExpiringSoon| L[LicenseValid=True LicenseExpiringSoon,<br/>emit LicenseExpiringSoon on entering]
+    M --> R{LicenseExpired or<br/>LicenseDegraded True?}
+    L --> R
+    R -->|Yes| R1[Both False LicenseRestored,<br/>emit LicenseRestored]
+    G -->|PreExpiry or Expired| H[LicenseValid=False and LicenseExpired=True]
     H --> N{fallbackToCE?}
-    J --> N
-    N -->|Yes| O[Trigger CE fallback<br/>via gateway reconcile]
-    N -->|No| P[Set phase=Error<br/>emit LicenseExpiredNoFallback]
+    N -->|Yes| O[LicenseDegraded=True LicenseFallbackCE,<br/>emit LicenseFallbackCE,<br/>render CE]
+    N -->|No| P[emit LicenseExpiredNoFallback,<br/>the gateway derives Ready=False and phase=Error]
 ```
 
-### Triggering Gateway Reconciliation
+### Events on Transitions
 
-The license monitor does not directly modify Deployments or ConfigMaps. The `checkGateway` method first patches the gateway's **status conditions** (e.g., setting `LicenseDegraded=True`, `LicenseValid=False`, `LicenseExpired=True`) using a status subresource patch. After conditions are set, it calls `triggerReconcile` to patch an annotation on the gateway resource. This annotation update triggers the gateway controller's watch, which re-enqueues the gateway for reconciliation. The gateway controller's reconcile loop then reads the current status conditions (already set by `checkGateway`) and acts accordingly (e.g., reading `LicenseDegraded=True` to determine `CEFallback`).
-
-```go
-func (m *LicenseMonitor) triggerReconcile(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
-    // Patch annotation to trigger the gateway controller's watch
-    patch := client.MergeFrom(gw.DeepCopy())
-    if gw.Annotations == nil {
-        gw.Annotations = map[string]string{}
-    }
-    gw.Annotations["gateway.krakend.io/license-check"] = m.Clock.Now().Format(time.RFC3339)
-    return m.Patch(ctx, gw, patch)
-}
-```
-
-### Event Rate Limiting
-
-The `LicenseExpiringSoon` Warning event is rate-limited to once per 24 hours per gateway. The monitor tracks the last emission time in an in-memory map (keyed by gateway namespace/name). This map is not persisted — on operator restart, the event may fire once more. This is acceptable: duplicate Warning events are harmless and provide an additional signal after restarts.
+Every license event goes through a transition-only path (`setProblemCondition` for `LicenseSecretUnavailable` and `LicenseDegraded`, a previous-reason check for `LicenseExpiringSoon`, a previous-status check for `LicenseExpiredNoFallback` and `LicenseRestored`), so a steady state emits nothing on repeated reconciles. `LicenseExpiringSoon` fires once when the license enters the warning window.
 
 ---
 
@@ -1396,11 +1656,12 @@ type Renderer interface {
 }
 
 type RenderInput struct {
-    Gateway    *v1alpha1.KrakenDGateway
-    Endpoints  []v1alpha1.KrakenDEndpoint
-    Policies   map[string]*v1alpha1.KrakenDBackendPolicy // keyed by policy name
-    CEFallback bool
-    Dragonfly  *DragonflyState // nil if not enabled
+    Gateway          *v1alpha1.KrakenDGateway
+    Endpoints        []v1alpha1.KrakenDEndpoint
+    Policies         map[string]*v1alpha1.KrakenDBackendPolicy // keyed by namespace/name (PolicyRef.PolicyKey)
+    CEFallback       bool
+    Dragonfly        *DragonflyState // nil if not enabled
+    PluginConfigMaps []corev1.ConfigMap
 }
 
 type DragonflyState struct {
@@ -1409,12 +1670,24 @@ type DragonflyState struct {
 }
 
 type RenderOutput struct {
-    JSON             []byte
-    Checksum         string   // SHA-256 hex
-    DesiredImage     string
-    PluginChecksum   string
+    JSON                []byte
+    Checksum            string // SHA-256 hex
+    PluginChecksum      string
     ConflictedEndpoints []types.NamespacedName
     InvalidEndpoints    []types.NamespacedName
+    // EntryConflicts: for each KrakenDEndpoint that lost an entry, the
+    // entries it lost, one for every older KrakenDEndpoint the entry clashes
+    // with (the winner). Detail is the router's refusal when the entries do
+    // not share a route shape but KrakenD cannot serve both: a router clash,
+    // an EE wildcard overlap or an auto_options OPTIONS route
+    EntryConflicts map[types.NamespacedName][]EntryConflict
+    // StrippedEEFeatures: what a CE-fallback render removed because only
+    // KrakenD Enterprise supports it
+    StrippedEEFeatures []StrippedEEFeature
+    // RouteResolutionCapped: the render stopped resolving router clashes
+    // between endpoints after 21 refused entries (an entry left in because its clash needs several older routes together counts too); later entries are rendered
+    // as they are, and every consumer fails closed
+    RouteResolutionCapped bool
 }
 ```
 
@@ -1430,12 +1703,14 @@ func New(opts Options) *krakendRenderer {
 type ValidatorOptions struct {
     Executor   CommandExecutor
     BinaryPath string
+    Timeout    time.Duration // zero means the 30-second default
 }
 
 func NewValidator(opts ValidatorOptions) *KrakenDValidator {
     return &KrakenDValidator{
         Executor:   opts.Executor,
         BinaryPath: opts.BinaryPath,
+        Timeout:    opts.Timeout,
     }
 }
 
@@ -1448,8 +1723,11 @@ func NewKrakenDExecutor(binaryPath string) *KrakenDExecutor {
 
 ```go
 type Validator interface {
-    Validate(ctx context.Context, jsonData []byte) error
-    PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error)
+    // Validate checks jsonData the way KrakenD of the given edition would load
+    // it, using the embedded CE binary, including krakend's router test.
+    Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error
+    // Lint is Validate without krakend's router test.
+    Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error
 }
 ```
 
@@ -1461,7 +1739,10 @@ type Validator interface {
 | `endpoints.go` | Builds the `endpoints` array by flattening all `KrakenDEndpoint.spec.endpoints[]` entries, sorts by path then method |
 | `extra_config.go` | Merges `extra_config` namespaces from gateway spec, policies, and endpoint overrides |
 | `plugins.go` | Builds the `plugin` root key when plugins are configured. Computes plugin checksum from ConfigMap data hashes and OCI image tags |
-| `validator.go` | Wraps `krakend check -tlc` execution via the `CommandExecutor` interface |
+| `eestrip.go` | Strips the Enterprise-only features from a CE-fallback render and lists them (`StrippedEEFeatures`); exports the Enterprise-only namespace lists (`EEOnlyNamespaces`) |
+| `eewildcard.go` | The EE wildcard rules applied when an EE render is validated with the CE binary |
+| `routeadmit.go` | `routeLosers` admits entries to the router in serving order (oldest first): a newer entry loses to any older entry it clashes with, served or not, checked pairwise against the older entries left out and by registration in the served engine; an entry gin refuses on its own or next to its own endpoint's entries is left in for that endpoint's own check and not counted; an entry that clashes only with several older routes together is left in but counts toward the cap of 21 |
+| `validator.go` | Wraps `krakend check -t -n -c` execution via the `CommandExecutor` interface |
 
 ### Deterministic Serialization
 
@@ -1504,13 +1785,28 @@ func (e *KrakenDExecutor) Execute(
 type KrakenDValidator struct {
     Executor   CommandExecutor
     BinaryPath string
+    Timeout    time.Duration // zero means the 30-second default
 }
 ```
 
-The validator writes the rendered JSON to a temporary file, runs `krakend check -tlc -c <path>`, and returns the result:
+`Validate` prepares the validation copy for the edition (see EE Wildcard Handling), then `check` writes it to a temporary file, runs `krakend check -t -n -c <path>`, and returns the result:
 
 ```go
-func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error {
+func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+    doc, findings, err := validationCopy(jsonData, edition)
+    if err != nil {
+        return fmt.Errorf("preparing validation copy: %w", err)
+    }
+    if len(findings) > 0 {
+        return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
+    }
+    return v.check(ctx, doc)
+}
+
+func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte) error {
+    ctx, cancel := context.WithTimeout(ctx, v.timeout())
+    defer cancel()
+
     tmpFile, err := os.CreateTemp("", "krakend-config-*.json")
     if err != nil {
         return fmt.Errorf("creating temp file: %w", err)
@@ -1526,51 +1822,49 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error 
         return fmt.Errorf("closing temp file: %w", err)
     }
 
-    output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-tlc", "-c", tmpName)
+    output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-n", "-c", tmpName)
     if err != nil {
-        return &ValidationError{
-            Output: string(output),
-            Err:    err,
-        }
+        return classifyCheckError(ctx, output, err)
     }
     return nil
 }
 ```
 
+`classifyCheckError` returns a `*ValidationError` only when the process exited with a status above zero before the timeout (30 seconds by default). A missing binary, a deadline overrun or a signal kill comes back as a plain wrapped error: the config was not judged and the caller retries.
+
+`configcheck.Checker` runs these as one check per unit, and every caller (admission, the gateway controller, the AutoConfig precheck) uses the same ones, so all of them blame the same object. The output of `krakend check` is never parsed to decide blame: an object is invalid when it fails on its own.
+
+| Unit | Rendered | Check | Its output goes to |
+|---|---|---|---|
+| root | the gateway with no endpoint (the controller adds the Dragonfly Redis address; admission renders none) | `krakend check -n` after the EE and route rules | the gateway (ConfigValid, gateway admission) |
+| policy | a synthetic CE gateway whose one backend references it | `-n` | policy admission only |
+| endpoint | root + the endpoint + its policies, each policy checked alone first; when it fails and references a policy of another namespace, again with that policy rendered empty | `-n` | the endpoint (Accepted, endpoint admission) |
+| group | root + a set of endpoints (+ one policy override) | `-n` | nobody: a pass vouches for each endpoint that lost no entry in it |
+| full | the controller's render | `-t -n` | the operator log only |
+
 ### EE Wildcard Handling
 
-Per operator architecture §10, EE configurations containing wildcard endpoints (`/*`) require special handling during validation:
+EE configurations containing wildcard endpoints are handled by
+`KrakenDValidator.Validate(ctx, json, edition)`. For
+`EditionEE` it first applies the rules EE enforces for wildcard endpoints and
+the CE binary cannot test (`eeWildcardFindings`). Each finding is a
+krakend-style lint-pointer line. Only the first rule below, the route conflict (`eeWildcardOverlaps` in `routeadmit.go`), is also applied between endpoints at render time, oldest first; the `{Wildcard}` parameter and one-backend rules stay per-endpoint validator findings:
 
-```go
-func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error) {
-    if !eeWithoutFallback {
-        return jsonData, nil
-    }
-    // Strip wildcard endpoints from the validation copy
-    // The CE validator rejects /* patterns
-    var config map[string]any
-    if err := json.Unmarshal(jsonData, &config); err != nil {
-        return nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
-    }
-    endpoints, ok := config["endpoints"].([]any)
-    if !ok {
-        return jsonData, nil
-    }
-    var filtered []any
-    for _, ep := range endpoints {
-        epMap, ok := ep.(map[string]any)
-        if !ok {
-            continue
-        }
-        if path, ok := epMap["endpoint"].(string); ok && path == "/*" {
-            continue // strip wildcard
-        }
-        filtered = append(filtered, ep)
-    }
-    config["endpoints"] = filtered
-    return serializeJSON(config)
-}
-```
+- **Route conflict.** EE registers `/p/*` as the catch-all `/p/*Wildcard`
+  in its method's route tree, so `/p/*` conflicts with any other route of the
+  same method under `/p/`.
+- **The `{Wildcard}` parameter.** The copy the CE binary checks declares
+  `{Wildcard}`, but the EE router does not, so a backend `url_pattern` that
+  references `{Wildcard}` on a wildcard endpoint is rejected
+  (`eeWildcardParamFindings`). An endpoint whose own path declares
+  `{Wildcard}` is left alone.
+- **One backend.** A wildcard endpoint has exactly one backend
+  (`eeWildcardBackendFindings`).
+
+It then checks a copy in which `/p/*` is rewritten to `/p/{Wildcard}`
+(`rewriteEEWildcards`). The copy is index-aligned with the render. A root
+`/*` is not an EE wildcard (`IsEEWildcard`): it is checked as it is and
+rejected, as EE rejects it. See `internal/renderer/eewildcard.go`.
 
 ### Extra Config Merge Order
 
@@ -1596,9 +1890,9 @@ Resource builders are pure functions that construct Kubernetes object specs from
 
 | File | Function | Output Resource |
 |---|---|---|
-| `deployment.go` | `BuildDeployment(dep, gw, configChecksum, pluginChecksum, image)` | `appsv1.Deployment` |
-| `service.go` | `BuildService(svc, gw)` | `corev1.Service` |
-| `configmap.go` | `BuildConfigMap(cm, gw, jsonData)` | `corev1.ConfigMap` |
+| `deployment.go` | `BuildDeployment(dep, gw, in DeploymentInputs)` (config ConfigMap name and checksum, plugin and license checksums, image, CE render) | `appsv1.Deployment` |
+| `service.go` | `BuildService(svc, gw, ceRender)` | `corev1.Service` |
+| `configmap.go` | `ConfigMapName(gw, checksum)`, `BuildConfigMap(cm, gw, jsonData, checksum)` | `corev1.ConfigMap` (immutable, content-addressed) |
 | `serviceaccount.go` | `BuildServiceAccount(sa, gw)` | `corev1.ServiceAccount` |
 | `pdb.go` | `BuildPDB(pdb, gw)` | `policyv1.PodDisruptionBudget` |
 | `hpa.go` | `BuildHPA(hpa, gw)` | `autoscalingv2.HorizontalPodAutoscaler` |
@@ -1618,9 +1912,9 @@ flowchart TD
     B --> E[Volume Mounts]
     B --> F[Security Context]
     B --> G[Health Probes]
-    B --> H[Pod Annotations<br/>checksum/config<br/>checksum/plugins]
+    B --> H[Pod Annotations<br/>config checksum, krakend.io/checksum-plugins,<br/>krakend.io/checksum-license, krakend.io/image]
 
-    E --> E1["ConfigMap volume<br/>/etc/krakend/krakend.json"]
+    E --> E1["Config ConfigMap volume<br/>(the applied config's gateway-config-hash)<br/>/etc/krakend/krakend.json"]
     E --> E2["Secret volume<br/>/etc/krakend/LICENSE<br/>if EE"]
     E --> E3["Plugin volume<br/>/opt/krakend/plugins<br/>if plugins configured"]
     E --> E4["emptyDir /tmp"]
@@ -1638,7 +1932,7 @@ func ResolveImage(gw *v1alpha1.KrakenDGateway, ceFallback bool) string {
         if gw.Spec.CEImage != "" {
             return gw.Spec.CEImage
         }
-        return fmt.Sprintf("krakend/krakend:%s", gw.Spec.Version)
+        return fmt.Sprintf("krakend:%s", gw.Spec.Version)
     }
     if gw.Spec.Image != "" {
         return gw.Spec.Image
@@ -1647,7 +1941,7 @@ func ResolveImage(gw *v1alpha1.KrakenDGateway, ceFallback bool) string {
     case v1alpha1.EditionEE:
         return fmt.Sprintf("krakend/krakend-ee:%s", gw.Spec.Version)
     default:
-        return fmt.Sprintf("krakend/krakend:%s", gw.Spec.Version)
+        return fmt.Sprintf("krakend:%s", gw.Spec.Version)
     }
 }
 ```
@@ -1741,21 +2035,48 @@ func DragonflyLabels(gw *v1alpha1.KrakenDGateway) map[string]string {
 
 **Package:** `internal/webhook/`
 
-The operator deploys a `ValidatingAdmissionWebhook` implementing all rules from operator architecture §15.
+The operator deploys four validating admission webhooks, one per kind, with `failurePolicy: Fail` on CREATE and UPDATE, implementing the rules in operator architecture §15. The CRD schema and CEL carry the rules an object decides alone, so the API server enforces them before any webhook runs. The webhooks keep what needs other objects, a rendered config, or the default-image context.
+
+### Schema rules
+
+The CRDs enforce, as markers on the types in `api/v1alpha1/`:
+
+- **KrakenDGateway:** KrakenD duration patterns on `config.timeout`, `cacheTTL`, `dnsCacheTTL`, `cors.maxAge` and `redis.connectionPool.dialTimeout`, port ranges, the `outputEncoding` enum, the `healthPath` pattern, the license sources (an EE gateway needs exactly one of `externalSecret` and `secretRef`, a CE gateway none), the OpenAPI sidecar port, a single PVC plugin source and the post-restart script rules.
+- **KrakenDEndpoint:** `spec.endpoints` is a map list keyed on (`endpoint`, `method`) with at least one entry, each entry has at least one backend, the path pattern, and duration patterns.
+- **KrakenDBackendPolicy:** the circuit breaker and rate limit ranges are minimums.
+- **KrakenDAutoConfig:** exactly one OpenAPI source, `hostMapping` with `configMapRef`, a Periodic interval of at least 30s, exclusive auth secrets, path patterns, enums and duration patterns on defaults, overrides and additional endpoints, and an `additionalEndpoints` map list keyed on (`endpoint`, `method`).
+
+Kubernetes 1.33 ratchets these rules: an update that leaves an already-invalid field unchanged is admitted. The webhooks below do not repeat any of them.
 
 ### Handler Structure
 
 ```go
 type GatewayValidator struct {
     client.Client
+    Checker ConfigChecker
+    // Memo remembers recent config verdicts across requests (the shared lruMemo)
+    Memo configcheck.Memo
 }
 
 type EndpointValidator struct {
     client.Client
+    Checker ConfigChecker
+    // APIReader reads uncached. Just before admitting, it re-reads each newly
+    // referenced policy, because the cached read at the start of the request
+    // can predate a deletion by the whole render check. Nil skips the re-read.
+    APIReader client.Reader
+    // OperatorUsername is the username the operator's own API requests carry.
+    // Its writes to endpoints a KrakenDAutoConfig controls skip the render
+    // check; empty disables the exemption.
+    OperatorUsername string
+    Memo             configcheck.Memo
 }
 
 type PolicyValidator struct {
     client.Client
+    // Checker checks the policy alone and in every gateway that uses it.
+    Checker ConfigChecker
+    Memo    configcheck.Memo
 }
 
 type AutoConfigValidator struct {
@@ -1763,228 +2084,138 @@ type AutoConfigValidator struct {
 }
 ```
 
-Each validator implements the `webhook.CustomValidator[T]` generic interface (controller-runtime v0.19+):
+Each validator implements `admission.CustomValidator` (controller-runtime v0.21), whose methods take a `runtime.Object` that the validator type-asserts with a checked comma-ok:
 
 ```go
-// Example: GatewayValidator implements CustomValidator[*v1alpha1.KrakenDGateway]
-type CustomValidator[T client.Object] interface {
-    ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error)
-    ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error)
-    ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error)
+type CustomValidator interface {
+    ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error)
+    ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error)
+    ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error)
 }
 ```
 
-All validators implement `ValidateUpdate` by delegating to the same structural checks as `ValidateCreate` (applied to `newObj`). This ensures updates cannot bypass validation (e.g., changing `gatewayRef` to a non-existent gateway, or adding an invalid `policyRef`).
+`ValidateDelete` is a no-op on every validator: none is registered for DELETE.
+
+### Admission mechanics
+
+Every validator follows the same rules (`admission.go`, `webhook.go`):
+
+- **Ratchet.** `ValidateUpdate` first admits an update to a terminating object that leaves the spec alone (`terminatingWithUnchangedSpec`, so a finalizer can be removed), then admits an update whose spec is unchanged without running a rule. A field rule rejects an update only for errors the stored object did not already have (`newErrors`, matched on the error's field, type, value and detail). References are checked only when added or changed, and endpoint entries are matched on (`endpoint`, `method`), so a reorder is not a change.
+- **Responses.** A rejected field is a `422 Invalid` with one cause per field error (`invalid`). A failed lookup, or a config check that cannot run or cannot get a validation slot, is a `500` (`unavailable`, `checkErr`): the request was not judged and is retried.
+- **Budget.** The three validators that run a render check (endpoint, gateway and policy) stop their work after `admissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
+- **Render checks.** The validators depend on one port, `ConfigChecker`, implemented by the `configcheck.Checker` the gateway controller also uses. Every check also takes the shared `lruMemo` (the 256 most recent verdicts of the pod, keyed by content, each keeping at most 16 KiB of output, untrusted: an inconsistent entry is a miss):
+
+```go
+type ConfigChecker interface {
+    SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (bool, error)
+    Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (configcheck.RouteConflicts, error)
+    CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+        memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckGroup(ctx context.Context, g configcheck.Group, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckRoot(ctx context.Context, r configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+        memo configcheck.Memo) (configcheck.EndpointVerdict, error)
+}
+```
+
+Each object is judged on its own, and a denial quotes only the output of the object that was written. An **endpoint** write refuses a new router clash (`refuseNewClashes`), then checks the gateway root alone and the endpoint with that root and the policies it references (`checkRender`); it is denied with its own output, and admitted with a warning when the root fails on its own or the stored version fails too. A **policy** or **gateway** write has two phases. First every gateway's root and group are checked (`screenPolicyUse`, `checkGatewayRender`). Then `failingEndpoints` checks each suspect (every served endpoint when the group fails, the group's masked endpoints when it passes) with the new and, on failure, the stored object, and stops at `maxEntryCauses` names or at the request's deadline. A newly broken endpoint is a denial that stands whatever happens later, and it is found even when another endpoint already fails; an unfinished scan with none is a `500`. The names are bounded by bytes (`brokenList`): names that were found broken but do not fit fold into `(+N more)`, and the counts of endpoints not checked always survive. Both phases check an endpoint that already fails before the endpoints together, so while such an endpoint is not yet recorded as excluded, a write that makes the others fail only together is admitted with a warning and the gateway later reports `CombinedConfigInvalid`. A denial is bounded: at most 20 causes, each cut to `warningLimit`. The route check is bounded too: it stops after 21 refused routes with a notice line and ends with the context's error when the request's context ends, so one config cannot hold a validation slot past the admission budget.
 
 ### Validation Rules
 
-**KrakenDGateway:**
+**KrakenDGateway:** the webhook keeps the rules that need the default-image context or quantity arithmetic: the OpenAPI sidecar probe rules (when `spec.openapi.enabled`), the `runAsUser: 0` rules of `spec.postRestartJob` and `spec.dragonfly` (ratcheted on the stored security context), and a negative `spec.postRestartJob.tmpSizeLimit`. On a CE gateway it rejects what KrakenD CE accepts in `krakend check` and then ignores: Enterprise-only namespaces in `spec.config.extraConfig`, the typed fields `spec.redis`, `spec.config.documentation`, `spec.openapi.enabled` and `spec.dragonfly.enabled`, and an EE to CE switch while the gateway's endpoints or their policies use an Enterprise-only namespace, or one of its endpoints is a `/prefix/*` wildcard. It warns about `spec.replicas` with `spec.autoscaling`, Redis and Dragonfly settings that never reach KrakenD, an enabled OpenAPI export or Dragonfly kept on a CE gateway, a `workingDir` outside `/tmp` while the root filesystem is read-only, and a `spec.version` other than the validator's minor.
 
 ```go
-func (v *GatewayValidator) ValidateCreate(
-    ctx context.Context, gw *v1alpha1.KrakenDGateway,
+// admit runs every rule against gw within the admission budget, then renders
+// its config. old is the stored object on an update and nil on a create.
+func (v *GatewayValidator) admit(
+    ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
-    var errs field.ErrorList
+    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    defer cancel()
 
-    // EE requires license configuration
-    if gw.Spec.Edition == v1alpha1.EditionEE {
-        if gw.Spec.License == nil ||
-            (!gw.Spec.License.ExternalSecret.Enabled && gw.Spec.License.SecretRef == nil) {
-            errs = append(errs, field.Required(
-                field.NewPath("spec", "license"),
-                "edition EE requires license.externalSecret.enabled or license.secretRef",
-            ))
-        }
+    warnings, errs := v.validate(gw, old)
+    if old != nil {
+        errs = newErrors(errs, v.storedErrors(gw, old))
     }
-
-    // CE must not have license configuration
-    if gw.Spec.Edition == v1alpha1.EditionCE && gw.Spec.License != nil {
-        if gw.Spec.License.ExternalSecret.Enabled || gw.Spec.License.SecretRef != nil {
-            errs = append(errs, field.Forbidden(
-                field.NewPath("spec", "license"),
-                "CE edition does not require license configuration",
-            ))
-        }
+    eeErrs, err := v.eeNamespacesOnCE(ctx, old, gw)
+    if err != nil {
+        return warnings, unavailable(err)
     }
-
-    // Mutually exclusive license sources
-    if gw.Spec.License != nil &&
-        gw.Spec.License.ExternalSecret.Enabled && gw.Spec.License.SecretRef != nil {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "license"),
-            "both",
-            "externalSecret and secretRef are mutually exclusive",
-        ))
+    errs = append(errs, eeErrs...)
+    errs = append(errs, eeFieldsOnCE(old, gw)...)
+    if len(errs) > 0 {
+        return warnings, invalid("KrakenDGateway", gw.Name, errs)
     }
-
-    // Only one PVC plugin source allowed
-    if gw.Spec.Plugins != nil {
-        pvcCount := 0
-        for _, src := range gw.Spec.Plugins.Sources {
-            if src.PersistentVolumeClaimRef != nil {
-                pvcCount++
-            }
-        }
-        if pvcCount > 1 {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "plugins", "sources"),
-                pvcCount,
-                "only one PVC plugin source is supported",
-            ))
-        }
-    }
-
-    return nil, errs.ToAggregate()
+    renderWarnings, err := checkGatewayRender(ctx, v.Client, v.Checker, v.Memo, old, gw)
+    return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
 }
 ```
+
+An update that renders the same config is skipped (`SameConfig`), and one that would make two endpoints' routes clash in the router is refused (`refuseNewGatewayClashes`). Then the root must pass on its own (`CheckRoot`; the denial quotes it, and an update whose stored root fails too only warns). Then the root with the endpoints the gateway serves is checked as a group, and the endpoints it leaves unjudged are judged on their own: an update is denied, naming the endpoints and quoting nothing, when one fails with it and passed with the stored root, or when the endpoints newly fail only together, that is, they passed together with the stored root (`judgeServed`). When the stored root fails on its own (checked with `CheckRoot`, memoized), every stored check fails with it, so no endpoint passed with it: an endpoint the last applied config served (`Accepted` True or `PartiallyAccepted` for its current generation) that fails with the new root is denied, any other only draws a warning (`judgeUnderFailingRoot`), and a failure only together is denied without comparing the stored group (`judgeServed`); a create only draws a warning about the endpoints that already name the gateway (`warnWaiting`). Root findings go on `spec.config`, findings about endpoints on `spec`.
 
 **KrakenDEndpoint:**
 
 ```go
-func (v *EndpointValidator) ValidateCreate(
-    ctx context.Context, ep *v1alpha1.KrakenDEndpoint,
+// admit runs every rule against ep within the admission budget, then re-reads
+// the policies ep newly references uncached. old is the stored object on an
+// update and nil on a create.
+func (v *EndpointValidator) admit(
+    ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-    var warnings admission.Warnings
-    var errs field.ErrorList
+    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    defer cancel()
 
-    // Detect intra-CR duplicate (endpoint, method) pairs
-    seenPaths := make(map[string]struct{})
-    for i, entry := range ep.Spec.Endpoints {
-        key := entry.Method + " " + entry.Endpoint
-        if _, exists := seenPaths[key]; exists {
-            errs = append(errs, field.Duplicate(
-                field.NewPath("spec", "endpoints").Index(i),
-                key,
-            ))
-        }
-        seenPaths[key] = struct{}{}
+    warnings, err := v.check(ctx, old, ep)
+    if err != nil || v.APIReader == nil {
+        return warnings, err
     }
-
-    // gatewayRef must exist (namespace-aware)
-    gwNS := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
-    gw := &v1alpha1.KrakenDGateway{}
-    if err := v.Get(ctx, types.NamespacedName{
-        Name:      ep.Spec.GatewayRef.Name,
-        Namespace: gwNS,
-    }, gw); err != nil {
-        errs = append(errs, field.NotFound(
-            field.NewPath("spec", "gatewayRef", "name"),
-            ep.Spec.GatewayRef.Name,
-        ))
+    // The cached read of a policy came before the render check, which can take
+    // seconds; a deletion that landed meanwhile would drop ep from the render.
+    errs, err := v.validatePolicyRefs(ctx, v.APIReader, old, ep)
+    if err != nil {
+        return nil, unavailable(err)
     }
-
-    // policyRef must exist for each backend (namespace-aware)
-    for i, entry := range ep.Spec.Endpoints {
-        for j, be := range entry.Backends {
-            if be.PolicyRef != nil {
-                policy := &v1alpha1.KrakenDBackendPolicy{}
-                if err := v.Get(ctx, types.NamespacedName{
-                    Name:      be.PolicyRef.Name,
-                    Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
-                }, policy); err != nil {
-                    errs = append(errs, field.NotFound(
-                        field.NewPath("spec", "endpoints").Index(i).Child("backends").Index(j).Child("policyRef", "name"),
-                        be.PolicyRef.Name,
-                    ))
-                }
-            }
-        }
+    if len(errs) > 0 {
+        return nil, invalid(kindEndpoint, ep.Name, errs)
     }
-
-    // Warn on conflict via field index (cluster-wide, not namespace-scoped)
-    gwKey := gwNS + "/" + ep.Spec.GatewayRef.Name
-    var existing v1alpha1.KrakenDEndpointList
-    if err := v.List(ctx, &existing,
-        client.MatchingFields{controller.EndpointGatewayIndex: gwKey},
-    ); err != nil {
-        errs = append(errs, field.InternalError(
-            field.NewPath("spec", "gatewayRef"),
-            fmt.Errorf("listing endpoints for conflict check: %w", err),
-        ))
-        return errs, warnings
-    }
-    for _, newEntry := range ep.Spec.Endpoints {
-        for _, other := range existing.Items {
-            if other.Name == ep.Name && other.Namespace == ep.Namespace {
-                continue
-            }
-            for _, otherEntry := range other.Spec.Endpoints {
-                if otherEntry.Endpoint == newEntry.Endpoint &&
-                    otherEntry.Method == newEntry.Method {
-                    warnings = append(warnings, fmt.Sprintf(
-                        "endpoint %s %s already exists on gateway %s "+
-                            "(defined by %s/%s) — conflict resolved by creationTimestamp",
-                        newEntry.Method, newEntry.Endpoint,
-                        gwKey, other.Namespace, other.Name,
-                    ))
-                }
-            }
-        }
-    }
-
-    return warnings, errs.ToAggregate()
+    return warnings, nil
 }
 ```
 
-**KrakenDBackendPolicy (CREATE/UPDATE):**
+`check` runs, in order: the `gatewayRef` lookup (an error only when the request sets or changes it), the `policyRef` checks (a policy that is missing or terminating, for references the stored object lacks), then, for the entries that are new or differ from the stored entry with the same (`endpoint`, `method`), the audience shape check, the entry rules (`validateEntries`: reserved paths, the gateway's health path, `/*`, unnamed wildcards and Enterprise-only namespaces on CE, unknown placeholders), and, on a CE gateway, `validatePolicyNamespaces` for a backend `policyRef` the stored object lacks whose policy carries what a CE render drops; and route uniqueness (`validateRouteUniqueness`). A request that survives those is judged on its own (`checkRender`), unless it is the operator's own write to an endpoint a `KrakenDAutoConfig` controls (`trustedWrite`): a new router clash is refused first, then the gateway root alone and the endpoint with the root and its policies. A gateway whose root fails on its own, or a stored version that fails too, makes the failure a warning. A move to another gateway puts every entry through the new gateway's rules.
+
+Route uniqueness rejects a changed entry whose method and route shape (paths that differ only in parameter names or repeated slashes) another entry on the gateway already has, in this or another KrakenDEndpoint. The list comes from the `fieldindex.EndpointGateway` index, cluster-wide. Against other KrakenDEndpoints only routes new to the stored object are checked, and endpoints with the same controller are exempt: one AutoConfig renaming an operation has the old and the new endpoint for a while. The renderer keeps oldest-wins as the fallback.
+
+**KrakenDBackendPolicy:**
 
 ```go
-func (v *PolicyValidator) ValidateCreate(
-    ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+// ValidateUpdate: an update that leaves the spec alone, such as the
+// protection finalizer, is never validated.
+func (v *PolicyValidator) ValidateUpdate(
+    ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
-    var errs field.ErrorList
-
-    if policy.Spec.CircuitBreaker != nil {
-        if policy.Spec.CircuitBreaker.MaxErrors <= 0 {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "circuitBreaker", "maxErrors"),
-                policy.Spec.CircuitBreaker.MaxErrors,
-                "must be greater than 0",
-            ))
-        }
+    if terminatingWithUnchangedSpec(oldObj, newObj) {
+        return nil, nil
     }
-    if policy.Spec.RateLimit != nil {
-        if policy.Spec.RateLimit.MaxRate <= 0 {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "rateLimit", "maxRate"),
-                policy.Spec.RateLimit.MaxRate,
-                "must be greater than 0",
-            ))
-        }
+    // ... type-assert policy and old
+    if equality.Semantic.DeepEqual(old.Spec, policy.Spec) {
+        return nil, nil
     }
-    return nil, errs.ToAggregate()
+    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    defer cancel()
+    return checkPolicyRender(ctx, v.Client, v.Checker, v.Memo, old, policy)
 }
 ```
+
+`checkPolicyRender` checks the policy on its own (`CheckPolicy`: one synthetic endpoint on a default CE gateway whose only backend references it) and rejects it when `krakend check -n` fails, unless the stored policy already failed too. For a change to a policy that endpoints reference, it finds the gateways of the referencing endpoints through the `fieldindex.EndpointPolicy` index and screens every gateway first (`screenPolicyUse`: the root alone, then the root with the endpoints that use the policy and that the gateway serves, with the new policy in place of the stored one), then names the endpoints each gateway's change breaks (`judgePolicyUse`, `failingEndpoints`). It denies when an endpoint fails with the new policy and passes with the stored one; when every endpoint that fails already failed, or the gateway root fails on its own, the write only draws a warning. On a create the baseline is the policy with its identity and no content, so an endpoint that fails whatever the policy holds only draws the warning; a failure only together is still denied, as it is on an update when the endpoints passed together with the stored policy. A new or changed `raw` that holds what a CE render drops (`renderer.CEDrops` at the backend level) is rejected while a CE gateway uses the policy. Causes are one per gateway, at most 20, and warnings name at most 5 failing gateways (`maxPolicyWarnings`).
 
 **KrakenDBackendPolicy (DELETE):**
 
 ```go
-func (v *PolicyValidator) ValidateDelete(
-    ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
-) (admission.Warnings, error) {
-    var endpoints v1alpha1.KrakenDEndpointList
-    if err := v.List(ctx, &endpoints, client.InNamespace(policy.Namespace)); err != nil {
-        return nil, fmt.Errorf("listing endpoints: %w", err)
-    }
-
-    var references []string
-    for _, ep := range endpoints.Items {
-        for _, entry := range ep.Spec.Endpoints {
-            for _, be := range entry.Backends {
-                if be.PolicyRef != nil && be.PolicyRef.Name == policy.Name {
-                    references = append(references, ep.Name)
-                    break
-                }
-            }
-        }
-    }
-
-    if len(references) > 0 {
-        return nil, field.Forbidden(
-            field.NewPath("metadata", "name"),
-            fmt.Sprintf("policy is referenced by endpoints: %s", strings.Join(references, ", ")),
-        )
-    }
+// The policy webhook is not registered for DELETE. PolicyProtectionFinalizer
+// keeps a referenced policy until nothing references it.
+func (v *PolicyValidator) ValidateDelete(context.Context, runtime.Object) (admission.Warnings, error) {
     return nil, nil
 }
 ```
@@ -1992,139 +2223,68 @@ func (v *PolicyValidator) ValidateDelete(
 **KrakenDAutoConfig:**
 
 ```go
-func (v *AutoConfigValidator) ValidateCreate(
-    ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
+// ValidateUpdate: the gateway reference is checked only when it changes, and a
+// field rule rejects the update only for errors the stored object did not
+// already have.
+func (v *AutoConfigValidator) ValidateUpdate(
+    ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
+    // ... terminatingWithUnchangedSpec, type assertions, unchanged-spec skip
     var errs field.ErrorList
-
-    // gatewayRef must exist
-    gw := &v1alpha1.KrakenDGateway{}
-    if err := v.Get(ctx, types.NamespacedName{
-        Name:      ac.Spec.GatewayRef.Name,
-        Namespace: ac.Namespace,
-    }, gw); err != nil {
-        errs = append(errs, field.NotFound(
-            field.NewPath("spec", "gatewayRef", "name"),
-            ac.Spec.GatewayRef.Name,
-        ))
-    }
-
-    // Mutually exclusive OpenAPI sources
-    hasURL := ac.Spec.OpenAPI.URL != ""
-    hasCM := ac.Spec.OpenAPI.ConfigMapRef != nil
-    if hasURL && hasCM {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "openapi"),
-            "both",
-            "url and configMapRef are mutually exclusive",
-        ))
-    }
-    if !hasURL && !hasCM {
-        errs = append(errs, field.Required(
-            field.NewPath("spec", "openapi"),
-            "one of url or configMapRef is required",
-        ))
-    }
-
-    // configMapRef requires hostMapping
-    if hasCM && !hasURL {
-        if ac.Spec.URLTransform == nil || len(ac.Spec.URLTransform.HostMapping) == 0 {
-            errs = append(errs, field.Required(
-                field.NewPath("spec", "urlTransform", "hostMapping"),
-                "hostMapping is required when using configMapRef (no URL to infer backend host from)",
-            ))
+    if old.Spec.GatewayRef != ac.Spec.GatewayRef {
+        refErrs, err := v.validateGatewayRef(ctx, ac)
+        if err != nil {
+            return nil, unavailable(err)
         }
+        errs = refErrs
     }
-
-    // Periodic trigger requires interval
-    if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
-        if ac.Spec.Periodic == nil || ac.Spec.Periodic.Interval.Duration == 0 {
-            errs = append(errs, field.Required(
-                field.NewPath("spec", "periodic", "interval"),
-                "interval is required when trigger is Periodic",
-            ))
-        }
+    errs = append(errs, newErrors(validateFields(ac), validateFields(old))...)
+    warnings, err := v.policyRefWarnings(ctx, ac)
+    if err != nil {
+        return nil, unavailable(err)
     }
-
-    // Mutually exclusive auth methods
-    if ac.Spec.OpenAPI.Auth != nil {
-        if ac.Spec.OpenAPI.Auth.BearerTokenSecret != nil && ac.Spec.OpenAPI.Auth.BasicAuthSecret != nil {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "openapi", "auth"),
-                "both",
-                "bearerTokenSecret and basicAuthSecret are mutually exclusive",
-            ))
-        }
-    }
-
-    // additionalEndpointsBasePath validation
-    if ac.Spec.AdditionalEndpointsBasePath != "" &&
-        !strings.HasPrefix(ac.Spec.AdditionalEndpointsBasePath, "/") {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "additionalEndpointsBasePath"),
-            ac.Spec.AdditionalEndpointsBasePath,
-            "must start with '/'"))
-    }
-
-    // additionalEndpointsBasePath and urlTransform.addPathPrefix are mutually exclusive
-    if ac.Spec.AdditionalEndpointsBasePath != "" &&
-        ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != "" {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "additionalEndpointsBasePath"),
-            ac.Spec.AdditionalEndpointsBasePath,
-            "is mutually exclusive with spec.urlTransform.addPathPrefix; set only one"))
-    }
-
-    // additionalEndpoints validation
-    seenAdditional := make(map[string]struct{}, len(ac.Spec.AdditionalEndpoints))
-    for i, ae := range ac.Spec.AdditionalEndpoints {
-        p := field.NewPath("spec", "additionalEndpoints").Index(i)
-
-        // Rule 1: endpoint is required
-        if ae.Endpoint == "" {
-            errs = append(errs, field.Required(p.Child("endpoint"), "endpoint is required"))
-        } else if !strings.HasPrefix(ae.Endpoint, "/") {
-            // Rule 2: endpoint must start with "/"
-            errs = append(errs, field.Invalid(p.Child("endpoint"), ae.Endpoint,
-                "endpoint must start with '/'"))
-        }
-
-        // Rule 3: backends and shorthand fields are mutually exclusive
-        if len(ae.Backends) > 0 && (ae.Host != "" || ae.BackendURLPattern != "" || ae.Encoding != "") {
-            errs = append(errs, field.Invalid(p, "both",
-                "backends and the host/backendUrlPattern/encoding shorthand are mutually exclusive"))
-        }
-
-        // Rule 4: no duplicate (endpoint, method) within the list; method defaults to GET
-        method := ae.Method
-        if method == "" {
-            method = "GET"
-        }
-        key := method + " " + ae.Endpoint
-        if _, dup := seenAdditional[key]; dup {
-            errs = append(errs, field.Duplicate(p, key))
-        }
-        seenAdditional[key] = struct{}{}
-    }
-
-    return nil, errs.ToAggregate()
+    return warnings, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 ```
 
+`validateFields` checks the shape of `documentation/openapi.audience` in each `extraConfig` (`spec.overrides[]`, `spec.defaults.endpoint` and `spec.additionalEndpoints[]`) and runs `validateOverrideIDs`, which rejects two overrides for one operation: an `operationId` listed twice (`Duplicate value`) or two that generate one endpoint name (`autoconfig.OperationEndpointName`: the AutoConfig name and `SanitizeName(operationId)`, cut to 253 characters), of which the generator keeps only the first. `policyRefWarnings` looks up every `policyRef` in `spec.defaults`, `spec.overrides[]` and `spec.additionalEndpoints[].backends[]` and warns, in field order, about each that names no KrakenDBackendPolicy (at most `maxPolicyWarnings`, then a count). It is a warning because a release may create the policy after the AutoConfig; the generated endpoints are rejected by the KrakenDEndpoint webhook until it exists, and the AutoConfig holds each as `EndpointRejected`. A failed lookup is a `500`.
+
+Admission does not compare route shapes between the endpoints one AutoConfig generates: they share a controller (the same UID in the same namespace), which the KrakenDEndpoint webhook exempts from the route check. Same-shape paths (`/h/{a}` and `/h/{b}`) from one AutoConfig are therefore not rejected anywhere in admission. The AutoConfig controller holds every desired endpoint but the one the renderer serves as `ConfigValidationFailed` (`routeCollisions`), and the renderer reports the newer one as `EndpointConflict` only for a pair stored before.
+
 ### Webhook Registration
 
+`NewValidators` builds the validators over the manager's client, the uncached reader and the pod's one checker. `SetupWebhooks` registers them, after making sure the endpoint field indexes exist, which the route check and the policy fan-out need even when the pod runs webhook-only:
+
 ```go
-func SetupWebhooks(mgr ctrl.Manager) error {
+func NewValidators(
+    c client.Client, apiReader client.Reader, checker ConfigChecker, operatorUsername string,
+) Validators {
+    return Validators{
+        Gateway: &GatewayValidator{Client: c, Checker: checker},
+        Endpoint: &EndpointValidator{
+            Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername,
+        },
+        Policy:     &PolicyValidator{Client: c, Checker: checker},
+        AutoConfig: &AutoConfigValidator{Client: c},
+    }
+}
+
+func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return fmt.Errorf("registering endpoint indexes: %w", err)
+    }
     if err := ctrl.NewWebhookManagedBy(mgr).
         For(&v1alpha1.KrakenDGateway{}).
-        WithValidator(&GatewayValidator{Client: mgr.GetClient()}).
+        WithValidator(validators.Gateway).
         Complete(); err != nil {
-        return err
+        return fmt.Errorf("setting up gateway webhook: %w", err)
     }
     // ... repeat for Endpoint, Policy, AutoConfig
     return nil
 }
 ```
+
+The `+kubebuilder:webhook` markers in `webhook.go` generate `config/webhook/manifests.yaml`: each webhook has `failurePolicy: Fail`, `timeoutSeconds: 15` and the verbs `create` and `update`.
 
 ---
 
@@ -2148,6 +2308,7 @@ type FetchSource struct {
     ConfigMapRef      *v1alpha1.ConfigMapKeyRef
     Auth              *v1alpha1.AuthConfig
     AllowClusterLocal bool
+    Namespace         string
 }
 
 type FetchResult struct {
@@ -2195,6 +2356,8 @@ func normalizeIP(ip net.IP) net.IP {
 
 **ConfigMap source:** When `configMapRef` is set, the fetcher reads the spec directly from the Kubernetes API via the injected `client.Client`, bypassing HTTP entirely.
 
+**Deadlines and size:** each HTTP request is bounded at 30 seconds (`fetchTimeout`) and a body at 10 MiB (`maxBodyBytes`). The controller's `fetchSpec` additionally bounds the spec fetch and the whole external `$ref` resolution (`ResolveExternalRefs`) with one context deadline, `FetchTimeout`, 2 minutes by default (`defaultFetchTimeout`), so a stuck host fails that AutoConfig with `SpecFetchFailed` instead of holding a worker. `fetchSpec` then strips upstream `servers` and dereferences parameter `$ref`s (`DereferenceParameters`, `parameters.go`); a result past `maxBodyBytes` fails the sync (`ErrParameterRefsTooLarge`). The resolver does not fetch from example data (an `example` field, an `examples` field, and the `value` of an Example Object), resolving only an Example Object's own `$ref`, and walks every member of a name-keyed map (`nameKeyedMaps`, `jsonwalk.go`) as an object whatever it is named. The `$ref`s the resolver cannot honour, the external `$ref`s of a ConfigMap-sourced spec and the parameter `$ref`s that do not resolve come back as notes for `status.warnings`.
+
 ### CUE Evaluator
 
 **File:** `internal/autoconfig/cue_evaluator.go`
@@ -2216,13 +2379,27 @@ type CUEInput struct {
     URLTransform   *v1alpha1.URLTransformSpec // host mapping + path prefix config
     Environment    string                     // CUE _env field value (injected via FillPath)
     ServiceName    string                     // label for the spec data in CUE namespace
+    DefaultHost    string                     // scheme, host and port of openapi.url
 }
 
 type CUEOutput struct {
     Entries      []v1alpha1.EndpointEntry
     OperationIDs map[string]string   // keyed by "path:method" → operationId; used by Generator for naming and dedup
     Tags         map[string][]string // keyed by "path:method", used for tag-based filtering before final output
-    Warnings     []string            // non-fatal CUE evaluation warnings
+    // UnmatchedOverrides: an override operationId no operation has, or "<operationId> backends[<i>]" for an index out of range.
+    UnmatchedOverrides []string
+    // AmbiguousOverrides: override operationIds that more than one operation declares; such an override is not applied.
+    AmbiguousOverrides []string
+    // Skipped: operations whose method KrakenDEndpoint does not accept (UnsupportedMethod), after URL transform and overrides.
+    Skipped []OperationIssue
+    // Failed: operations whose entries failed CUE validation or did not decode (CUEEvaluationFailed).
+    Failed []OperationIssue
+}
+
+// OperationIssue is an operation the pipeline generates no endpoint for (operations.go).
+type OperationIssue struct {
+    Operation        // Method, Path, OperationID, Tags
+    Reason, Message string
 }
 ```
 
@@ -2235,7 +2412,10 @@ func (e *cueEvaluator) loadDefinitions(
     cueCtx *cue.Context, defs map[string]string,
 ) cue.Value {
     var unified cue.Value
-    for filename, content := range defs {
+    // Sorted by filename: CUE words a conflict by operand order, so map order
+    // would change an error's text from one evaluation to the next.
+    for _, filename := range slices.Sorted(maps.Keys(defs)) {
+        content := defs[filename]
         val := cueCtx.CompileString(content, cue.Filename(filename))
         if !unified.Exists() {
             unified = val
@@ -2291,13 +2471,21 @@ func (e *cueEvaluator) Evaluate(ctx context.Context, input CUEInput) (*CUEOutput
     )
     unified = e.applyOverrides(cueCtx, unified, input)
 
-    // 6. Evaluate to concrete endpoint entries
-    if err := unified.Validate(cue.Concrete(true)); err != nil {
-        return nil, fmt.Errorf("CUE evaluation failed: %w", err)
+    // 6. Evaluate to concrete endpoint entries. An error inside one endpoint
+    // entry fails only that operation (CUEOutput.Failed); any other error fails
+    // the whole evaluation.
+    rootErrors := entryErrors(unified.Validate(cue.Concrete(true)))
+    endpointsValue := unified.LookupPath(cue.ParsePath("endpoint"))
+    output, err := exportEndpointEntries(endpointsValue, rootErrors)
+    if err != nil {
+        return nil, err
     }
 
-    endpointsValue := unified.LookupPath(cue.ParsePath("endpoint"))
-    return e.exportEndpointEntries(endpointsValue)
+    // 7. CR defaults, the URL transform, per-operation overrides (an override
+    // on a duplicated operationId is ambiguous and not applied), then the
+    // partition by method: HEAD, OPTIONS and TRACE entries move to Skipped.
+    // ...
+    return output, nil
 }
 ```
 
@@ -2307,7 +2495,9 @@ func (e *cueEvaluator) Evaluate(ctx context.Context, input CUEInput) (*CUEOutput
 - Environment injection via `FillPath("_env", ...)` populates a hidden CUE field that CUE definitions reference for per-environment host resolution (matching KrakenD-SwaggerParse's `#internalHost.dev`/`#internalHost.preprod`/`#internalHost.prod` pattern). This approach is used instead of CUE `@tag()` because the operator evaluates CUE via `cue/cuecontext` (not `cue/load`), and `@tag()` injection is only supported by `cue/load`
 - The `urlTransform.hostMapping` from the CR is converted to CUE `#internalHost` constraints; when omitted, the host is auto-inferred from `openapi.url` base address
 - CR `overrides` (keyed by `operationId`) are converted to per-path CUE values and unified with the evaluation context, producing the same effect as KrakenD-SwaggerParse's `swagger_overrides.cue` per-path overrides
-- CUE constraint violations (type mismatches, missing required fields, conflicts) produce structured errors that map to `KrakenDAutoConfig` status conditions
+- CUE constraint violations (type mismatches, missing required fields, conflicts) inside one endpoint entry fail that operation only: it lands in `CUEOutput.Failed` and the AutoConfig holds it (`status.failedOperations`, reason `CUEEvaluationFailed`). Violations outside the endpoint entries fail the whole evaluation (`CUEEvaluationFailed` on `Synced`)
+- The methods the KrakenDEndpoint API accepts are `GET`, `POST`, `PUT`, `PATCH` and `DELETE` (`supportedMethods`). The default definitions also emit `HEAD`, `OPTIONS` and `TRACE` entries; `skipUnsupportedMethods` runs on the final entries, after the overrides, and reports them in `Skipped`, each with the operationId and tags recorded for its own entry (`entryOperationIDs`, `entryTags`) rather than the route-keyed maps, which hold only one of two operations on one route, so an override that gives such an operation a supported method keeps it generated
+- Each override's `extraConfig` reaches custom definitions as `_overrides` under `SanitizeName(operationId)` (lowercased, characters outside `a-z0-9-` replaced by `-`, leading and trailing `-` trimmed), with the key quoted (`_overrides: "get-a": …`), so ids with `-`, `_` or a leading digit evaluate
 
 ### Filter
 
@@ -2315,7 +2505,12 @@ func (e *cueEvaluator) Evaluate(ctx context.Context, input CUEInput) (*CUEOutput
 
 ```go
 type Filter interface {
-    Apply(entries []v1alpha1.EndpointEntry, tags map[string][]string, spec v1alpha1.FilterSpec) []v1alpha1.EndpointEntry
+    Apply(
+        entries []v1alpha1.EndpointEntry,
+        tags map[string][]string,
+        operationIDs map[string]string,
+        spec v1alpha1.FilterSpec,
+    ) []v1alpha1.EndpointEntry
 }
 ```
 
@@ -2337,46 +2532,53 @@ type Generator interface {
 }
 
 type GenerateInput struct {
-    AutoConfig     *v1alpha1.KrakenDAutoConfig
-    Entries        []v1alpha1.EndpointEntry // from CUE evaluator, post-filter
-    OperationIDs   map[string]string        // from CUEOutput.OperationIDs; keyed by "path:method"
-    GatewayRefName string                   // populates gatewayRef on each generated KrakenDEndpoint
+    AutoConfig       *v1alpha1.KrakenDAutoConfig
+    Entries          []v1alpha1.EndpointEntry // from CUE evaluator, post-filter
+    OperationIDs     map[string]string        // from CUEOutput.OperationIDs; keyed by "path:method"
+    GatewayRef       v1alpha1.GatewayRef      // populates gatewayRef on each generated KrakenDEndpoint
+    ComponentSchemas map[string]runtime.RawExtension // ExtractComponentSchemas of the fetched spec
 }
 
 type GenerateOutput struct {
-    Endpoints         []*v1alpha1.KrakenDEndpoint
-    SkippedOperations int
-    DuplicateIDs      []string
+    Endpoints []*v1alpha1.KrakenDEndpoint
+    Skipped   []OperationIssue // duplicates of an earlier entry, reason DuplicateOperationId
+    Warnings  []string         // schema references ComponentSchemas cannot satisfy, once each, sorted
 }
 ```
 
-The generator wraps each `EndpointEntry` (produced by CUE evaluation and filtering) in a `KrakenDEndpoint` CR with metadata, labels, and owner references. It groups entries by a configurable strategy (default: one CR per entry) and handles naming, duplicate detection, and diff logic.
+The generator wraps each `EndpointEntry` (produced by CUE evaluation and filtering) in a `KrakenDEndpoint` CR with metadata and labels, one CR per entry, and handles naming and duplicate detection. The controller diffs the output against the endpoints it controls and sets the controller owner reference when it writes them.
 
-**Duplicate operationId detection:**
+**Duplicate detection:**
 
-The generator tracks seen operationIds during the naming step. When the same operationId appears on multiple entries, the first occurrence is used for naming (and included in the output), subsequent duplicates are skipped, their operationId is added to `GenerateOutput.DuplicateIDs`, and `SkippedOperations` is incremented. The autoconfig controller emits a `DuplicateOperationId` Warning event for each duplicate and records the count in `status.skippedOperations`.
+The generator skips an entry that repeats an earlier one's path and method, operationId (`duplicateOf`), or generated endpoint name. The first occurrence is generated, and each skipped entry is returned in `GenerateOutput.Skipped` with reason `DuplicateOperationId` and a message that names the claimant (`same path and method as GET /x`). The controller adds them to `status.skipped`, counts them in `status.skippedOperations`, and, when the inputs changed since the last successful sync, emits a `DuplicateOperationId` Warning event for each. Two operations that a `urlTransform` collapses onto one method and path are skipped the same way: one is published, the other reported. An override on a duplicated operationId never gets that far, because `applyFieldOverrides` fails the sync closed (`AmbiguousOverride`).
 
 ```go
 func (g *endpointGenerator) Generate(ctx context.Context, input GenerateInput) (*GenerateOutput, error) {
-    seen := map[string]struct{}{} // keyed by operationId
-    // ... for each entry:
-    //   - derive operationId from CUE output metadata
-    //   - if operationId in seen, skip + record duplicate
-    //   - else: add to seen, generate KrakenDEndpoint CR
+    // for each entry:
+    //   - derive operationId from CUEOutput.OperationIDs and the name from it
+    //   - duplicateOf(path:method, operationId, name) != "" → record in Skipped and continue
+    //   - SchemaClosure(entry, ComponentSchemas) → the endpoint's componentSchemas
+    //     and any unresolved reference, reported once in Warnings
+    //   - build the KrakenDEndpoint with the two labels
 }
 ```
+
+**Schema closure:**
+
+`SchemaClosure` (`schemas.go`) returns only the component schemas an entry's `documentation/openapi` extra config references, directly (a `ref` field, an `example_schema` `$ref`) or through the schemas they reference, and the references `components` cannot satisfy: a name `components/schemas` does not define, or a local `#/…` pointer outside it. Example payloads are data and are not searched (`examplePayload`, `jsonwalk.go`); the members of a name-keyed map (`nameKeyedMaps`) are schemas whatever they are named, so a property called `example` is searched. Each generated endpoint therefore carries its closure instead of the whole map, and an unresolved reference becomes a spec warning. The renderer aggregates the endpoints' schemas into the gateway's `documentation/openapi.components_schemas`, the first definition of a name in namespace/name order winning, and reports a different definition of the same name as `Accepted` reason `SchemaNameConflict` on the endpoint that carries it.
 
 **Naming convention:**
 
 ```go
 func endpointName(autoconfigName, operationID, method, path string) string {
     if operationID != "" {
-        return fmt.Sprintf("%s-%s", autoconfigName, sanitizeName(operationID))
+        return OperationEndpointName(autoconfigName, operationID) // AutoConfig name + SanitizeName(operationID), cut to 253
     }
-    return fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path))
+    return limitName(fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path)))
 }
 
-func sanitizeName(s string) string {
+// SanitizeName also keys the _overrides CUE struct.
+func SanitizeName(s string) string {
     s = strings.ToLower(s)
     s = strings.Map(func(r rune) rune {
         if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
@@ -2389,10 +2591,15 @@ func sanitizeName(s string) string {
 
 func sanitizePath(path string) string {
     path = strings.TrimPrefix(path, "/")
+    path = strings.ToLower(path)
     path = strings.ReplaceAll(path, "/", "-")
-    path = strings.ReplaceAll(path, "{", "")
-    path = strings.ReplaceAll(path, "}", "")
-    return path
+    path = strings.Map(func(r rune) rune { // drops every character outside [a-z0-9-], braces included
+        if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+            return r
+        }
+        return -1
+    }, path)
+    return strings.Trim(path, "-")
 }
 ```
 
@@ -2455,7 +2662,7 @@ After the URL transform is applied, each additional endpoint's public path is sc
 
 1. `spec.additionalEndpointsBasePath` — explicit manual override; skips derivation.
 2. `urlTransform.addPathPrefix` — when set, the URL transform already prepended the prefix, so no further scoping is performed (base is treated as resolved).
-3. `DeriveBasePath(filtered)` — auto-derived from the generated (filtered) entries: compute the segment-level longest common prefix of each entry's parent directory (path minus its last segment). Returns `""` when no common parent exists (e.g. a root-level endpoint `/health`, divergent top-level paths, or an empty entry list).
+3. `DeriveBasePath` — auto-derived from the generated (filtered) entries plus the paths of the in-scope failed operations, so a held operation cannot move the base: compute the segment-level longest common prefix of each entry's parent directory (path minus its last segment). Returns `""` when no common parent exists (e.g. a root-level endpoint `/health`, divergent top-level paths, or an empty entry list).
 
 If none of these resolves to a non-empty string, the controller fails the sync with `AdditionalEndpointScopeFailed`.
 
@@ -2478,7 +2685,7 @@ build (BuildAdditionalEntries)
   → resolve base path (manual → addPathPrefix → DeriveBasePath)
   → scope public paths (ScopeAdditionalEntries)     ← backend urlPattern untouched
   → merge (MergeAdditional)
-  → emit AdditionalEndpointOverride Warning for each replaced key
+  → emit AdditionalEndpointOverride Warning for each replaced key (only when inputs changed)
   → generate (Generator)
 ```
 
@@ -2526,7 +2733,7 @@ func PluginChecksum(configMaps []corev1.ConfigMap, ociTags []string) string {
 
 ### License Parser
 
-**File:** `internal/util/license.go`
+**File:** `internal/util/license/license.go`
 
 ```go
 type LicenseParser interface {
@@ -2560,26 +2767,51 @@ func (p *x509LicenseParser) Parse(data []byte) (*LicenseInfo, error) {
 }
 ```
 
+### License Window
+
+**File:** `internal/util/license/window.go`
+
+`Window` splits a license's lifetime into stages. The gateway reconcile builds one from `spec.license.expiryWarningDays` and the 1 hour safety buffer, and asks it two questions:
+
+```go
+type Window struct {
+    Warning      time.Duration // must be longer than SafetyBuffer
+    SafetyBuffer time.Duration
+}
+
+// StageAt: StageValid, StageExpiringSoon, StagePreExpiry or StageExpired
+func (w Window) StageAt(notAfter, now time.Time) Stage
+
+// NextChange: how long after now StageAt next returns a different stage,
+// or 0 once the license has expired
+func (w Window) NextChange(notAfter, now time.Time) time.Duration
+```
+
 ---
 
 ## 15. Dependency Injection and Interfaces
 
-All external dependencies are abstracted behind interfaces, injected via struct fields, and wired in `main.go`.
+All external dependencies are abstracted behind interfaces, injected via struct fields, and wired in `cmd/` (`main.go` and `wiring.go`). Interfaces live with the package that consumes them.
 
 ### Interface Summary
 
 | Interface | Package | Purpose | Production Implementation |
 |---|---|---|---|
 | `Renderer` | `internal/renderer` | Build `krakend.json` from CRD state | `renderer.configRenderer` |
-| `Validator` | `internal/renderer` | Validate rendered config via `krakend check -tlc` | `renderer.KrakenDValidator` |
+| `Validator` | `internal/renderer` | Validate rendered config via `krakend check -t -n -c` (`Validate`) or lint it with `krakend check -n` (`Lint`) | `renderer.KrakenDValidator` |
+| `ConfigChecker` | `internal/controller` | Gather a gateway's render inputs and judge them: `CheckRoot(ctx, configcheck.Root, Memo)`, `CheckEndpoint(ctx, configcheck.EndpointUnit, Memo)` and `CheckRendered(ctx, in, out, Memo)`, behind the pod's shared validation slots | `configcheck.Checker` |
+| `ConfigChecker` | `internal/webhook` | Judge each object on its own and a group of them: `CheckRoot`, `CheckPolicy`, `CheckEndpoint` and `CheckGroup`, which run `krakend check -n` and the route check, and `Conflicts` (an in-process render) and `SameConfig` (a render comparison), which run no krakend | `configcheck.Checker` (the same instance the controller's port uses) |
 | `CommandExecutor` | `internal/renderer` | Execute shell commands (krakend check) | `renderer.KrakenDExecutor` |
 | `Fetcher` | `internal/autoconfig` | Fetch OpenAPI specs (HTTP + ConfigMap) | `autoconfig.httpFetcher` |
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
+| `AutoConfigChecker` | `internal/controller` | The checks over the endpoints a sync is about to write (`Conflicts`, `CheckRoot`, `CheckGroup`, `CheckEndpoint`), the AutoConfig controller's own port | `configcheck.Checker` (the pod's one instance, behind `CheckSlots`) |
+| `configcheck.Memo` | `internal/configcheck` | Remember a verdict by the content it judged (`Lookup`, `Store`); the consumer is `configcheck`, which treats an inconsistent entry as a miss | `controller.passMemo`, `controller.countedPass`, `webhook.lruMemo` |
 | `Filter` | `internal/autoconfig` | Include/exclude operations | `autoconfig.operationFilter` |
 | `Generator` | `internal/autoconfig` | Endpoint entries → `KrakenDEndpoint` CRDs with metadata | `autoconfig.endpointGenerator` |
-| `LicenseParser` | `internal/util` | Parse X.509 license certificates | `util.x509LicenseParser` |
+| `LicenseParser` | `internal/util/license` | Parse X.509 license certificates | `license.x509LicenseParser` |
 | `clock.Clock` | `k8s.io/utils/clock` | Time abstraction for license checks and periodic reconcile scheduling | `clock.RealClock` |
-| `client.Client` | `sigs.k8s.io/controller-runtime` | Kubernetes API client | Manager's cached client |
+| `client.Client` | `sigs.k8s.io/controller-runtime` | Kubernetes API client | Manager's client: cached reads, except Secrets and ConfigMaps, which are read live (`DisableFor`) |
+| `client.Reader` | `sigs.k8s.io/controller-runtime` | Uncached reads where the cache can lag: the policy controller's release check, `EndpointValidator.APIReader`, the gateway's ReplicaSet list and the config ConfigMap lost-create-race check | `mgr.GetAPIReader()` |
 | `record.EventRecorder` | `client-go/tools/record` | Kubernetes event emission | Manager's event recorder |
 
 ### Test Doubles
@@ -2596,6 +2828,8 @@ func (f *fakeRenderer) Render(input renderer.RenderInput) (*renderer.RenderOutpu
     return f.result, f.err
 }
 ```
+
+The checker ports have doubles of their own: `contentValidator` (a validator that judges by content), `fakeChecker` (the AutoConfig port, with fields for each new check), `scriptedChecker` (the webhook port, with scripted calls), `judgingExecutor` (a command executor whose verdict follows the config it is given) and `verdictRecorder` (the pod's `*configcheck.Checker`, wrapped so that it records each endpoint verdict by endpoint).
 
 For the Kubernetes client, tests use the controller-runtime `fake.NewClientBuilder()`:
 
@@ -2616,9 +2850,18 @@ client := fake.NewClientBuilder().
 | Category | Handling | Example |
 |---|---|---|
 | Transient API errors | Return `error` from `Reconcile` — controller-runtime retries with backoff | Network timeout reading Secret |
-| Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -tlc` |
+| Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -t -n -c` |
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
+| Validator unavailable (binary missing, timeout, killed, temp-file I/O, validation copy not prepared) | Set `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emit one Warning event, leave `Ready` Unknown and the serving phase and applied config unchanged, return `error` — controller-runtime retries with backoff | `krakend check -t -n -c` hits its deadline or `/usr/local/bin/krakend` is missing |
+| AutoConfig spec/CUE/unmatched-override/ambiguous-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode or a fetch past the 2-minute deadline, which fail closed as `SpecFetchFailed` instead of falling back to the raw spec |
+| AutoConfig held operations (CUE evaluation of one entry, the gateway config check, an API rejection of the endpoint) | Set `Synced=False` with reason `OperationsFailed`, list them in `status.failedOperations`, emit one Warning event when `Synced` or `status.failedOperations` changes, return `nil` and requeue at the resync interval: deterministic, so no backoff | `CUEEvaluationFailed`, `ConfigValidationFailed`, `EndpointRejected` |
+| AutoConfig transient endpoint write, adoption or delete failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`); every endpoint is attempted and the failures are aggregated | `EndpointReconcileFailed` |
+| Validated render whose ConfigMap cannot be published (a ConfigMap at the name that holds the right bytes but is not the gateway's copy, quota, size, or a payload-mismatching copy that cannot be deleted) | Set `ConfigValid=Unknown` with reason `ConfigPublishFailed` (message carries the cause, bounded to 4 KiB), emit a Warning event on a change of reason, leave `Ready` Unknown and the serving phase and applied config unchanged, return `error` — controller-runtime retries with backoff | A ConfigMap the gateway does not control at `<gateway>-config-<hash>` |
+| An existing object named like one of the gateway's children that the gateway does not control (another controller owns it, or nothing does and it lacks the consent labels) | Refuse it: leave it as it is, set `ResourcesControlled=False` with reason `ResourceNotControlled` naming it (a Warning event on the transition; `Ready` carries the reason, phase `Error`), reconcile the other children, return `error` — controller-runtime retries with backoff. A refused ServiceAccount holds the Deployment and the post-restart Job; a refused Deployment holds the HPA (the gateway's own is deleted; a hold that keeps the Deployment step from running does the same for a Deployment the pass reads as foreign, without naming it) and raises no `Progressing`, and collection still runs; a refused Service holds the VirtualService (the gateway's own is deleted, `IstioConfigured=False`); a refused Dragonfly reads `DragonflyReady=False` and is not rendered as the Redis address | A ServiceAccount `<gateway>` that another Deployment controller owns, or a Service `<gateway>` created without the gateway's labels |
+| The ServiceAccount write failed for another reason | Hold the Deployment and the post-restart Job as they are, still reconcile Dragonfly, the ExternalSecret and the VirtualService, log `holding the Deployment and the post-restart Job`, raise `Progressing` while the Deployment does not mount the applied config, keep `ResourcesControlled` as it was, return `error` — controller-runtime retries with backoff | A stale cache read that misses the ServiceAccount, so its create fails with `AlreadyExists` |
+| AutoConfig config check unavailable | Write and delete nothing, set `Synced=False` with reason `ValidatorUnavailable`, return `error` for backoff regardless of trigger | `krakend check` cannot run, or the reconcile was cancelled while it waited for a check slot |
+| AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on a successful sync's status write, or `Conflict`/`AlreadyExists` on an endpoint write; a failed sync whose status write conflicts keeps its failure row's handling, with no event |
 
 ### Error Wrapping Convention
 
@@ -2641,7 +2884,7 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string {
-    return fmt.Sprintf("krakend check validation failed: %s", e.Output)
+    return fmt.Sprintf("krakend config validation failed: %s: %s", e.Err, e.Output)
 }
 
 func (e *ValidationError) Unwrap() error { return e.Err }
@@ -2649,74 +2892,52 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 
 ### Status Update Failures
 
-When a status update fails after a successful mutation (e.g., ConfigMap updated but status patch fails), the controller returns the error to trigger a retry. On the next reconcile, the checksum comparison detects no change (ConfigMap is already updated), so the controller skips the mutation and retries only the status update. This ensures eventual consistency without duplicate work.
+When a status update fails after a successful mutation (e.g., the config ConfigMap published but the status write fails), the controller returns the error to trigger a retry. The config stage publishes before it records the checksum as applied, and publishing is idempotent: the content-addressed ConfigMap is created only when absent, and an existing one is verified rather than rewritten. On the next reconcile the render is still not the applied config, so it is validated again, finds its ConfigMap already published, and retries the status write. This ensures eventual consistency without duplicate work.
 
 ---
 
 ## 17. Metrics Implementation
 
-**Registered in:** `cmd/main.go` via `prometheus.MustRegister`
-**Instrumented in:** controller `Reconcile` methods
+**Registered in:** `telemetry.OperatorMetrics` (`internal/telemetry/metrics.go`) on OpenTelemetry instruments, served by `telemetry.NewPrometheusReader` in controller-runtime's `metrics.Registry`
+**Instrumented in:** the `GatewayMetrics` and `AutoConfigMetrics` ports (`internal/controller/metrics.go`), which `cmd` fills with `OperatorMetrics`; a reconciler given none records nothing
+
+The Prometheus reader exports each instrument under its own name, with no unit or `_total` suffix added, no `otel_scope_*` label and no `target_info` series, so the names and labels are those of earlier releases (`TestMetricsExposition_MatchesGolden` pins the scrape). The meter provider sets no cardinality limit. Counters and the histogram are synchronous. Every gauge is observable: it reports the values `OperatorMetrics` holds when a scrape collects them, so forgetting a gateway or AutoConfig removes its series. A synchronous instrument cannot drop a series, so the reconcile-duration histogram keeps a deleted gateway's series until the operator restarts.
 
 ### Metric Definitions
 
-```go
-var (
-    configRenders = prometheus.NewCounter(prometheus.CounterOpts{
-        Name: "krakend_operator_config_renders_total",
-        Help: "Total config render attempts",
-    })
+| Metric | OpenTelemetry instrument | Labels | Help |
+|---|---|---|---|
+| `krakend_operator_config_renders_total` | `Int64Counter` | none | Total config render attempts |
+| `krakend_operator_config_validation_failures_total` | `Int64Counter` | none | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again |
+| `krakend_operator_rolling_restarts_total` | `Int64Counter` | none | Deployment writes that changed the pod template, rolling the pods (not creations) |
+| `krakend_operator_license_expiry_seconds` | `Float64ObservableGauge` | `namespace`, `name` | Seconds until EE license expiry |
+| `krakend_operator_endpoints` | `Float64ObservableGauge` | `namespace`, `name` | Number of KrakenDEndpoints per gateway |
+| `krakend_operator_reconcile_duration_seconds` | `Float64Histogram` (unit `s`, buckets `prometheus.DefBuckets`) | `controller`, `namespace`, `name` | Reconciliation loop latency |
+| `krakend_operator_dragonfly_ready` | `Float64ObservableGauge` | `namespace`, `name` | 1 if Dragonfly is ready, 0 otherwise |
+| `krakend_operator_gateway_info` | `Float64ObservableGauge` | `namespace`, `name`, `edition`, `version` | Gateway metadata labels |
+| `krakend_operator_gateway_config_valid` | `Float64ObservableGauge` | `namespace`, `name` | 1 while the gateway's newest rendered config passed validation (ConfigValid=True), 0 otherwise |
+| `krakend_operator_gateway_excluded_endpoints` | `Float64ObservableGauge` | `namespace`, `gateway`, `reason` | KrakenDEndpoints a gateway leaves out of its config because they fail validation on their own, by Accepted reason |
+| `krakend_operator_autoconfig_synced` | `Float64ObservableGauge` | `namespace`, `name` | 1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing |
 
-    configValidationFailures = prometheus.NewCounter(prometheus.CounterOpts{
-        Name: "krakend_operator_config_validation_failures_total",
-        Help: "Validation failures (broken configs blocked)",
-    })
-
-    rollingRestarts = prometheus.NewCounter(prometheus.CounterOpts{
-        Name: "krakend_operator_rolling_restarts_total",
-        Help: "Rolling deployments triggered",
-    })
-
-    licenseExpiryDays = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_license_expiry_days",
-        Help: "Days until EE license expiry",
-    }, []string{"namespace", "name"})
-
-    endpointCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_endpoint_count",
-        Help: "Number of KrakenDEndpoints per gateway",
-    }, []string{"namespace", "name"})
-
-    reconcileDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-        Name:    "krakend_operator_reconcile_duration_seconds",
-        Help:    "Reconciliation loop latency",
-        Buckets: prometheus.DefBuckets,
-    }, []string{"namespace", "name"})
-
-    dragonflyReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_dragonfly_ready",
-        Help: "1 if Dragonfly is ready, 0 otherwise",
-    }, []string{"namespace", "name"})
-
-    gatewayInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_gateway_info",
-        Help: "Gateway metadata labels",
-    }, []string{"namespace", "name", "edition", "version"})
-)
-```
+The three counters are added to once with zero at construction, so they are exported from startup.
 
 ### Instrumentation Points
 
 | Metric | Instrumented In | When |
 |---|---|---|
-| `config_renders_total` | `GatewayReconciler.Reconcile` | After calling `Renderer.Render` |
-| `config_validation_failures_total` | `GatewayReconciler.Reconcile` | When `Validator.Validate` returns `ValidationError` |
-| `rolling_restarts_total` | `GatewayReconciler.Reconcile` | After patching Deployment pod template |
-| `license_expiry_days` | `LicenseMonitor.checkGateway` | After parsing license certificate |
-| `endpoint_count` | `GatewayReconciler.Reconcile` | After listing endpoints for gateway |
-| `reconcile_duration_seconds` | `GatewayReconciler.Reconcile` | `defer` at top of Reconcile, observing total duration |
-| `dragonfly_ready` | `GatewayReconciler.Reconcile` | After checking Dragonfly CR status |
-| `gateway_info` | `GatewayReconciler.Reconcile` | After successful reconcile |
+| `krakend_operator_config_renders_total` | `KrakenDGatewayReconciler.Reconcile` | After calling `Renderer.Render` |
+| `krakend_operator_config_validation_failures_total` | `countedPass.Store` (counts through `GatewayMetrics.ConfigRejected`) | Once for each fresh rejection of the gateway root, a policy alone or an endpoint alone: `countedPass` wraps the memo of the root and endpoint checks only. The full checks use the plain `passMemo` and are never counted, and a remembered rejection is not counted again. Only the gateway controller counts: the AutoConfig precheck (plain `passMemo`) and admission (`lruMemo`) do not |
+| `krakend_operator_rolling_restarts_total` | `KrakenDGatewayReconciler.reconcileDeployment` | Once per Deployment write that changed the pod template, judged by comparing the template read before the write with the server's response. A creation does not count, and drift in the template that the write reverts does |
+| `krakend_operator_license_expiry_seconds` | `KrakenDGatewayReconciler.reconcileLicense` | After parsing the license certificate (from the last known expiry while the license is unreadable); the series is removed with the gateway, and when the gateway is not EE |
+| `krakend_operator_endpoints` | `(*KrakenDGatewayReconciler).recordGatewayMetrics` | At the end of each reconcile, from the endpoints listed for the gateway |
+| `krakend_operator_reconcile_duration_seconds` | `KrakenDGatewayReconciler.Reconcile` | `defer` at top of Reconcile, recording the total duration through `GatewayMetrics.GatewayReconciled` |
+| `krakend_operator_dragonfly_ready` | `KrakenDGatewayReconciler.detectDragonflyState` | After checking Dragonfly CR status |
+| `krakend_operator_gateway_info` | `(*KrakenDGatewayReconciler).recordGatewayMetrics` | At the end of each reconcile; `GatewayMetrics.SetGatewayInfo` replaces the gateway's series, so one is left after a version or edition change |
+| `krakend_operator_gateway_config_valid` | `(*KrakenDGatewayReconciler).recordGatewayMetrics` | At the end of each reconcile: 1 while `ConfigValid` is `True`, 0 while it is `False` or `Unknown` or absent |
+| `krakend_operator_gateway_excluded_endpoints` | `reportExclusions` | After every pass that reaches the report: one series per `Accepted` reason (`EndpointInvalid`, `PolicyInvalid`) that has endpoints, counted from the endpoints' `Accepted` conditions as soon as an exclusion is recorded; absent while none; recorded through `GatewayMetrics.SetExcludedEndpoints`, and deleted in `GatewayMetrics.ForgetGateway` |
+| `krakend_operator_autoconfig_synced` | `KrakenDAutoConfigReconciler` | 1 after a successful sync, 0 while it fails or any operation is held; removed when the AutoConfig is deleted |
+
+Every per-gateway gauge series is removed when the gateway is deleted or terminating (`GatewayMetrics.ForgetGateway`). The reconcile-duration histogram's series is the exception: it stays until the operator restarts.
 
 ---
 
@@ -2728,7 +2949,7 @@ var (
 graph TB
     subgraph "Test Pyramid"
         E2E["E2E Tests<br/>test/e2e/<br/>Real cluster (kind/k3d)<br/>Full operator + CRDs + KrakenD"]
-        INT["Integration Tests<br/>test/integration/<br/>envtest (API server + etcd)<br/>Controllers + webhooks + real API"]
+        INT["Integration Tests<br/>test/integration/<br/>Ephemeral K3s (testcontainers)<br/>Controllers + CRD schema and CEL + real API"]
         UNIT["Unit Tests<br/>*_test.go (adjacent)<br/>Pure functions + fakes<br/>Renderer, parser, filter, transformer"]
     end
 
@@ -2750,6 +2971,7 @@ Unit tests cover all pure-function logic with no Kubernetes API dependency:
 |---|---|
 | `internal/renderer` | Deterministic JSON output; endpoint sorting; extra_config merge precedence; wildcard stripping; plugin block injection; checksum computation |
 | `internal/autoconfig` | SSRF rejection (loopback, link-local, ULA, RFC 1918); IPv4-mapped IPv6 normalization; redirect validation; scheme restriction; default definitions produce valid `EndpointEntry` objects; custom definitions unify with defaults; per-environment host resolution via `_env` field injection; CR override application; CUE constraint violation produces structured error; host auto-inference when hostMapping omitted; path prefix strip/add; tag annotation for filter stage; include/exclude paths; include/exclude methods; include/exclude tags; include/exclude operationIds; glob matching; endpoint name generation (with operationId, without); duplicate operationId handling; label assignment; owner reference wiring |
+| `cmd` | `TestBlame_AdmissionAndTheControllerAgree`: admission and the gateway controller, over one checker, judge the same endpoints and the same configs alike |
 | `internal/util/hash` | SHA-256 consistency; plugin checksum determinism across ConfigMap/OCI ordering |
 | `internal/util/license` | X.509 certificate parsing; PEM decoding; expired cert detection; malformed input |
 | `internal/resources` | Deployment spec (security context, volumes, probes, rolling update strategy); Service spec; PDB spec; label assignment; image selection logic |
@@ -2790,7 +3012,7 @@ func TestRender_DeterministicOutput(t *testing.T) {
 
 **Location:** `test/integration/`
 
-Integration tests use envtest to run a real Kubernetes API server and etcd, testing controller logic end-to-end without a real cluster:
+Integration tests run the controllers against a real Kubernetes API server, an ephemeral K3s cluster that testcontainers starts, so they test controller logic and the CRD schema and CEL rules end-to-end. The suite starts no webhook server: the webhook rules are unit-tested in `internal/webhook`, and the webhooks' cached lists and policy reads run under the trimmed role only in e2e. The manager itself runs as the operator ServiceAccount, bound to the generated `config/rbac/role.yaml`, so every scenario also proves the role is sufficient.
 
 ```go
 func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
@@ -2825,23 +3047,25 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 |---|---|
 | Gateway create → Deployment + Service + ConfigMap + SA + PDB created | Resource builder correctness, owner references |
 | Endpoint create → gateway re-reconciles → ConfigMap updated | Endpoint watch, config rendering |
-| Endpoint conflict → oldest wins, others marked Conflicted | Conflict detection logic across endpoints[] entries |
+| Endpoint conflict → oldest wins; a loser of every entry gets Accepted=False (EndpointConflict), a loser of some gets Accepted=True (PartiallyAccepted); status.conflicts names the lost entries | Conflict detection logic across endpoints[] entries |
 | Policy update → all gateways with referencing endpoints re-queued → ConfigMap updated | `policyToGateways` mapper, namespace-scoped list, re-render |
-| Policy delete blocked by referencing endpoint | Webhook DELETE validation |
-| Policy create/update with invalid field ranges rejected | Webhook CREATE/UPDATE validation |
+| Policy delete while an endpoint references it → held Terminating with a `DeletionBlocked` event, then released when the last reference goes | Protection finalizer, endpoint watch, uncached confirmation before release |
 | Config validation failure → Error phase, no Deployment update | Validation pipeline, error handling |
-| License expiry → CE fallback (image + config change) | License monitor integration with gateway controller |
+| An invalid endpoint is excluded and the rest applied (`TestExclusion_AnInvalidEndpointIsExcludedAndTheRestApplied`); an endpoint of an invalid policy is excluded by name (`TestExclusion_AnEndpointOfAnInvalidPolicyIsExcludedByName`) | Per-object validation, `EndpointInvalid` / `PolicyInvalid`, `EndpointsExcluded`, the excluded-endpoints gauge |
+| License expiry → CE fallback (image + config change) | License evaluation inside the gateway reconcile |
 | EE recovery → restored image + full config | License restoration flow |
 | Gateway deletion → orphaned endpoints marked Detached | Endpoint controller gateway watch, Detached phase |
 | AutoConfig create → generated endpoints | AutoConfig pipeline end-to-end |
 | AutoConfig periodic re-sync | RequeueAfter behavior |
-| Webhook rejects invalid CRs | All webhook validation rules |
+| The API server rejects invalid CRs | CRD schema and CEL rules (`TestCRD_EndpointRules`, `TestCRD_GatewayRules`, `TestCRD_AutoConfigRules`). The policy minimums are unit-tested in `api/v1alpha1` (`TestPolicyCRD_Minimums`) |
 
 ### End-to-End Tests
 
 **Location:** `test/e2e/`
 
-E2E tests run against a real Kubernetes cluster (kind or k3d) with all CRDs installed and the operator running:
+E2E tests run against an ephemeral K3s cluster (testcontainers) with all CRDs installed and the operator running. The suite installs the operator from the Helm chart: it renders the chart with `helm template --kube-version 1.33.0 --include-crds`, applies the result with `kubectl apply --server-side` and waits for the Deployment to roll out. It does not use `helm install`, because the chart refuses Kubernetes older than 1.33, the K3s version is 1.32 (rootless podman needs it), and `helm install` reads the version from the cluster and has no flag to override it. The chart has no hooks, so the two are equivalent.
+
+A lifecycle spec covers:
 
 ```go
 func TestE2E_FullGatewayLifecycle(t *testing.T) {
@@ -2856,47 +3080,59 @@ func TestE2E_FullGatewayLifecycle(t *testing.T) {
 }
 ```
 
-### envtest Suite Setup
+### Integration Suite Setup
+
+`test/integration/suite_test.go` starts the cluster and the controllers once for the whole package (build tag `integration`):
 
 ```go
-var (
-    testEnv   *envtest.Environment
-    k8sClient client.Client
-    ctx       context.Context
-    cancel    context.CancelFunc
-)
+func runTests(m *testing.M) int {
+    // An ephemeral K3s cluster through testcontainers. K3s 1.32 is used because
+    // 1.33 removed the KubeletInUserNamespace feature gate that rootless
+    // podman needs. utils.K3sImage and utils.K3sArgs are shared with the e2e
+    // suite. K3sArgs always disables traefik and metrics-server and enables
+    // the OwnerReferencesPermissionEnforcement plugin (clusters that enable it
+    // require delete on any object whose ownerReferences an update changes, so
+    // the suite proves the trimmed role). Only when DOCKER_HOST points at
+    // rootless podman (a socket under /run/user/<uid>/) does it add the kubelet
+    // args KubeletInUserNamespace=true, cgroups-per-qos=false and
+    // enforce-node-allocatable="", which work around rootless cgroup constraints.
+    k3sContainer, err = k3s.Run(ctx, utils.K3sImage, testcontainers.WithCmdArgs(utils.K3sArgs()...))
+    defer k3sContainer.Terminate(terminateCtx)
 
-func TestMain(m *testing.M) {
-    ctx, cancel = context.WithCancel(context.Background())
-
-    testEnv = &envtest.Environment{
-        CRDDirectoryPaths: []string{
-            filepath.Join("..", "..", "config", "crd", "bases"),
+    // Build a rest.Config from the cluster's kubeconfig, wait for the nodes,
+    // install the CRDs from config/crd/bases, bind the generated manager ClusterRole
+    // (config/rbac/role.yaml) to the operator ServiceAccount and wait until the
+    // authorizer allows it, then start a manager in the background as that
+    // ServiceAccount, so a missing RBAC verb fails a test with Forbidden.
+    mgrCfg, err := operatorRBACConfig(ctx, cfg, k8sClient)
+    mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{
+        Scheme: scheme,
+        // As cmd/main.go: Secrets and ConfigMaps are read live and cached as
+        // metadata without annotations or managedFields.
+        Client: client.Options{
+            Cache: &client.CacheOptions{DisableFor: controller.UncachedObjects()},
         },
-        WebhookInstallOptions: envtest.WebhookInstallOptions{
-            Paths: []string{filepath.Join("..", "..", "config", "webhook")},
-        },
-    }
+        Cache: cache.Options{ByObject: controller.CacheByObject()},
+        // NewCache wraps cache.New in typedCoreReads, which records any typed
+        // Secret or ConfigMap informer, Get, List or IndexField.
+        NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) { /* ... */ },
+    })
 
-    cfg, err := testEnv.Start()
-    if err != nil {
-        panic(err)
-    }
+    // The gateway controller gets the real renderer and one config checker over a
+    // marker validator, because the krakend binary is not available here.
+    checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1)
+    // ... set up the Gateway, Endpoint, Policy and AutoConfig controllers on mgr
 
-    // Register scheme, create client, start manager with controllers
-    // ...
-
-    code := m.Run()
-    cancel()
-    testEnv.Stop()
-    os.Exit(code)
+    return m.Run()
 }
 ```
+
+Run it with `make test-integration`, which needs a container runtime (rootless podman works with `DOCKER_HOST` and `TESTCONTAINERS_RYUK_DISABLED=true`).
 
 ### Coverage Requirements
 
 - **Unit tests:** ≥ 85% line coverage per package
-- **Integration tests:** Cover every reconciliation path and webhook rule
+- **Integration tests:** Cover every reconciliation path and the CRD schema and CEL rules
 - **E2E tests:** Cover the critical user journey (create gateway → add endpoints → update → delete)
 
 ---
@@ -2908,17 +3144,24 @@ func TestMain(m *testing.M) {
 Multi-stage build that embeds the KrakenD CE binary for config validation:
 
 ```dockerfile
+# KrakenD CE image the validator binary comes from, pinned by digest so every
+# build validates with the same binary. Change it together with
+# ValidatorVersion in internal/configcheck and the gin version in go.mod.
+ARG KRAKEND_IMAGE=docker.io/library/krakend:2.13.11@sha256:26eb32dbb0e679c62170b21b4efb0729dc00262afd98fe6210110dbbbdd6425f
+
 # Stage 1: Build operator binary
 FROM golang:1.26-alpine AS builder
 WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o manager cmd/main.go
+# VERSION is reported as service.version; make docker-build passes the Makefile's
+# VERSION, a plain docker build leaves "dev", and a release passes its tag.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o manager ./cmd
 
 # Stage 2: Extract KrakenD CE binary for config validation
-ARG KRAKEND_VERSION=2.13
-FROM krakend:${KRAKEND_VERSION} AS krakend
+FROM ${KRAKEND_IMAGE} AS krakend
 
 # Stage 3: Final distroless image
 FROM gcr.io/distroless/static:nonroot
@@ -2948,10 +3191,10 @@ lint:                             ## Run linter
 	golangci-lint run -c .github/.golangci.yml
 
 build:                            ## Build operator binary
-	go build -o bin/manager cmd/main.go
+	go build -o bin/manager ./cmd
 
 docker-build:                     ## Build Docker image
-	docker build -t krakend-operator:latest .
+	docker build --build-arg VERSION=$(VERSION) -t krakend-operator:latest .
 ```
 
 ### Go Module
@@ -2971,7 +3214,11 @@ require (
     github.com/dragonflydb/dragonfly-operator/api ...
     github.com/external-secrets/external-secrets/apis ...
     istio.io/client-go ...
-    github.com/prometheus/client_golang ...
+    github.com/prometheus/client_golang v1.24.1
+    go.opentelemetry.io/otel v1.47.0   // API and SDK; with the OTLP, stdout and log/metric SDK modules
+    go.opentelemetry.io/otel/exporters/prometheus v0.69.0
+    go.opentelemetry.io/contrib/bridges/otellogr v0.21.0
+    go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
     github.com/stretchr/testify ...  // test only
 )
 ```

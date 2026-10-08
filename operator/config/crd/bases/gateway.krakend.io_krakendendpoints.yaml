@@ -18,8 +18,11 @@ spec:
     - jsonPath: .spec.gatewayRef.name
       name: Gateway
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
       type: string
     - jsonPath: .status.endpointCount
       name: Endpoints
@@ -27,13 +30,19 @@ spec:
     - jsonPath: .status.methods
       name: Methods
       type: string
+    - jsonPath: .status.phase
+      name: Phase
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KrakenDEndpoint is the Schema for the krakendendpoints API.
+        description: |-
+          KrakenDEndpoint declares one or more KrakenD endpoints (path, method and
+          backends) for a gateway. The operator renders it into the gateway's krakend.json.
         properties:
           apiVersion:
             description: |-
@@ -67,13 +76,15 @@ spec:
                   that each KrakenDEndpoint CR is self-contained.
                 type: object
               endpoints:
-                description: Endpoints is the list of endpoint definitions.
+                description: |-
+                  Endpoints is the list of endpoint definitions, one to 1024. Each
+                  (endpoint, method) pair appears at most once.
                 items:
                   description: EndpointEntry defines a single KrakenD endpoint.
                   properties:
                     backends:
                       description: Backends is the list of backend services for this
-                        endpoint.
+                        endpoint, at least one.
                       items:
                         description: BackendSpec defines a backend service target.
                         properties:
@@ -96,6 +107,15 @@ spec:
                             type: boolean
                           encoding:
                             description: Encoding selects the backend response encoding.
+                            enum:
+                            - json
+                            - safejson
+                            - fast-json
+                            - xml
+                            - rss
+                            - string
+                            - no-op
+                            - yaml
                             type: string
                           extraConfig:
                             description: ExtraConfig holds arbitrary backend-level
@@ -107,8 +127,11 @@ spec:
                               named key to avoid collisions.
                             type: string
                           host:
-                            description: Host is the list of backend host URLs.
+                            description: |-
+                              Host is the list of backend host URLs. A host holds no whitespace or
+                              control character: krakend check prints it verbatim in its errors.
                             items:
+                              pattern: ^[^\x00-\x20\x7F]+$
                               type: string
                             type: array
                           inputHeaders:
@@ -135,12 +158,23 @@ spec:
                           method:
                             description: Method overrides the endpoint method for
                               this backend.
+                            enum:
+                            - GET
+                            - POST
+                            - PUT
+                            - PATCH
+                            - DELETE
+                            - OPTIONS
+                            - HEAD
+                            - CONNECT
+                            - TRACE
                             type: string
                           policyRef:
                             description: PolicyRef references a KrakenDBackendPolicy
                               to apply.
                             properties:
                               name:
+                                minLength: 1
                                 type: string
                               namespace:
                                 maxLength: 63
@@ -152,6 +186,10 @@ spec:
                           sd:
                             description: SD selects the service discovery provider
                               (e.g. "static", "dns").
+                            enum:
+                            - static
+                            - dns
+                            - dns-shared
                             type: string
                           sdScheme:
                             description: SDScheme sets the service discovery scheme
@@ -168,10 +206,17 @@ spec:
                         - host
                         - urlPattern
                         type: object
+                      minItems: 1
                       type: array
                     cacheTTL:
-                      description: CacheTTL overrides the global cache TTL.
+                      description: CacheTTL overrides the global cache TTL (a Go duration).
+                      maxLength: 64
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
+                      x-kubernetes-validations:
+                      - message: must be a duration that fits in 64 bits of nanoseconds
+                        rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                          || duration(self) >= duration(''0s'')'
                     concurrentCalls:
                       description: |-
                         ConcurrentCalls sets the number of concurrent backend calls for this endpoint.
@@ -180,8 +225,12 @@ spec:
                       minimum: 1
                       type: integer
                     endpoint:
-                      description: Endpoint is the public path exposed by KrakenD
-                        (e.g. "/api/v1/users").
+                      description: |-
+                        Endpoint is the public path exposed by KrakenD (e.g. "/api/v1/users").
+                        It starts with "/" and contains no "*", "?", "&", "%", whitespace or
+                        control character, except a trailing "/*" wildcard (an Enterprise
+                        feature). krakend check prints the path verbatim in its errors.
+                      pattern: ^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$
                       type: string
                     extraConfig:
                       description: ExtraConfig holds arbitrary endpoint-level extra_config
@@ -211,21 +260,44 @@ spec:
                       type: string
                     outputEncoding:
                       description: OutputEncoding overrides the default response encoding.
+                      enum:
+                      - json
+                      - json-collection
+                      - yaml
+                      - fast-json
+                      - xml
+                      - negotiate
+                      - string
+                      - no-op
                       type: string
                     timeout:
-                      description: Timeout overrides the global endpoint timeout.
+                      description: Timeout overrides the global endpoint timeout (a
+                        Go duration).
+                      maxLength: 64
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
+                      x-kubernetes-validations:
+                      - message: must be a duration that fits in 64 bits of nanoseconds
+                        rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                          || duration(self) >= duration(''0s'')'
                   required:
                   - backends
                   - endpoint
                   - method
                   type: object
+                maxItems: 1024
+                minItems: 1
                 type: array
+                x-kubernetes-list-map-keys:
+                - endpoint
+                - method
+                x-kubernetes-list-type: map
               gatewayRef:
                 description: GatewayRef references the KrakenDGateway this endpoint
                   belongs to.
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     maxLength: 63
@@ -242,6 +314,9 @@ spec:
             description: KrakenDEndpointStatus defines the observed state of KrakenDEndpoint.
             properties:
               conditions:
+                description: |-
+                  Conditions are keyed by type. The endpoint controller writes
+                  ResolvedRefs and Ready; the gateway controller writes Accepted.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -297,6 +372,45 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              conflicts:
+                description: |-
+                  Conflicts lists this endpoint's entries that its gateway leaves out,
+                  because an older entry has the same route shape (endpoint paths that
+                  differ only in parameter names) and method, or its route clashes with
+                  an older entry's route in the router. An entry is listed once for each
+                  KrakenDEndpoint it loses to, which may be this one.
+                  The gateway controller writes it together with the Accepted condition.
+                items:
+                  description: |-
+                    EndpointConflict is one entry of a KrakenDEndpoint that its gateway leaves
+                    out, because an older entry has the same route shape (endpoint paths that
+                    differ only in parameter names) and method, or its route clashes with an
+                    older entry's route in the router. An entry is recorded once for each
+                    KrakenDEndpoint it loses to.
+                  properties:
+                    endpoint:
+                      description: Endpoint is the entry's path.
+                      type: string
+                    method:
+                      description: Method is the entry's HTTP method.
+                      type: string
+                    winner:
+                      description: |-
+                        Winner is the namespace/name of the KrakenDEndpoint whose entry this one
+                        loses to. That is an older KrakenDEndpoint, or this one when an earlier
+                        entry of it has the same route shape and method. The winner's entry may
+                        itself be left out.
+                      type: string
+                  required:
+                  - endpoint
+                  - method
+                  - winner
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               endpointCount:
                 format: int32
                 type: integer
@@ -306,6 +420,9 @@ spec:
                 format: int64
                 type: integer
               phase:
+                description: |-
+                  Phase is derived from the Ready condition and kept for compatibility;
+                  read the Ready condition instead.
                 enum:
                 - Pending
                 - Active

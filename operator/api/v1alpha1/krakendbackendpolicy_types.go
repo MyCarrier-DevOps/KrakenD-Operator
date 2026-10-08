@@ -74,17 +74,30 @@ type CacheSpec struct {
 
 // KrakenDBackendPolicyStatus defines the observed state of KrakenDBackendPolicy.
 type KrakenDBackendPolicyStatus struct {
-	ReferencedBy int                `json:"referencedBy,omitempty"`
-	Conditions   []metav1.Condition `json:"conditions,omitempty"`
+	// ObservedGeneration is the metadata.generation this status was computed for.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	ReferencedBy       int   `json:"referencedBy,omitempty"`
+	// Conditions are keyed by type. Ready is the summary condition: False
+	// (InvalidCircuitBreaker, InvalidRateLimit) when a field is out of range,
+	// False (PolicyInvalid) when the policy fails krakend check on its own,
+	// with that output in the message, Unknown (ValidatorUnavailable) when the
+	// check could not run, True otherwise.
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=kbp
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="ReferencedBy",type=integer,JSONPath=`.status.referencedBy`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDBackendPolicy is the Schema for the krakendbackendpolicies API.
+// KrakenDBackendPolicy defines circuit-breaker, rate-limit and cache settings,
+// plus raw backend extra_config, that KrakenDEndpoint backends reference
+// through policyRef.
 type KrakenDBackendPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -92,6 +105,11 @@ type KrakenDBackendPolicy struct {
 	Spec   KrakenDBackendPolicySpec   `json:"spec,omitempty"`
 	Status KrakenDBackendPolicyStatus `json:"status,omitempty"`
 }
+
+// PolicyProtectionFinalizer keeps a KrakenDBackendPolicy while any
+// KrakenDEndpoint references it, so deleting a policy never pulls it out from
+// under a rendered backend. Deletion completes once nothing references it.
+const PolicyProtectionFinalizer = "gateway.krakend.io/policy-protection"
 
 // +kubebuilder:object:root=true
 

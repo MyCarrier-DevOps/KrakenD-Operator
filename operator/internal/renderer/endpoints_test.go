@@ -26,7 +26,7 @@ import (
 )
 
 func TestFlattenEndpoints_Empty(t *testing.T) {
-	flat, conflicted, invalid := flattenEndpoints(nil, nil)
+	flat, _, conflicted, invalid := flattenEndpoints(nil, nil)
 	if len(flat) != 0 || len(conflicted) != 0 || len(invalid) != 0 {
 		t.Error("expected all empty for nil input")
 	}
@@ -48,7 +48,7 @@ func TestFlattenEndpoints_SingleEndpoint(t *testing.T) {
 			},
 		},
 	}
-	flat, conflicted, invalid := flattenEndpoints(endpoints, nil)
+	flat, _, conflicted, invalid := flattenEndpoints(endpoints, nil)
 	if len(flat) != 1 {
 		t.Fatalf("expected 1 flat endpoint, got %d", len(flat))
 	}
@@ -87,7 +87,7 @@ func TestFlattenEndpoints_NoConflictDifferentPaths(t *testing.T) {
 			},
 		},
 	}
-	flat, conflicted, _ := flattenEndpoints(endpoints, nil)
+	flat, _, conflicted, _ := flattenEndpoints(endpoints, nil)
 	if len(flat) != 2 {
 		t.Fatalf("expected 2 flat endpoints, got %d", len(flat))
 	}
@@ -126,7 +126,7 @@ func TestFlattenEndpoints_SamePathDifferentMethod(t *testing.T) {
 			},
 		},
 	}
-	flat, conflicted, _ := flattenEndpoints(endpoints, nil)
+	flat, _, conflicted, _ := flattenEndpoints(endpoints, nil)
 	if len(flat) != 2 {
 		t.Fatalf("expected 2 flat endpoints, got %d", len(flat))
 	}
@@ -167,7 +167,7 @@ func TestFlattenEndpoints_ConflictOldestWins(t *testing.T) {
 		},
 	}
 
-	flat, conflicted, _ := flattenEndpoints(endpoints, nil)
+	flat, _, conflicted, _ := flattenEndpoints(endpoints, nil)
 	if len(flat) != 1 {
 		t.Fatalf("expected 1 flat endpoint after conflict, got %d", len(flat))
 	}
@@ -207,7 +207,7 @@ func TestFlattenEndpoints_SortedOutput(t *testing.T) {
 		},
 	}
 
-	flat, _, _ := flattenEndpoints(endpoints, nil)
+	flat, _, _, _ := flattenEndpoints(endpoints, nil)
 	if len(flat) != 3 {
 		t.Fatalf("expected 3 flat endpoints, got %d", len(flat))
 	}
@@ -243,7 +243,7 @@ func TestFlattenEndpoints_InvalidPolicyRef(t *testing.T) {
 			},
 		},
 	}
-	_, _, invalid := flattenEndpoints(endpoints, nil)
+	_, _, _, invalid := flattenEndpoints(endpoints, nil)
 	if len(invalid) != 1 {
 		t.Fatalf("expected 1 invalid, got %d", len(invalid))
 	}

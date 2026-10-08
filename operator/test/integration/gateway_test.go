@@ -24,15 +24,29 @@ import (
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func eventually(t *testing.T, check func() error) {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	eventuallyWithin(t, 60*time.Second, check)
+}
+
+// eventuallyWithin polls check until it returns nil, failing the test if it
+// has not done so within timeout.
+func eventuallyWithin(t *testing.T, timeout time.Duration, check func() error) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if lastErr = check(); lastErr == nil {
@@ -100,14 +114,80 @@ func TestGateway_CreatesOwnedResources(t *testing.T) {
 		t.Error("service should be controlled by gateway")
 	}
 
-	// Wait for ConfigMap (krakend config) to be created.
+	// Wait for the content-addressed ConfigMap (krakend config).
+	applied := waitForAppliedChecksum(t, client.ObjectKeyFromObject(gw))
 	cm := &corev1.ConfigMap{}
 	eventually(t, func() error {
-		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), cm); err != nil {
-			return fmt.Errorf("waiting for configmap: %w", err)
-		}
-		return nil
+		return k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: resources.ConfigMapName(gw, applied)}, cm)
 	})
+}
+
+func TestGateway_ConfigIsContentAddressedAndImmutable(t *testing.T) {
+	ns := testNamespace(t)
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "immutable-gw", Namespace: ns},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.9", Edition: v1alpha1.EditionCE},
+	}
+	if err := k8sClient.Create(ctx, gw); err != nil {
+		t.Fatalf("create gateway: %v", err)
+	}
+	first := waitForAppliedChecksum(t, client.ObjectKeyFromObject(gw))
+	firstName := resources.ConfigMapName(gw, first)
+	var cm corev1.ConfigMap
+	eventually(t, func() error {
+		return k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: firstName}, &cm)
+	})
+	cm.Data[resources.ConfigKey] = `{"version":3,"tampered":true}`
+	if err := k8sClient.Update(ctx, &cm); !apierrors.IsInvalid(err) {
+		t.Fatalf("updating a config revision's data must be refused by the API server, got %v", err)
+	}
+
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "items", Namespace: ns},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/items", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/items"}},
+			}},
+		},
+	}
+	if err := k8sClient.Create(ctx, ep); err != nil {
+		t.Fatalf("create endpoint: %v", err)
+	}
+	eventually(t, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &got); err != nil {
+			return err
+		}
+		if got.Status.ConfigChecksum == first {
+			return fmt.Errorf("the new config is not applied yet")
+		}
+		var dep appsv1.Deployment
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &dep); err != nil {
+			return err
+		}
+		want := resources.ConfigMapName(gw, got.Status.ConfigChecksum)
+		for _, v := range dep.Spec.Template.Spec.Volumes {
+			if v.Name == "config" && v.ConfigMap != nil && v.ConfigMap.Name == want {
+				return nil
+			}
+		}
+		return fmt.Errorf("the Deployment does not mount %s yet", want)
+	})
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: firstName}, &cm); err != nil {
+		t.Fatalf("the previous config revision must survive the rollout: %v", err)
+	}
+	// With GC active, the previous revision survives only because its
+	// ReplicaSet is still live (the K3s pods never become ready, so the
+	// rollout never completes) or because it is inside the history.
+	var rsList appsv1.ReplicaSetList
+	if err := k8sClient.List(ctx, &rsList, client.InNamespace(ns)); err != nil {
+		t.Fatal(err)
+	}
+	if len(rsList.Items) == 0 {
+		t.Fatal("the Deployment controller created no ReplicaSet; the GC path is untested")
+	}
 }
 
 func TestGateway_EndpointTriggersReReconcile(t *testing.T) {
@@ -364,6 +444,250 @@ func TestPolicy_RequeuesGateway(t *testing.T) {
 		}
 		if updated.Status.ReferencedBy < 1 {
 			return fmt.Errorf("expected ReferencedBy >= 1, got %d", updated.Status.ReferencedBy)
+		}
+		return nil
+	})
+}
+
+// waitForAppliedChecksum waits until the gateway key has an applied config
+// and returns its checksum.
+func waitForAppliedChecksum(t *testing.T, key client.ObjectKey) string {
+	t.Helper()
+	var applied string
+	eventually(t, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, key, &got); err != nil {
+			return err
+		}
+		if got.Status.ConfigChecksum == "" {
+			return fmt.Errorf("no applied config yet")
+		}
+		applied = got.Status.ConfigChecksum
+		return nil
+	})
+	return applied
+}
+
+func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
+	ns := testNamespace(t)
+	gw := createGateway(t, ns, "drift-gw")
+	applied := waitForAppliedChecksum(t, gw)
+	cmKey := types.NamespacedName{
+		Namespace: ns,
+		Name:      resources.ConfigMapName(&v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: gw.Name}}, applied),
+	}
+	var appliedCM corev1.ConfigMap
+	if err := k8sClient.Get(ctx, cmKey, &appliedCM); err != nil {
+		t.Fatalf("get the applied ConfigMap: %v", err)
+	}
+
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, gw, &got); err != nil {
+			return err
+		}
+		got.Spec.Config.ExtraConfig = rootRejecting(rejectMarker)
+		return k8sClient.Update(ctx, &got)
+	})
+	if err != nil {
+		t.Fatalf("making the gateway root fail: %v", err)
+	}
+	eventually(t, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, gw, &got); err != nil {
+			return err
+		}
+		c := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+		if c == nil || c.Status != metav1.ConditionFalse {
+			return fmt.Errorf("ConfigValid = %+v, want False", c)
+		}
+		return nil
+	})
+
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: ns}}
+	if err := k8sClient.Delete(ctx, dep); err != nil {
+		t.Fatalf("delete deployment: %v", err)
+	}
+	eventually(t, func() error {
+		var got appsv1.Deployment
+		if err := k8sClient.Get(ctx, gw, &got); err != nil {
+			return fmt.Errorf("waiting for the Deployment to be recreated: %w", err)
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			return fmt.Errorf("the old Deployment is still terminating")
+		}
+		if a := got.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation]; a != applied {
+			return fmt.Errorf("recreated Deployment carries config %q, want the applied %q", a, applied)
+		}
+		return nil
+	})
+
+	var cm corev1.ConfigMap
+	if err := k8sClient.Get(ctx, cmKey, &cm); err != nil {
+		t.Fatalf("get the ConfigMap: %v", err)
+	}
+	if cm.Data[resources.ConfigKey] != appliedCM.Data[resources.ConfigKey] {
+		t.Errorf("the rejected config reached the ConfigMap:\n%s", cm.Data[resources.ConfigKey])
+	}
+}
+
+// TestGateway_CollectsConfigRevisionsOutsideTheHistory builds more config
+// revisions than the history keeps, with no ReplicaSet left to mount the old
+// ones, and expects the oldest to be collected from a real API server.
+func TestGateway_CollectsConfigRevisionsOutsideTheHistory(t *testing.T) {
+	const revisions = 6 // more than the three the history keeps
+	ns := testNamespace(t)
+	gw := createGateway(t, ns, "gc-gw")
+	var names []string
+	names = append(names, resources.ConfigMapName(&v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name},
+	}, waitForAppliedChecksum(t, gw)))
+
+	for i := 1; i < revisions; i++ {
+		// Nothing keeps an earlier revision alive but the history: drop the
+		// ReplicaSets that still mount an older one.
+		deleteStaleReplicaSets(t, ns, names[len(names)-1])
+		// Collection orders revisions by creationTimestamp, which has
+		// one-second resolution; keep every revision in its own second.
+		waitPastCreationSecond(t, ns, names[len(names)-1])
+		path := fmt.Sprintf("/items-%d", i)
+		ep := &v1alpha1.KrakenDEndpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("items-%d", i), Namespace: ns},
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+				Endpoints: []v1alpha1.EndpointEntry{{
+					Endpoint: path, Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: path}},
+				}},
+			},
+		}
+		if err := k8sClient.Create(ctx, ep); err != nil {
+			t.Fatalf("create endpoint: %v", err)
+		}
+		previous := names[len(names)-1]
+		eventually(t, func() error {
+			var got v1alpha1.KrakenDGateway
+			if err := k8sClient.Get(ctx, gw, &got); err != nil {
+				return err
+			}
+			name := resources.ConfigMapName(&got, got.Status.ConfigChecksum)
+			if name == previous {
+				return fmt.Errorf("revision %d is not applied yet", i+1)
+			}
+			names = append(names, name)
+			return nil
+		})
+	}
+
+	eventually(t, func() error {
+		var list corev1.ConfigMapList
+		if err := k8sClient.List(ctx, &list, client.InNamespace(ns),
+			client.HasLabels{resources.ConfigRevisionLabel}); err != nil {
+			return err
+		}
+		got := map[string]bool{}
+		for i := range list.Items {
+			got[list.Items[i].Name] = true
+		}
+		for i, name := range names {
+			kept := i >= len(names)-3
+			if got[name] != kept {
+				return fmt.Errorf("revision %d (%s): present = %v, want %v", i+1, name, got[name], kept)
+			}
+		}
+		return nil
+	})
+}
+
+// deleteStaleReplicaSets deletes the ReplicaSets in ns that do not mount
+// current.
+func deleteStaleReplicaSets(t *testing.T, ns, current string) {
+	t.Helper()
+	var list appsv1.ReplicaSetList
+	if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range list.Items {
+		rs := &list.Items[i]
+		if resources.MountedConfigMapName(&rs.Spec.Template.Spec) == current {
+			continue
+		}
+		if err := k8sClient.Delete(ctx, rs, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil &&
+			!apierrors.IsNotFound(err) {
+			t.Fatal(err)
+		}
+	}
+}
+
+// waitPastCreationSecond blocks until the wall clock is past the second in
+// which the ConfigMap name was created.
+func waitPastCreationSecond(t *testing.T, ns, name string) {
+	t.Helper()
+	var cm corev1.ConfigMap
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Until(cm.CreationTimestamp.Add(time.Second)))
+}
+
+// waitForQuietDeployment waits until the gateway's Deployment has not changed
+// for five seconds, so that a later reconcile can only come from the event
+// under test.
+func waitForQuietDeployment(t *testing.T, key client.ObjectKey) {
+	t.Helper()
+	var last string
+	since := time.Now()
+	eventuallyWithin(t, 90*time.Second, func() error {
+		var dep appsv1.Deployment
+		if err := k8sClient.Get(ctx, key, &dep); err != nil {
+			return err
+		}
+		if dep.ResourceVersion != last {
+			last, since = dep.ResourceVersion, time.Now()
+			return fmt.Errorf("the Deployment is still changing")
+		}
+		if time.Since(since) < 5*time.Second {
+			return fmt.Errorf("waiting for five quiet seconds")
+		}
+		return nil
+	})
+}
+
+func TestGateway_DeletedVirtualServiceIsRecreated(t *testing.T) {
+	ns := testNamespace(t)
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "istio-gw", Namespace: ns},
+		Spec: v1alpha1.KrakenDGatewaySpec{Version: "2.9", Edition: v1alpha1.EditionCE,
+			Istio: &v1alpha1.IstioSpec{Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"}},
+		},
+	}
+	if err := k8sClient.Create(ctx, gw); err != nil {
+		t.Fatalf("create gateway: %v", err)
+	}
+	key := types.NamespacedName{Namespace: ns, Name: gw.Name}
+	vsGVK := schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService"}
+	getVS := func() (*unstructured.Unstructured, error) {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(vsGVK)
+		return u, k8sClient.Get(ctx, key, u)
+	}
+	eventually(t, func() error { _, err := getVS(); return err })
+	waitForQuietDeployment(t, key)
+
+	vs, err := getVS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k8sClient.Delete(ctx, vs); err != nil {
+		t.Fatalf("delete virtualservice: %v", err)
+	}
+	eventuallyWithin(t, 20*time.Second, func() error {
+		got, err := getVS()
+		if err != nil {
+			return fmt.Errorf("waiting for the VirtualService to be recreated: %w", err)
+		}
+		if got.GetUID() == vs.GetUID() {
+			return fmt.Errorf("still the deleted VirtualService")
 		}
 		return nil
 	})

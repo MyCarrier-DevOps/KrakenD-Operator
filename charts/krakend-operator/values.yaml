@@ -1,4 +1,6 @@
-replicaCount: 1
+# Two replicas keep the admission webhooks available during rollouts and
+# node drains; leader election keeps one controller active at a time.
+replicaCount: 2
 
 image:
   repository: ghcr.io/mycarrier-devops/krakend-operator
@@ -24,9 +26,31 @@ metrics:
   enabled: true
   service:
     port: 8443
+  certManager:
+    # Serve metrics with a certificate cert-manager issues from the chart's
+    # self-signed Issuer instead of the one the operator generates at startup.
+    # The ServiceMonitor (serviceMonitor.enabled) then verifies it.
+    # Requires cert-manager to be installed in the cluster.
+    enabled: false
+  serviceMonitor:
+    # Create a Prometheus Operator ServiceMonitor (needs the
+    # monitoring.coreos.com CRDs). Bind the <fullname>-metrics-reader
+    # ClusterRole to the scraping ServiceAccount.
+    # Unless certManager.enabled, the scrape skips TLS verification (the
+    # metrics server's certificate is self-signed) and sends Prometheus's
+    # ServiceAccount token to the endpoint, so enable it only where the pod
+    # network is trusted.
+    enabled: false
+    additionalLabels: {}
 
 healthProbes:
   port: 8081
+
+autoconfig:
+  # How many KrakenDAutoConfigs the operator reconciles at once. Each
+  # reconcile fetches its OpenAPI spec (and external $ref documents) over the
+  # network, so one slow upstream does not delay the others.
+  maxConcurrentReconciles: 4
 
 webhooks:
   enabled: true
@@ -38,9 +62,53 @@ webhooks:
     # Enable cert-manager integration for automatic TLS certificate provisioning.
     # Requires cert-manager to be installed in the cluster.
     enabled: true
-  # caBundle is only used when certManager.enabled is false.
-  # Provide a base64-encoded CA certificate bundle for the webhook server.
+  # caBundle is only used when certManager.enabled is false: the CA bundle
+  # that signed the webhook server's certificate, either as PEM (for example
+  # with --set-file webhooks.caBundle=ca.pem) or base64-encoded PEM.
   caBundle: ""
+
+telemetry:
+  # OpenTelemetry export. With no endpoint nothing is exported: metrics are
+  # still served on /metrics and logs are written to stdout.
+  otlp:
+    # The OTLP collector (OTEL_EXPORTER_OTLP_ENDPOINT), for example
+    # http://otel-collector.observability:4318 for http/protobuf or :4317 for
+    # grpc.
+    endpoint: ""
+    # grpc or http/protobuf (OTEL_EXPORTER_OTLP_PROTOCOL).
+    protocol: http/protobuf
+    # A Secret key holding OTEL_EXPORTER_OTLP_HEADERS, written as
+    # "key1=value1,key2=value2" (for example a collector API key).
+    headersSecret:
+      name: ""
+      key: headers
+    # Export to an OpenTelemetry collector that runs on every node and is
+    # reached through the node's IP (the downward API's status.hostIP).
+    # Takes the place of endpoint; setting both is an error.
+    nodeCollector:
+      enabled: false
+      # 4318 for http/protobuf, 4317 for grpc (see protocol).
+      port: 4318
+    # The signals exported over OTLP when an endpoint is set. Turn logs off
+    # when a log agent already collects the pods' stdout, so each record is
+    # not delivered twice.
+    signals:
+      traces: true
+      metrics: true
+      logs: true
+  traces:
+    # OTEL_TRACES_SAMPLER; empty keeps the default, parentbased_always_on.
+    # parentbased_traceidratio with samplerArg "0.1" keeps one new trace in ten.
+    sampler: ""
+    samplerArg: ""
+  # Extra OTEL_RESOURCE_ATTRIBUTES, as key: value. Values are percent-encoded
+  # for you, so they may contain "," or spaces; keys must not contain "," or
+  # "=". Quote numbers ("1234567"), or YAML turns them into floats.
+  resourceAttributes: {}
+  logs:
+    # How records are written to stdout: json (one object per line) or pretty
+    # (indented JSON, for reading by hand).
+    format: json
 
 podAnnotations: {}
 
@@ -58,13 +126,32 @@ securityContext:
 resources:
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 512Mi
   requests:
     cpu: 10m
     memory: 128Mi
+
+# A PodDisruptionBudget allowing one voluntary disruption at a time.
+# Rendered only when replicaCount is greater than 1.
+podDisruptionBudget:
+  enabled: true
 
 nodeSelector: {}
 
 tolerations: []
 
+# When empty, replicas prefer to run on different nodes.
 affinity: {}
+
+networkPolicy:
+  # Admit ingress to the operator pods only on the metrics port, from the
+  # namespaces metricsNamespaceSelector selects, and on the webhook port from
+  # any source (the API server cannot be selected by labels). Needs a CNI that
+  # enforces NetworkPolicy.
+  enabled: false
+  # Maps merge with this default, so a selector you set is ANDed with
+  # `metrics: enabled`. To drop that label, set
+  # `metricsNamespaceSelector.matchLabels.metrics` to null.
+  metricsNamespaceSelector:
+    matchLabels:
+      metrics: enabled

@@ -5,7 +5,10 @@ on:
     branches: [main]
     paths:
       - "charts/**"
+      - "operator/config/rbac/**"
+      - "operator/config/webhook/**"
       - ".github/workflows/helm-ci.yml"
+      - ".github/scripts/chart-render-test.sh"
 
 permissions:
   contents: read
@@ -17,8 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
       - name: Lint Helm chart
-        run: helm lint charts/krakend-operator
+        run: helm lint charts/krakend-operator --kube-version 1.33.0
 
   template:
     name: Helm Template
@@ -26,5 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
       - name: Template Helm chart
-        run: helm template test charts/krakend-operator > /dev/null
+        run: helm template test charts/krakend-operator --kube-version 1.33.0 > /dev/null
+      - name: Chart render tests
+        run: bash .github/scripts/chart-render-test.sh

@@ -19,7 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
+	"time"
 
+	"go.opentelemetry.io/otel/trace"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +35,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -37,22 +44,51 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
+// PolicyChecker judges a policy on its own with krakend check. The
+// configcheck.Checker satisfies it.
+type PolicyChecker interface {
+	CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+		memo configcheck.Memo) (configcheck.Verdict, error)
+}
+
 // KrakenDBackendPolicyReconciler reconciles a KrakenDBackendPolicy object.
-// It maintains the referencedBy count and validates policy fields.
+// It maintains referencedBy and the Ready condition.
 type KrakenDBackendPolicyReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// APIReader reads uncached; the finalizer is released only after it
+	// confirms that no endpoint references the policy.
+	APIReader client.Reader
+	// Tracer records the reconcile's spans; nil records none.
+	Tracer trace.Tracer
+	// Checker judges the policy on its own; nil checks only the typed fields.
+	Checker PolicyChecker
+	// Memo remembers a policy's verdict by its content, so a reconcile of
+	// content already judged runs no krakend. Nil remembers nothing.
+	Memo configcheck.Memo
+	// CheckSlots bounds the checks this controller holds at once, out of the
+	// checker's slots. Share one channel with the other controllers that
+	// check, so together they leave admission a slot. Nil is unbounded.
+	CheckSlots chan struct{}
 }
 
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/status,verbs=update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile counts endpoint references and validates policy fields.
-func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// Reconcile counts endpoint references and sets the Ready condition.
+func (r *KrakenDBackendPolicyReconciler) Reconcile(
+	ctx context.Context, req ctrl.Request,
+) (_ ctrl.Result, retErr error) {
+	ctx, span := startReconcile(ctx, r.Tracer, "KrakenDBackendPolicy", req)
+	defer func() { tracing.End(span, retErr) }()
 	log := logf.FromContext(ctx)
 
 	var policy v1alpha1.KrakenDBackendPolicy
@@ -62,64 +98,56 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 		return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", req.NamespacedName, err)
 	}
+	spanGeneration(ctx, policy.Generation)
 
 	// Capture original status for change detection
 	origRef := policy.Status.ReferencedBy
+	origGeneration := policy.Status.ObservedGeneration
 	origConditions := policy.Status.DeepCopy().Conditions
 
 	// Count how many endpoints reference this policy using the field index
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{EndpointPolicyIndex: policy.Namespace + "/" + policy.Name},
+		client.MatchingFields{fieldindex.EndpointPolicy: policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
 
 	refCount := len(endpoints.Items)
 
+	if done, err := r.reconcileProtection(ctx, &policy, endpoints.Items); done || err != nil {
+		return ctrl.Result{}, err
+	}
+
 	policy.Status.ReferencedBy = refCount
 
-	// Validate policy fields
-	prevValid := meta.FindStatusCondition(origConditions, v1alpha1.ConditionPolicyValid)
-	if reason, msg := validatePolicy(&policy); reason != "" {
-		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionPolicyValid,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: policy.Generation,
-			Reason:             reason,
-			Message:            msg,
-		})
-		if prevValid == nil ||
-			prevValid.Status != metav1.ConditionFalse ||
-			prevValid.Reason != reason ||
-			prevValid.Message != msg {
-			r.Recorder.Event(&policy, "Warning", "PolicyInvalid", msg)
-		}
-	} else {
-		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionPolicyValid,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: policy.Generation,
-			Reason:             "Valid",
-			Message:            "Policy configuration is valid",
-		})
-	}
+	// Ready summarizes the policy's own verdict; it replaces PolicyValid.
+	prevReady := meta.FindStatusCondition(origConditions, v1alpha1.ConditionReady)
+	ready, checkErr := r.policyReady(ctx, &policy)
+	meta.SetStatusCondition(&policy.Status.Conditions, ready)
+	meta.RemoveStatusCondition(&policy.Status.Conditions, legacyConditionPolicyValid)
+	policy.Status.ObservedGeneration = policy.Generation
 
 	// Only write status if it actually changed
 	if policy.Status.ReferencedBy != origRef ||
+		policy.Status.ObservedGeneration != origGeneration ||
 		!conditionsEqual(origConditions, policy.Status.Conditions) {
-		if err := r.Status().Update(ctx, &policy); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating policy status: %w", err)
+		sctx, status := tracing.Start(ctx, r.Tracer, "policy.status")
+		updateErr := r.Status().Update(sctx, &policy)
+		tracing.End(status, updateErr)
+		if updateErr != nil {
+			return ctrl.Result{}, fmt.Errorf("updating policy status: %w", updateErr)
 		}
+		recordConditionTransition(r.Recorder, &policy, prevReady, ready)
 	}
 
 	log.V(1).Info("policy reconciled", "referencedBy", refCount)
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, checkErr
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := EnsureEndpointIndexes(mgr); err != nil {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 
@@ -130,9 +158,94 @@ func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		Watches(
 			&v1alpha1.KrakenDEndpoint{},
 			r.endpointPolicyHandler(),
+			builder.WithPredicates(policyEndpointPredicate()),
 		).
+		WithOptions(crcontroller.Options{RateLimiter: newPolicyRateLimiter()}).
 		Named("krakendbackendpolicy").
 		Complete(r)
+}
+
+// policyMaxBackoff caps the retry backoff of a policy whose check could not
+// run, as for the gateway and AutoConfig controllers, so it recovers within
+// this long of the validator coming back.
+const policyMaxBackoff = 5 * time.Minute
+
+// newPolicyRateLimiter is controller-runtime's default rate limiter with the
+// per-item backoff capped at policyMaxBackoff instead of 1000s.
+func newPolicyRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
+	return cappedRateLimiter(policyMaxBackoff)
+}
+
+// maxNamedReferrers bounds the endpoints named in the deletion-blocked event.
+const maxNamedReferrers = 5
+
+// reconcileProtection keeps the protection finalizer on a policy that is not
+// being deleted, and releases it from one that is once nothing references it.
+// done reports that the finalizer was released, so the caller has no status left
+// to write: the policy goes with it unless another finalizer still holds it.
+func (r *KrakenDBackendPolicyReconciler) reconcileProtection(
+	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy, referrers []v1alpha1.KrakenDEndpoint,
+) (done bool, err error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "policy.protection")
+	defer func() { tracing.End(span, err) }()
+	if policy.DeletionTimestamp.IsZero() {
+		if controllerutil.AddFinalizer(policy, v1alpha1.PolicyProtectionFinalizer) {
+			if err := r.Update(ctx, policy); err != nil {
+				return false, fmt.Errorf("adding policy-protection finalizer: %w", err)
+			}
+		}
+		return false, nil
+	}
+	if len(referrers) > 0 {
+		r.Recorder.Event(policy, corev1.EventTypeWarning, v1alpha1.ReasonPolicyDeletionBlocked,
+			"policy is being deleted but is still referenced by "+namedReferrers(referrers)+
+				"; deletion completes when the last reference is removed")
+		return false, nil
+	}
+	// The cache can lag a reference created a moment ago, so confirm on the
+	// API server before the policy goes.
+	referenced, err := r.referencedOnServer(ctx, policy)
+	if err != nil || referenced {
+		return false, err
+	}
+	if controllerutil.RemoveFinalizer(policy, v1alpha1.PolicyProtectionFinalizer) {
+		if err := r.Update(ctx, policy); err != nil {
+			return false, fmt.Errorf("removing policy-protection finalizer: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// namedReferrers lists up to maxNamedReferrers endpoints as "namespace/name".
+func namedReferrers(referrers []v1alpha1.KrakenDEndpoint) string {
+	names := make([]string, 0, len(referrers))
+	for i := range referrers {
+		names = append(names, referrers[i].Namespace+"/"+referrers[i].Name)
+	}
+	slices.Sort(names)
+	if len(names) <= maxNamedReferrers {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:maxNamedReferrers], ", "), len(names)-maxNamedReferrers)
+}
+
+// referencedOnServer reports whether any endpoint references policy, reading
+// uncached. The field index exists only in the cache, so it lists every
+// endpoint, which is affordable on the one reconcile that ends a deletion.
+func (r *KrakenDBackendPolicyReconciler) referencedOnServer(
+	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+) (bool, error) {
+	var endpoints v1alpha1.KrakenDEndpointList
+	if err := r.APIReader.List(ctx, &endpoints); err != nil {
+		return false, fmt.Errorf("listing endpoints uncached: %w", err)
+	}
+	key := policy.Namespace + "/" + policy.Name
+	for i := range endpoints.Items {
+		if slices.Contains(fieldindex.EndpointPolicyKeys(&endpoints.Items[i]), key) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // endpointPolicyHandler returns an EventHandler that enqueues policies
@@ -168,6 +281,58 @@ func (r *KrakenDBackendPolicyReconciler) endpointPolicyHandler() handler.EventHa
 			}
 		},
 	}
+}
+
+// legacyConditionPolicyValid is the condition Ready replaced; Reconcile
+// removes it from policies written by earlier versions.
+const legacyConditionPolicyValid = "PolicyValid"
+
+// policyReady returns the policy's Ready condition. A field out of range is
+// False with the validatePolicy reason. Otherwise the policy is rendered and
+// checked on its own: False with reason PolicyInvalid and the policy's own
+// krakend output when it fails, True when it passes. A check that cannot run
+// (no validator, a run that timed out, or the reconcile ending while it waits
+// for a slot) is Unknown with reason ValidatorUnavailable, and its error is
+// returned for a retry with backoff. Waiting for a slot only delays the check.
+func (r *KrakenDBackendPolicyReconciler) policyReady(
+	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+) (metav1.Condition, error) {
+	cond := policyReadyCondition(policy)
+	if cond.Status != metav1.ConditionTrue || r.Checker == nil {
+		return cond, nil
+	}
+	v, err := withCheckSlot(ctx, r.Tracer, r.CheckSlots, func() (configcheck.Verdict, error) {
+		return r.Checker.CheckPolicy(ctx, policy, r.Memo)
+	})
+	if err != nil {
+		// The check did not run to a verdict, which says nothing about the
+		// policy: Unknown, and the error retries it with backoff.
+		cond.Status, cond.Reason = metav1.ConditionUnknown, v1alpha1.ReasonValidatorUnavailable
+		cond.Message = truncateMessage(fmt.Sprintf("config validator unavailable, retrying: %v", err))
+		return cond, fmt.Errorf("checking policy: %w", err)
+	}
+	if !v.OK {
+		cond.Status, cond.Reason = metav1.ConditionFalse, v1alpha1.ReasonPolicyInvalid
+		cond.Message = truncateMessage("fails krakend check on its own: " + v.Excerpt(exclusionDetailLimit))
+	}
+	return cond, nil
+}
+
+// policyReadyCondition returns the policy's Ready condition from its typed
+// fields: False with the validatePolicy reason when one is out of range, True
+// otherwise.
+func policyReadyCondition(policy *v1alpha1.KrakenDBackendPolicy) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: policy.Generation,
+		Reason:             v1alpha1.ReasonReady,
+		Message:            "Policy configuration is valid",
+	}
+	if reason, msg := validatePolicy(policy); reason != "" {
+		cond.Status, cond.Reason, cond.Message = metav1.ConditionFalse, reason, msg
+	}
+	return cond
 }
 
 // validatePolicy checks policy fields for validity. Returns (reason, message)
@@ -220,4 +385,11 @@ func policyRefsFromEndpoint(obj client.Object) []reconcile.Request {
 		}
 	}
 	return requests
+}
+
+// policyEndpointPredicate gates the KrakenDEndpoint watch: referencedBy
+// depends only on endpoint specs, so status-only endpoint updates are
+// dropped. Creates and deletes always pass.
+func policyEndpointPredicate() predicate.Predicate {
+	return predicate.GenerationChangedPredicate{}
 }

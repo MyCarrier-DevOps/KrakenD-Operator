@@ -17,23 +17,46 @@ limitations under the License.
 package renderer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"strings"
+	"time"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
+
+// EditionFor is the edition a render of gw is validated as: CE for a CE
+// gateway or for an EE gateway in license fallback, otherwise EE.
+func EditionFor(gw *v1alpha1.KrakenDGateway, ceFallback bool) v1alpha1.Edition {
+	if gw.Spec.Edition == v1alpha1.EditionEE && !ceFallback {
+		return v1alpha1.EditionEE
+	}
+	return v1alpha1.EditionCE
+}
+
+// DefaultValidateTimeout bounds one krakend check run when no Timeout is
+// configured. A healthy run takes about a second.
+const DefaultValidateTimeout = 30 * time.Second
 
 // ValidatorOptions configures the KrakenD config validator.
 type ValidatorOptions struct {
 	Executor   CommandExecutor
 	BinaryPath string
+	// Timeout bounds one krakend check run. Zero means DefaultValidateTimeout.
+	Timeout time.Duration
 }
 
 // KrakenDValidator validates rendered KrakenD JSON via krakend check.
 type KrakenDValidator struct {
 	Executor   CommandExecutor
 	BinaryPath string
+	Timeout    time.Duration
 }
 
 // NewValidator creates a KrakenDValidator with the given options.
@@ -41,6 +64,7 @@ func NewValidator(opts ValidatorOptions) *KrakenDValidator {
 	return &KrakenDValidator{
 		Executor:   opts.Executor,
 		BinaryPath: opts.BinaryPath,
+		Timeout:    opts.Timeout,
 	}
 }
 
@@ -62,95 +86,156 @@ func (e *KrakenDExecutor) Execute(
 	return cmd.CombinedOutput()
 }
 
-// Validate writes jsonData to a temp file and runs krakend check -tlc.
-func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retErr error) {
+// Validate checks jsonData as the given edition would load it: the edition's
+// validation copy, the EE router rules, then krakend check -t -n.
+func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+	return v.validate(ctx, jsonData, edition, "-t", "-n")
+}
+
+// Lint is Validate without krakend's one-second router test (check -n). It
+// is the admission check; the route check (routecheck.go) covers what -t
+// would catch.
+func (v *KrakenDValidator) Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+	return v.validate(ctx, jsonData, edition, "-n")
+}
+
+// validate prepares the edition's copy of jsonData, applies the rules checked
+// in Go (the EE router rule, then the route check) and runs krakend check with
+// flags on the copy.
+func (v *KrakenDValidator) validate(
+	ctx context.Context, jsonData []byte, edition v1alpha1.Edition, flags ...string,
+) error {
+	doc, findings, err := validationCopy(ctx, jsonData, edition)
+	if err != nil {
+		return fmt.Errorf("preparing validation copy: %w", err)
+	}
+	if len(findings) > 0 {
+		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule, Stage: StageEEWildcard}
+	}
+	refusals, capped, err := routeRefusals(ctx, doc)
+	if err != nil {
+		return fmt.Errorf("checking routes: %w", err)
+	}
+	if len(refusals) > 0 {
+		return &ValidationError{
+			Output: strings.Join(refusalLines(refusals, capped), "\n"), Err: errRouteConflict, Stage: StageRoute,
+		}
+	}
+	return v.check(ctx, doc, flags...)
+}
+
+// errEEWildcardRule is the verdict for an EE wildcard endpoint that EE
+// would refuse, found before krakend check runs.
+var errEEWildcardRule = errors.New("EE wildcard rule")
+
+// check writes jsonData to a temp file and runs `krakend check <flags> -c` on
+// it. -n lints against the JSON schema built into the binary, so validation
+// never needs network access; -t also tests the router.
+//
+// It returns a *ValidationError only when krakend check ran to completion and
+// rejected the config (a non-zero exit status before the deadline): that is a
+// verdict on the config. Every other failure (binary missing, temp-file I/O,
+// deadline exceeded, process killed by a signal) comes back as a plain error:
+// the config was not judged and the caller should retry.
+func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte, flags ...string) (retErr error) {
+	ctx, cancel := context.WithTimeout(ctx, v.timeout())
+	defer cancel()
+
 	tmpFile, err := os.CreateTemp("", "krakend-config-*.json")
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return fmt.Errorf("creating temp file: %w", withoutPath(err))
 	}
 	tmpName := tmpFile.Name()
 	defer func() {
 		if err := os.Remove(tmpName); err != nil && retErr == nil {
-			retErr = fmt.Errorf("removing temp file: %w", err)
+			retErr = fmt.Errorf("removing temp file: %w", withoutPath(err))
 		}
 	}()
 
 	if _, writeErr := tmpFile.Write(jsonData); writeErr != nil {
 		if closeErr := tmpFile.Close(); closeErr != nil {
-			return fmt.Errorf("writing config to temp file: %w, close error: %w", writeErr, closeErr)
+			return fmt.Errorf("writing config to temp file: %w, close error: %w",
+				withoutPath(writeErr), withoutPath(closeErr))
 		}
-		return fmt.Errorf("writing config to temp file: %w", writeErr)
+		return fmt.Errorf("writing config to temp file: %w", withoutPath(writeErr))
 	}
 	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
+		return fmt.Errorf("closing temp file: %w", withoutPath(err))
 	}
 
-	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-l", "-c", tmpName)
+	args := append(append([]string{"check"}, flags...), "-c", tmpName)
+	output, err := v.Executor.Execute(ctx, v.BinaryPath, args...)
 	if err != nil {
-		return &ValidationError{
-			Output: string(output),
-			Err:    err,
-		}
+		return classifyCheckError(ctx, bytes.ReplaceAll(output, []byte(tmpName), []byte(checkedConfigName)), err)
 	}
 	return nil
 }
 
-// ceUnsupportedExtraConfig lists root extra_config keys that are not
-// recognised by the KrakenD CE JSON-schema linter. The operator's embedded
-// KrakenD binary is always CE, so these keys must be stripped before
-// validation to avoid false-positive lint failures.
-var ceUnsupportedExtraConfig = []string{
-	"backend/redis",
+// checkedConfigName stands in for the random temp file name in krakend's
+// output, so a verdict reads the same on every run.
+const checkedConfigName = "krakend.json"
+
+// withoutPath drops the file name from a *fs.PathError and keeps the
+// operation and the underlying error. The temp file name is random, so an
+// error that carries it reads differently on every call; callers that
+// record the message in a status would then write it on every retry. The
+// underlying error stays wrapped, so errors.Is still matches the errno.
+func withoutPath(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("%s: %w", pathErr.Op, pathErr.Err)
+	}
+	return err
 }
 
-// PrepareValidationCopy creates a copy of the rendered config suitable for
-// validation with the embedded CE krakend binary. It strips:
-//   - EE-only extra_config keys that the CE linter rejects.
-//   - Wildcard (/*) endpoints when eeWithoutFallback is true, since the CE
-//     validator does not support them.
-func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error) {
+// classifyCheckError separates a verdict from a validator that could not
+// run. A process killed because ctx ended also surfaces as an
+// *exec.ExitError (exit code -1), so the context is checked first.
+func classifyCheckError(ctx context.Context, output []byte, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("krakend check did not finish: %w: %w", ctxErr, err)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
+		return &ValidationError{Output: string(output), Err: err, Stage: StageCheck}
+	}
+	return fmt.Errorf("running krakend check: %w", err)
+}
+
+// validationCopy creates the document the embedded CE krakend binary checks
+// for a render of the given edition. The CE and EE 2.13 binaries embed the same
+// schemas, so nothing is stripped: for an EE render, each wildcard endpoint is
+// rewritten to a parameter route and every endpoint stays at its index.
+// Non-nil findings are a verdict reached without running krakend check.
+func validationCopy(
+	ctx context.Context, jsonData []byte, edition v1alpha1.Edition,
+) (doc []byte, findings []string, err error) {
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
-		return nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
+		return nil, nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
 	}
 
-	modified := false
-
-	// Strip EE-only root extra_config keys for all configs.
-	if ec, ok := config["extra_config"].(map[string]any); ok {
-		for _, key := range ceUnsupportedExtraConfig {
-			if _, exists := ec[key]; exists {
-				delete(ec, key)
-				modified = true
-			}
-		}
-		if len(ec) == 0 {
-			delete(config, "extra_config")
-			modified = true
-		}
+	endpoints, ok := config["endpoints"].([]any)
+	if !ok || edition != v1alpha1.EditionEE {
+		return jsonData, nil, nil
 	}
-
-	// Strip wildcard endpoints for EE configs validated against CE.
-	if eeWithoutFallback {
-		if endpoints, ok := config["endpoints"].([]any); ok {
-			filtered := make([]any, 0, len(endpoints))
-			for _, ep := range endpoints {
-				epMap, ok := ep.(map[string]any)
-				if !ok {
-					continue
-				}
-				if path, ok := epMap["endpoint"].(string); ok && path == "/*" {
-					continue
-				}
-				filtered = append(filtered, ep)
-			}
-			config["endpoints"] = filtered
-			modified = true
-		}
+	findings, err = eeWildcardFindings(ctx, endpoints)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	if !modified {
-		return jsonData, nil
+	if len(findings) > 0 {
+		return nil, findings, nil
 	}
-	return serializeJSON(config)
+	if !rewriteEEWildcards(endpoints) {
+		return jsonData, nil, nil
+	}
+	doc, err = serializeJSON(config)
+	return doc, nil, err
+}
+
+func (v *KrakenDValidator) timeout() time.Duration {
+	if v.Timeout > 0 {
+		return v.Timeout
+	}
+	return DefaultValidateTimeout
 }
