@@ -168,40 +168,51 @@ func TestGatewayReconcile_DeletesItsHPAWhileTheDeploymentIsRefused(t *testing.T)
 // HPA the gateway writes, and the gateway's own HPA is deleted.
 func TestGatewayReconcile_NoHPAForAForeignDeploymentWhileItIsHeld(t *testing.T) {
 	for name, tc := range map[string]struct {
-		setup func(gw *v1alpha1.KrakenDGateway)
+		setup func(gw *v1alpha1.KrakenDGateway) []client.Object
 		rend  renderer.Renderer
 		val   renderer.Validator
 	}{
 		"a plugin ConfigMap is missing": {
-			setup: func(gw *v1alpha1.KrakenDGateway) {
+			setup: func(gw *v1alpha1.KrakenDGateway) []client.Object {
 				gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
 					{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "missing", Key: "auth.so"}},
 				}}
+				return nil
 			},
 			rend: renderOf(`{"version":3}`), val: &mockValidator{},
 		},
 		"no config is applied yet": {
-			setup: func(*v1alpha1.KrakenDGateway) {},
+			setup: func(*v1alpha1.KrakenDGateway) []client.Object { return nil },
 			rend:  renderOf(`{"version":3,"name":"rejected"}`),
 			val:   &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")},
 		},
 		"no ConfigMap holds the applied config": {
-			setup: func(gw *v1alpha1.KrakenDGateway) {
+			setup: func(gw *v1alpha1.KrakenDGateway) []client.Object {
 				gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(`{"version":3,"name":"gone"}`))
+				return nil
 			},
 			rend: renderOf(`{"version":3,"name":"rejected"}`),
 			val:  &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")},
+		},
+		"the gateway does not control its ServiceAccount": {
+			setup: func(gw *v1alpha1.KrakenDGateway) []client.Object {
+				return []client.Object{otherControllersServiceAccount(&gw.ObjectMeta)}
+			},
+			rend: renderOf(`{"version":3}`), val: &mockValidator{},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			gw := reconciledGateway()
 			gw.UID = "gw-uid"
 			gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: new(int32(1)), MaxReplicas: 1}
-			tc.setup(gw)
+			objs := tc.setup(gw)
+			// The HPA an earlier pass wrote for the gateway's own Deployment.
 			hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{
 				Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw),
 			}}
-			c := fakeClientBuilder().WithObjects(gw, foreignDeployment(gw), hpa).WithStatusSubresource(gw).Build()
+			resources.BuildHPA(hpa, gw)
+			c := fakeClientBuilder().WithObjects(append(objs, gw, foreignDeployment(gw), hpa)...).
+				WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, tc.rend, tc.val)
 
 			_ = reconcileGateway(t, r, gw)
