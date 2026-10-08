@@ -106,6 +106,8 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 			cmd = exec.Command("kubectl", "delete", "--ignore-not-found", "-f", "-")
 			cmd.Stdin = strings.NewReader(manifest)
 			_, _ = utils.Run(cmd)
+		} else {
+			fmt.Fprintf(GinkgoWriter, "warning: rendering the chart for teardown: %v\n", err) //nolint:errcheck // best-effort log
 		}
 
 		By("cleaning up metrics ClusterRoleBinding")
