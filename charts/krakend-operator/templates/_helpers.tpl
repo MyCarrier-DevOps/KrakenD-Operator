@@ -112,3 +112,17 @@ when telemetry.otlp.nodeCollector.enabled. Empty when neither is set.
 {{- $otlp.endpoint -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+The self-signed Issuer both cert-manager certificates use, and whether it is
+rendered: when the webhook certificate or the metrics certificate is on.
+*/}}
+{{- define "krakend-operator.issuerName" -}}
+{{ include "krakend-operator.fullname" . }}-selfsigned-issuer
+{{- end }}
+
+{{- define "krakend-operator.issuerEnabled" -}}
+{{- if or (and .Values.webhooks.enabled .Values.webhooks.certManager.enabled) (and .Values.metrics.enabled .Values.metrics.certManager.enabled) -}}
+true
+{{- end -}}
+{{- end }}
