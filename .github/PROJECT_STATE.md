@@ -389,7 +389,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 
 ### Operational Documentation (`docs/`)
 - `runbook.md` — Health checks, Prometheus metrics, alerts, tracing, gateway lifecycle phases, troubleshooting, scaling, backup/recovery, log analysis
-- `upgrade-guide.md` — Pre-upgrade checklist, Helm/kustomize upgrade, CRD updates, rollback, version compatibility
+- `upgrade-guide.md` — Pre-upgrade checklist, Helm upgrade, CRD updates, rollback, version compatibility
 - Root `README.md` — Quick start, install instructions, development guide
 
 ## Current Focus
