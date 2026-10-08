@@ -218,7 +218,6 @@ type KrakenDEndpointStatus struct {
 
 // KrakenDEndpoint declares one or more KrakenD endpoints (path, method and
 // backends) for a gateway. The operator renders it into the gateway's krakend.json.
-// +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Endpoint"
 type KrakenDEndpoint struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
