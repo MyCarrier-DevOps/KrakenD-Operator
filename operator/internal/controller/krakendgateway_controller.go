@@ -577,13 +577,20 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	// step failed or the ServiceAccount step failed without a refusal, raises
 	// Progressing while the Deployment does not mount the applied config, even
 	// with no Deployment at all: Ready must not read True beside the new
-	// checksum. A plugin hold or a refusal is reported by a condition that
-	// outranks Progressing, and raises nothing.
-	if (obs.failed || obs.unreconciled) && want.configMapName != "" && len(want.missingPlugins) == 0 &&
-		want.mountedConfigMap != want.configMapName {
-		raiseProgressing(gw, cmp.Or(note, &rolloutNote{
-			reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
-		}))
+	// checksum. It is raised only where nothing outranking it is set: a
+	// progress deadline or a lost availability sets Available=False, which
+	// Ready reports instead, and a Progressing raised before them would emit
+	// the deadline's Warning on every retry and skip the mirror. A plugin hold
+	// or a refusal is reported by a condition that outranks Progressing, and
+	// raises nothing.
+	owed := (obs.failed || obs.unreconciled) && want.configMapName != "" && len(want.missingPlugins) == 0 &&
+		want.mountedConfigMap != want.configMapName
+	raiseOwed := func() {
+		if owed {
+			raiseProgressing(gw, cmp.Or(note, &rolloutNote{
+				reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
+			}))
+		}
 	}
 
 	// The Deployment this pass reconciled is read from what CreateOrUpdate
@@ -597,6 +604,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			if !errors.IsNotFound(err) {
 				logf.FromContext(ctx).Error(err, "failed to get deployment for status inspection")
 			}
+			raiseOwed()
 			return
 		}
 	}
@@ -608,6 +616,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	// A failed Deployment step leaves Available as it was: the cached
 	// Deployment is from before the write the step could not make.
 	if obs.failed {
+		raiseOwed()
 		return
 	}
 
@@ -662,6 +671,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 		})
 		return
 	}
+	raiseOwed()
 	if converged {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionAvailable,
