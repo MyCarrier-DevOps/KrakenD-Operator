@@ -24,8 +24,10 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -105,6 +107,30 @@ func TestReconcileInfrastructure_UnownedDeploymentIsNotTakenOver(t *testing.T) {
 	refused := notControlledIn(err)
 	if len(refused) != 1 || refused[0].kind != "deployment" {
 		t.Errorf("refused = %v, want the deployment", refused)
+	}
+}
+
+// The HPA scales the Deployment named like the gateway. While the gateway
+// refuses that Deployment, the HPA would scale somebody else's, so it is not
+// written.
+func TestGatewayReconcile_NoHPAForARefusedDeployment(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: new(int32(1)), MaxReplicas: 1}
+	victim := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Spec:       appsv1.DeploymentSpec{Replicas: new(int32(5))},
+	}
+	c := fakeClientBuilder().WithObjects(gw, victim).WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+	if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
+		t.Fatalf("err = %v, want the Deployment's refusal", err)
+	}
+
+	var hpa autoscalingv2.HorizontalPodAutoscaler
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(gw), &hpa); !apierrors.IsNotFound(err) {
+		t.Errorf("HPA get err = %v, want NotFound: it targets %+v, the refused Deployment",
+			err, hpa.Spec.ScaleTargetRef)
 	}
 }
 
