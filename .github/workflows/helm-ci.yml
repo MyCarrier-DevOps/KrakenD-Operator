@@ -6,7 +6,6 @@ on:
     paths:
       - "charts/**"
       - "operator/config/rbac/**"
-      - "operator/config/manager/**"
       - "operator/config/webhook/**"
       - ".github/workflows/helm-ci.yml"
       - ".github/scripts/chart-render-test.sh"
