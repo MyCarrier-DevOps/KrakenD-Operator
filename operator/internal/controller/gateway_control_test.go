@@ -296,10 +296,40 @@ func TestGatewayReconcile_AFailedDeploymentWriteStillWritesTheHPA(t *testing.T) 
 // else's pods on the gateway's hosts, so it is not written, and
 // IstioConfigured says why.
 func TestGatewayReconcile_NoVirtualServiceForARefusedService(t *testing.T) {
-	for name, also := range map[string]func(gw *v1alpha1.KrakenDGateway) []client.Object{
-		"the Service": func(*v1alpha1.KrakenDGateway) []client.Object { return nil },
-		"the Service, while the ServiceAccount holds the Deployment": func(gw *v1alpha1.KrakenDGateway) []client.Object {
-			return []client.Object{otherControllersServiceAccount(&gw.ObjectMeta)}
+	rejected := func() renderer.Validator {
+		return &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")}
+	}
+	for name, tc := range map[string]struct {
+		also func(gw *v1alpha1.KrakenDGateway) []client.Object
+		val  renderer.Validator
+	}{
+		"the Service": {
+			also: func(*v1alpha1.KrakenDGateway) []client.Object { return nil }, val: &mockValidator{},
+		},
+		"the Service, while the ServiceAccount holds the Deployment": {
+			also: func(gw *v1alpha1.KrakenDGateway) []client.Object {
+				return []client.Object{otherControllersServiceAccount(&gw.ObjectMeta)}
+			},
+			val: &mockValidator{},
+		},
+		"the Service, while a missing plugin ConfigMap holds the Deployment": {
+			also: func(gw *v1alpha1.KrakenDGateway) []client.Object {
+				gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+					{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "missing", Key: "auth.so"}},
+				}}
+				return nil
+			},
+			val: &mockValidator{},
+		},
+		"the Service, before any config is applied": {
+			also: func(*v1alpha1.KrakenDGateway) []client.Object { return nil }, val: rejected(),
+		},
+		"the Service, while no ConfigMap holds the applied config": {
+			also: func(gw *v1alpha1.KrakenDGateway) []client.Object {
+				gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(`{"version":3,"name":"gone"}`))
+				return nil
+			},
+			val: rejected(),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -312,9 +342,8 @@ func TestGatewayReconcile_NoVirtualServiceForARefusedService(t *testing.T) {
 				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "victim-db-admin"}},
 			}
 			c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(virtualServiceGVK)).
-				WithObjects(append(also(gw), gw, victim)...).WithStatusSubresource(gw).Build()
-			r := acceptanceReconciler(c, fakeRecorder(),
-				&renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+				WithObjects(append(tc.also(gw), gw, victim)...).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, renderOf(`{"version":3}`), tc.val)
 
 			if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) == 0 {
 				t.Fatalf("err = %v, want the Service's refusal", err)
