@@ -2219,8 +2219,7 @@ re-reads and retries.
 The metrics are OpenTelemetry instruments (`telemetry.OperatorMetrics`), exported to `/metrics` by OpenTelemetry's Prometheus exporter in controller-runtime's registry, with names, labels and help text unchanged (pinned by `TestMetricsExposition_MatchesGolden`). Gauges are observable, so a deleted object's series disappears. The reconcile-duration histogram keeps a deleted gateway's series until restart. Scrapes are authenticated and authorized: the operator creates a TokenReview
 and a SubjectAccessReview for each one, and the scraper needs `get` on the
 non-resource URL `/metrics` (the `metrics-reader` ClusterRole). The Helm chart
-and the kustomize manifests carry the same two ClusterRoles, and the chart
-render test pins the chart's copies to `config/rbac`. The chart's optional
+carries both ClusterRoles, and the render test pins their rules. The chart's optional
 `ServiceMonitor` selects the metrics Service by its
 `app.kubernetes.io/component: metrics` label, so the webhook Service, which
 shares the other selector labels, is never scraped.
