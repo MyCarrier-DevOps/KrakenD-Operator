@@ -78,6 +78,8 @@ jobs:
         run: cp operator/config/crd/bases/*.yaml charts/krakend-operator/crds/
 
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
 
       - name: Ensure gh-pages branch exists
         run: |
