@@ -811,18 +811,14 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 		output: d.output, excluded: d.excluded, judged: d.judged, served: true}, nil
 }
 
-// errStaleGateway is returned when the cached gateway is behind its stored
-// status.
-var errStaleGateway = stderrors.New("the cached gateway is behind its stored status")
-
 // confirmStoredConfig guards a pass that applies nothing against a cached
 // gateway that has not yet seen the status write recording the config the
 // Deployment already runs: re-pointing the Deployment to the config the stale
 // status names would roll the pods back. It acts only when such a pass would
 // move the Deployment, that is when the Deployment carries a config checksum
 // other than the cached one, and reads the stored checksum through APIReader
-// then. A stale cache returns errStaleGateway, so the pass changes nothing and
-// is retried. A Deployment that really differs from the stored config, for
+// then. A stale cache returns an error, so the pass changes nothing and is
+// retried. A Deployment that really differs from the stored config, for
 // example after `kubectl rollout undo`, is still re-pointed.
 func (r *KrakenDGatewayReconciler) confirmStoredConfig(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, deployed deployedChecksums, cfg configResult,
@@ -838,7 +834,7 @@ func (r *KrakenDGatewayReconciler) confirmStoredConfig(
 		return fmt.Errorf("confirming the applied config of gateway %s: %w", client.ObjectKeyFromObject(gw), err)
 	}
 	if live.Status.ConfigChecksum != gw.Status.ConfigChecksum {
-		return fmt.Errorf("%w: gateway %s", errStaleGateway, client.ObjectKeyFromObject(gw))
+		return fmt.Errorf("the cached gateway is behind its stored status: gateway %s", client.ObjectKeyFromObject(gw))
 	}
 	return nil
 }
