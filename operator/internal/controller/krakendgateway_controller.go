@@ -1420,10 +1420,13 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 //     carries the replica count before the HPA stops managing it;
 //   - the post-restart Job, which runs against the Deployment's pods.
 //
-// Two children name a sibling, so they follow its refusal: the HPA scales the
+// Two children name a sibling, so they follow its control: the HPA scales the
 // Deployment named like the gateway and the VirtualService routes to the
-// Service named like it. While the pass refuses that sibling, neither is
-// written, and the one the gateway controls is deleted.
+// Service named like it. While that sibling is one the gateway may not take
+// over, neither is written, and the one the gateway controls is deleted, on
+// every path: the Service step runs on every pass, and on a hold, where the
+// Deployment step does not run, the pass's read of the Deployment decides
+// (infraInputs.deploymentForeign).
 //
 // The Deployment and the post-restart Job run as the ServiceAccount named like
 // the gateway, so while the gateway does not control it both are held as they
