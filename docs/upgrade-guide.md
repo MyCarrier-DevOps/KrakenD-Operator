@@ -1007,10 +1007,13 @@ What changes for you:
   `Ready=True`/`Running` followed by `Error`.
 - A rollout stays reported when a status write fails or the cache is behind,
   and a pass whose Deployment update fails (a stale-cache Conflict, say)
-  leaves `Progressing` and `Available` as they were. The one gap is the few
-  milliseconds between a template write and the Deployment controller
-  observing it: a later pass inside that window can read the Deployment as
-  converged until the watch fires on the observation.
+  leaves `Available` as it was, and `Progressing` too unless the Deployment
+  does not mount the applied config yet: then `Progressing` is `True`, so
+  `Ready` is not `True` beside the new checksum. A refused Deployment raises
+  no `Progressing`. The one gap is the few milliseconds between a template
+  write and the Deployment controller observing it: a later pass inside that
+  window can read the Deployment as converged until the watch fires on the
+  observation.
 - The reason is `ConfigDeployed` or `DeploymentUpdated`, whichever the change
   gave; a rollout already reported keeps its reason, and otherwise it is
   `DeploymentUpdated`.
