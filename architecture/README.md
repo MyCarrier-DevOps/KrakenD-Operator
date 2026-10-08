@@ -2871,12 +2871,10 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   ├── certmanager/                        # Webhook serving certificate
 │   │   ├── default/                            # Default kustomization and its patches
 │   │   ├── manager/                            # Operator Deployment manifests
-│   │   ├── manifests/                          # OLM bundle base (ClusterServiceVersion)
 │   │   ├── network-policy/                     # Metrics traffic policy
 │   │   ├── prometheus/                         # ServiceMonitor
 │   │   ├── rbac/                               # RBAC manifests
 │   │   ├── samples/                            # Example CR YAML files
-│   │   ├── scorecard/                          # Operator scorecard config
 │   │   └── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
 │   ├── hack/
 │   │   ├── audit-admission-rules.sh            # Read-only pre-upgrade audit of stored objects against the admission rules
@@ -2891,7 +2889,6 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   ├── go.mod
 │   ├── go.sum
 │   ├── Makefile
-│   ├── Dockerfile
-│   └── PROJECT                                 # operator-sdk project metadata
+│   └── Dockerfile
 └── .github/                                # CI, linting, and AI development instructions
 ```
