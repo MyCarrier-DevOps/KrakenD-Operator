@@ -368,11 +368,15 @@ func (r *KrakenDGatewayReconciler) reconcileExternalSecret(ctx context.Context, 
 // Istio is enabled and its CRD is installed, and removes the one gw controls
 // when it is not. The VirtualService routes to the Service named like the
 // gateway, so while the pass refused that Service (serviceRefused) it is not
-// written either. IstioConfigured says which.
+// written either, and the one gw controls is removed. IstioConfigured says
+// which.
 func (r *KrakenDGatewayReconciler) reconcileVirtualService(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, serviceRefused bool,
 ) error {
 	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled && serviceRefused {
+		if err := r.deleteOptionalIfControlled(ctx, gw, virtualServiceGVK, gw.Name); err != nil {
+			return err
+		}
 		r.setConditionWithEvent(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionIstioConfigured,
 			Status:             metav1.ConditionFalse,
