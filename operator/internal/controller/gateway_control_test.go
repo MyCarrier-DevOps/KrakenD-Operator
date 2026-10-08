@@ -224,6 +224,28 @@ func TestGatewayReconcile_NoVirtualServiceForARefusedService(t *testing.T) {
 	}
 }
 
+// A VirtualService the gateway wrote before its Service was refused would keep
+// routing to somebody else's pods, so it is deleted.
+func TestGatewayReconcile_DeletesItsVirtualServiceWhileTheServiceIsRefused(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Spec.Istio = &v1alpha1.IstioSpec{Enabled: true, Hosts: []string{"public.example.com"}}
+	vs := controlledChild(gw, virtualServiceGVK, gw.Name)
+	victim := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(virtualServiceGVK)).
+		WithObjects(gw, victim, vs).WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+	if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
+		t.Fatalf("err = %v, want the Service's refusal", err)
+	}
+
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(vs), vs); !apierrors.IsNotFound(err) {
+		t.Errorf("VirtualService get err = %v, want NotFound: the gateway's VirtualService must not route to "+
+			"the refused Service", err)
+	}
+}
+
 // What the gateway controls, or an object orphaned from it that still carries
 // its selector labels, is written as always; an object of an optional kind
 // that nothing controls and that lacks the labels is not, and the caller can
