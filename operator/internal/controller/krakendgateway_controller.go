@@ -580,8 +580,8 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 // lowered once the Deployment has converged, so a rollout stays reported
 // across a failed status write and a lagging cache. A pass that did not
 // reconcile the Deployment (held, or the step failed) starts no rollout, so
-// it does not raise Progressing, except that a failed Deployment step, or a
-// ServiceAccount step that failed without a refusal, raises it while the
+// it does not raise Progressing, except that a Deployment step or a
+// ServiceAccount step that failed without a refusal raises it while the
 // Deployment does not mount the applied config, unless the cached
 // Deployment's lost availability or missed progress deadline is reported in
 // its place; it reads the cached Deployment for the rest.
@@ -600,10 +600,11 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	// progress deadline or a lost availability sets Available=False, which
 	// Ready reports instead, and a Progressing raised before them would emit
 	// the deadline's Warning on every retry and skip the mirror. A plugin hold
-	// or a refusal is reported by a condition that outranks Progressing, and
-	// raises nothing.
-	owed := (obs.failed || obs.unreconciled) && want.configMapName != "" && len(want.missingPlugins) == 0 &&
-		want.mountedConfigMap != want.configMapName
+	// or a refusal, of the ServiceAccount or of the Deployment, is reported by a
+	// condition that outranks Progressing, and raises nothing: nothing rolls a
+	// Deployment the gateway refuses.
+	owed := (obs.failed && !obs.refused || obs.unreconciled) && want.configMapName != "" &&
+		len(want.missingPlugins) == 0 && want.mountedConfigMap != want.configMapName
 	raiseOwed := func() {
 		if owed {
 			raiseProgressing(gw, cmp.Or(note, &rolloutNote{
@@ -946,7 +947,10 @@ func markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string, edition v1a
 // write that follows raises Progressing with reason DeploymentUpdated. After a
 // failure that is not a refusal, a config applied meanwhile already reads
 // ConfigDeployed, unless the Deployment's lost availability or missed progress
-// deadline was reported instead; its end then reads DeploymentUpdated too.
+// deadline was reported instead; its end then reads DeploymentUpdated too. A
+// refused Deployment shows only when its write is attempted, after this note:
+// a config applied beside it still emits the ConfigDeployed event, but raises
+// no Progressing.
 func (r *KrakenDGatewayReconciler) noteRollout(
 	gw *v1alpha1.KrakenDGateway, in infraInputs, deployed deployedChecksums, configChanged, saControlled bool,
 ) *rolloutNote {
