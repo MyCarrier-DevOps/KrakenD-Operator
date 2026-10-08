@@ -177,8 +177,8 @@ func run() int {
 	// when given a certificate directory, and those run on every replica, so
 	// a renewed certificate reaches standbys too. With --metrics-cert-path
 	// unset, controller-runtime generates a self-signed metrics certificate,
-	// which suits development; for production use cert-manager (see
-	// config/default/kustomization.yaml and config/prometheus/kustomization.yaml).
+	// which suits development; for production have cert-manager issue it
+	// (metrics.certManager.enabled in the Helm chart).
 	if webhookCertWatchNeeded(enableWebhooks, webhookCertPath) {
 		setupLog.Info("Serving webhooks with the provided certificates",
 			"webhook-cert-path", webhookCertPath,
