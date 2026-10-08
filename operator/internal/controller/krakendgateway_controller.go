@@ -22,6 +22,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -468,7 +469,8 @@ func (r *KrakenDGatewayReconciler) gatherPluginConfigMaps(
 }
 
 // detectDragonflyState checks if a Dragonfly CR exists and reports its readiness.
-// It returns nil if Dragonfly is not enabled, and sets the DragonflyReady
+// It returns nil if Dragonfly is not enabled, or when the existing Dragonfly is
+// one the gateway refuses (refuseUncontrolled), and sets the DragonflyReady
 // condition and metric on the gateway.
 func (r *KrakenDGatewayReconciler) detectDragonflyState(
 	ctx context.Context,
@@ -518,6 +520,22 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 		log.Error(err, "failed to get Dragonfly CR", "name", dfName)
 		r.metrics().SetDragonflyReady(client.ObjectKeyFromObject(gw), false)
 		return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
+	}
+
+	// A Dragonfly the gateway refuses is somebody else's: its readiness and
+	// its Service are not the gateway's, so nothing is rendered for it.
+	if err := refuseUncontrolled(gw, df, strings.ToLower(dragonflyGVK.Kind),
+		resources.DragonflyConsentLabels(gw)); err != nil {
+		r.setConditionWithEvent(gw, metav1.Condition{
+			Type:               v1alpha1.ConditionDragonflyReady,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonResourceNotControlled,
+			Message:            err.Error(),
+		})
+		r.metrics().SetDragonflyReady(client.ObjectKeyFromObject(gw), false)
+		gw.Status.DragonflyAddress = ""
+		return nil
 	}
 
 	// Check Dragonfly status phase — absent field defaults to empty string
