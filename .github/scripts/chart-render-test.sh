@@ -85,8 +85,9 @@ webhook_operations() {
 			f && /- (CREATE|UPDATE|DELETE|CONNECT)$/ { printf "%s ", $2 }'
 }
 
-# manifest_operations WEBHOOK FILE: the same, for a kustomize manifest in
-# which each webhook item starts with "- admissionReviewVersions:".
+# manifest_operations WEBHOOK FILE: the same, for the generated manifest
+# (operator/config/webhook/manifests.yaml), in which each webhook item starts
+# with "- admissionReviewVersions:".
 manifest_operations() {
 	awk -v w="name: $1" '
 		/^- admissionReviewVersions:/ { f = 0 }
@@ -139,13 +140,13 @@ expect_equal "a wrapped base64 caBundle is rendered unwrapped" "$want" \
 # --- no webhook is registered for an operation it does not validate -------
 expect_equal "the chart's gateway webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(webhook_operations vkrakendgateway.kb.io)"
-expect_equal "the kustomize gateway webhook is not registered for DELETE" \
+expect_equal "the generated gateway webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(manifest_operations vkrakendgateway.kb.io operator/config/webhook/manifests.yaml)"
 
 # --- deleting a policy never waits on the webhook (a finalizer protects it) ---
 expect_equal "the chart's policy webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(webhook_operations vkrakendbackendpolicy.kb.io)"
-expect_equal "the kustomize policy webhook is not registered for DELETE" \
+expect_equal "the generated policy webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(manifest_operations vkrakendbackendpolicy.kb.io operator/config/webhook/manifests.yaml)"
 
 # --- three concurrent krakend validations fit in the operator's limit ------
@@ -162,7 +163,7 @@ chart_webhooks=$(render --show-only templates/validating-webhook-configuration.y
 expect_equal "every chart webhook has timeoutSeconds 15" \
 	"$(grep -c -- '- name: v' <<<"$chart_webhooks")" \
 	"$(grep -c 'timeoutSeconds: 15' <<<"$chart_webhooks")"
-expect_equal "every kustomize webhook has timeoutSeconds 15" \
+expect_equal "every generated webhook has timeoutSeconds 15" \
 	"$(grep -c '^  name: v.*kb.io' operator/config/webhook/manifests.yaml)" \
 	"$(grep -c 'timeoutSeconds: 15' operator/config/webhook/manifests.yaml)"
 
@@ -195,16 +196,10 @@ expect_equal "the chart sets POD_SERVICE_ACCOUNT from spec.serviceAccountName" "
 	"$(env_field POD_SERVICE_ACCOUNT <<<"$chart_deployment")"
 expect_equal "the chart sets POD_NAMESPACE from metadata.namespace" "metadata.namespace" \
 	"$(env_field POD_NAMESPACE <<<"$chart_deployment")"
-expect_equal "kustomize sets POD_SERVICE_ACCOUNT from spec.serviceAccountName" "spec.serviceAccountName" \
-	"$(env_field POD_SERVICE_ACCOUNT <operator/config/manager/manager.yaml)"
-expect_equal "kustomize sets POD_NAMESPACE from metadata.namespace" "metadata.namespace" \
-	"$(env_field POD_NAMESPACE <operator/config/manager/manager.yaml)"
 
 # --- telemetry -----------------------------------------------------------
 expect_equal "the chart sets POD_NAME from metadata.name" "metadata.name" \
 	"$(env_field POD_NAME <<<"$chart_deployment")"
-expect_equal "kustomize sets POD_NAME from metadata.name" "metadata.name" \
-	"$(env_field POD_NAME <operator/config/manager/manager.yaml)"
 expect_absent "nothing is exported over OTLP by default" "OTEL_" --show-only templates/deployment.yaml
 expect_absent "the default stdout format passes no flag (older images keep working)" "--log-format" \
 	--show-only templates/deployment.yaml
@@ -279,8 +274,22 @@ expect_equal "the chart's manager ClusterRole matches config/rbac/role.yaml" \
 	"$(manifest ClusterRole t-krakend-operator-manager-role | rules_block)"
 expect_equal "the leader-election Role grants nothing on configmaps" "0" \
 	"$(manifest Role t-krakend-operator-leader-election-role | grep -c -- '- configmaps' || true)"
-expect_equal "the chart's leader-election Role matches config/rbac" \
-	"$(rules_block <operator/config/rbac/leader_election_role.yaml)" \
+leader_election_rules='- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - create
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch'
+expect_equal "the chart's leader-election Role grants leases and events only" "$leader_election_rules" \
 	"$(manifest Role t-krakend-operator-leader-election-role | rules_block)"
 
 # --- admin, editor and viewer ClusterRoles for each kind --------------------
@@ -325,12 +334,25 @@ expect_equal "the metrics auth ClusterRole is bound to the operator ServiceAccou
 expect_contains "a metrics-reader ClusterRole allows GET /metrics" "- /metrics" \
 	--show-only templates/metrics-rbac.yaml
 expect_absent "metrics.enabled=false renders no metrics RBAC" "tokenreviews" --set metrics.enabled=false
-expect_equal "the chart's metrics auth ClusterRole matches config/rbac" \
-	"$(rules_block <operator/config/rbac/metrics_auth_role.yaml)" \
-	"$(manifest ClusterRole t-krakend-operator-metrics-auth-role | rules_block)"
-# The kustomize copy quotes the path; the chart does not.
-expect_equal "the chart's metrics-reader ClusterRole matches config/rbac" \
-	"$(rules_block <operator/config/rbac/metrics_reader_role.yaml | tr -d '"')" \
+metrics_auth_rules='- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create'
+expect_equal "the chart's metrics auth ClusterRole creates TokenReviews and SubjectAccessReviews" \
+	"$metrics_auth_rules" "$(manifest ClusterRole t-krakend-operator-metrics-auth-role | rules_block)"
+metrics_reader_rules='- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get'
+expect_equal "the chart's metrics-reader ClusterRole allows GET /metrics only" "$metrics_reader_rules" \
 	"$(manifest ClusterRole t-krakend-operator-metrics-reader | rules_block)"
 expect_contains "the ServiceMonitor selects only the metrics Service" "app.kubernetes.io/component: metrics" \
 	--set metrics.serviceMonitor.enabled=true --show-only templates/servicemonitor.yaml
@@ -353,6 +375,8 @@ expect_absent "the webhook Service carries no metrics component label" "app.kube
 	--show-only templates/webhook-service.yaml
 
 # --- availability ---------------------------------------------------------
+expect_contains "the operator pod's grace period is the 10 s cmd/run_shape_test.go budgets for" \
+	"terminationGracePeriodSeconds: 10" --show-only templates/deployment.yaml
 expect_contains "two replicas by default" "replicas: 2" --show-only templates/deployment.yaml
 expect_contains "a PodDisruptionBudget allows one disruption" "maxUnavailable: 1" \
 	--show-only templates/pdb.yaml
