@@ -180,6 +180,18 @@ func TestGatewayReconcile_NoHPAForAForeignDeploymentWhileItIsHeld(t *testing.T) 
 			},
 			rend: renderOf(`{"version":3}`), val: &mockValidator{},
 		},
+		"no config is applied yet": {
+			setup: func(*v1alpha1.KrakenDGateway) {},
+			rend:  renderOf(`{"version":3,"name":"rejected"}`),
+			val:   &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")},
+		},
+		"no ConfigMap holds the applied config": {
+			setup: func(gw *v1alpha1.KrakenDGateway) {
+				gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(`{"version":3,"name":"gone"}`))
+			},
+			rend: renderOf(`{"version":3,"name":"rejected"}`),
+			val:  &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			gw := reconciledGateway()
