@@ -52,6 +52,10 @@ type scriptedChecker struct {
 	conflictCalls [][]v1alpha1.KrakenDEndpoint
 	// endpointVerdicts answer CheckEndpoint in order (OK once they run out).
 	endpointVerdicts []configcheck.EndpointVerdict
+	// byEndpoint answers CheckEndpoint by the endpoint's name, with the unit
+	// or the stored one alike, before endpointVerdicts is read. An endpoint
+	// that is not in it falls through to endpointVerdicts.
+	byEndpoint map[string]configcheck.EndpointVerdict
 	// memos records, for each root, policy, group and endpoint check, whether it was handed
 	// a memo.
 	memos []bool
@@ -143,6 +147,9 @@ func (s *scriptedChecker) CheckEndpoint(
 	s.overrides = append(s.overrides, override)
 	if err != nil {
 		return configcheck.EndpointVerdict{}, err
+	}
+	if v, ok := s.byEndpoint[u.Endpoint.Name]; ok {
+		return v, nil
 	}
 	if len(s.endpointVerdicts) == 0 {
 		return configcheck.EndpointVerdict{OK: true}, nil
