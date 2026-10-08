@@ -893,14 +893,14 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   check on it with `Ready`.
 - A policy that fails `krakend check` on its own now reads `Ready=False`,
   reason `PolicyInvalid`, with the policy's own output in the message, and a
-  Warning event when it turns invalid. After the upgrade, policies that were already failing alone change to
-  `False` on the first reconcile (each policy is checked once per operator
-  start); list them with `kubectl get krakendbackendpolicy -A` and its
+  Warning event when it turns invalid. After the upgrade, policies that were
+  already failing alone change to `False` on the first reconcile (each policy
+  is checked once per operator start); list them with `kubectl get krakendbackendpolicy -A` and its
   `Ready` column.
 - When `krakend check` cannot run for a policy (no binary, a run that timed
   out, or the operator stopping while it waits for a check slot, which only
-  delays the check otherwise), `Ready` is `Unknown` with reason `ValidatorUnavailable` and the
-  reconcile retries with backoff. It is never reported as the policy's
+  delays the check otherwise), `Ready` is `Unknown` with reason
+  `ValidatorUnavailable` and the reconcile retries with backoff. It is never reported as the policy's
   failure.
 - New `status.observedGeneration`.
 - The Warning event for a policy with a field out of range now uses the
@@ -1684,15 +1684,15 @@ The checks run in the operator pod, three at a time for the whole pod, sharing t
 slots with the gateway controller, the AutoConfig controller and the policy
 controller (the gateway controller holds at most one, and the AutoConfig and
 policy controllers one between them, so together they never hold more than 2 of
-the 3 slots), and each webhook call stops
-its work after 12 s. A request that cannot get a slot in time, or whose check cannot run, is
-answered `500 Internal Error`: a transient error that `kubectl` does not retry,
+the 3 slots), and each webhook call stops its work after 12 s. A request that
+cannot get a slot in time, or whose check cannot run, is answered `500 Internal Error`: a transient error that `kubectl` does not retry,
 so run the command again (controllers and GitOps tools retry on their own).
 A policy write runs 1 check, plus 2 for each gateway that uses it (that
 gateway's root, then the endpoints that use it together), plus one per endpoint
-it then judges on its own (every such endpoint when they fail together,
+it then judges on its own (every such endpoint when the group fails,
 otherwise those that lost an entry in that check), plus one more for each of
-those that fails.
+those that fails, plus the stored group when the group fails and the policy
+checks listed under the cost per request below.
 With the webhooks disabled the controller's checks are the only protection: an
 endpoint that fails on its own is excluded, and a root that fails keeps the
 gateway at its last applied config.
@@ -2285,7 +2285,8 @@ endpoints are serving.
   Configure this with `--autoconfig-max-concurrent-reconciles`, or chart
   value `autoconfig.maxConcurrentReconciles`. The AutoConfig checks and the
   policy controller's checks hold at most 1 of the pod's 3 config-check slots
-  between them, and the gateway controller at most 1, so the controllers never hold more than 2 of the 3 slots.
+  between them, and the gateway controller at most 1, so the controllers never
+  hold more than 2 of the 3 slots.
   Concurrent admission requests can take the rest. Fetching a spec and resolving
   its external `$ref`s is bounded by 2 minutes overall, and each request by
   30 seconds. A stuck upstream fails with `SpecFetchFailed` (`context
@@ -2972,19 +2973,23 @@ their paths differ in shape no longer fail the gateway's check. Examples:
   kept. Once an endpoint the change breaks has been found, the answer is that
   denial, even if a later check fails or the budget runs out.
 - When the group of the endpoints with the write fails, the stored group is
-  checked first, along with the endpoints it lost an entry in. If it passes
-  and none of those fails both ways, the write is refused with `422` even when
-  the budget runs out before the scan has named an endpoint it breaks; the
-  scan only decides how many endpoints are named, not the verdict. The
-  endpoints judged first are those the stored render masked and those that use
-  a policy failing `krakend check` on its own. Nothing is decided in advance
-  when the stored group fails too (an endpoint already fails but is not yet
-  recorded as excluded), when one of those endpoints fails both ways, or, for
-  a gateway update, when the stored root fails on its own. Then the budget
-  running out, or a check that cannot run, before any broken endpoint is found
-  is a `500 Internal Error`; retry the request. On a large gateway with many
-  such endpoints, a policy or gateway write can get that `500` until the
-  gateway controller records their exclusion.
+  checked first. If it passes, the endpoints judged first are those the
+  stored render masked and those that use a policy failing `krakend check` on
+  its own. If none of them fails both ways, the write is refused with `422`
+  even when the budget runs out before the scan has named an endpoint it
+  breaks; the scan only decides how many endpoints are named, not the
+  verdict. Nothing is decided in advance when the stored group fails too (an
+  endpoint already fails but is not yet recorded as excluded), when one of
+  those endpoints fails both ways, or, for a gateway update, when the stored
+  root fails on its own. A decision that cannot finish within the budget
+  stays undecided too: many endpoints that lost an entry (judged first), a
+  policy write whose stored policy fails on its own (every endpoint that uses
+  it is judged first), or many distinct policies not yet checked since a
+  restart. In those cases, as when a check cannot run, the budget running out
+  before any broken endpoint is found is a `500 Internal Error`. Retrying
+  helps only with a cold memo or endpoints that are about to be recorded as
+  excluded; otherwise resolve the clashes in `status.conflicts` or fix the
+  policy.
 - A policy or gateway write that is admitted with a warning can still lead to
   `CombinedConfigInvalid`. Both check the endpoints that already fail on their
   own before they check the endpoints together. So while an endpoint that
@@ -2999,19 +3004,23 @@ their paths differ in shape no longer fail the gateway's check. Examples:
     judged on its own (every endpoint that uses the policy there when the group
     fails, otherwise those that lost an entry) and 1 more for each of those
     that fails, plus 1 for the stored group (on a create, with the policy empty)
-    when the group fails, and then 1 per distinct policy those endpoints use;
+    when the group fails, and, when that passes, 1 per distinct policy those
+    endpoints use;
   - a gateway write: 2, plus 1 for the stored root when the root fails or
     when endpoints are judged on their own, plus the endpoint checks as for a
     policy write, plus 1 for the stored group when the group fails and the
-    stored root passes, and then 1 per distinct policy the endpoints use.
+    stored root passes, and, when that passes, 1 per distinct policy the
+    endpoints use.
   - On the pinned binary, at the chart's 500m CPU limit, one endpoint's check
     takes about 0.1-0.13 s and 500 endpoints are linted together in about
     0.17 s. A write whose group passes stays far inside the 15 s webhook
     timeout. When the group fails, the decision costs four such lints (about
-    0.5 s at 500 endpoints; a group lint grows with the endpoints), plus two
-    endpoint checks for each endpoint the stored render masked and one check
-    for each distinct policy they use, but naming the endpoints costs about 0.1 s per served endpoint,
-    one after another, so the 12 s admission budget names roughly 80-110 of
+    0.5 s at 500 endpoints; a group lint grows with the endpoints), plus one
+    check for each distinct policy the endpoints use, plus up to two endpoint
+    checks for each endpoint judged first (those the stored render masked and
+    those that use a policy failing on its own: every endpoint that uses the
+    policy when a policy write's stored policy fails on its own). Naming the
+    endpoints costs about 0.1 s per served endpoint, one after another, so the 12 s admission budget names roughly 80-110 of
     them: on a gateway of several hundred served endpoints the denial names
     those the scan reached and counts the rest. Waiting for a validation slot
     can delay a request too.
