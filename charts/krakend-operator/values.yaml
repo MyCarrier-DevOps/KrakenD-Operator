@@ -149,6 +149,9 @@ networkPolicy:
   # any source (the API server cannot be selected by labels). Needs a CNI that
   # enforces NetworkPolicy.
   enabled: false
+  # Maps merge with this default, so a selector you set is ANDed with
+  # `metrics: enabled`. To drop that label, set
+  # `metricsNamespaceSelector.matchLabels.metrics` to null.
   metricsNamespaceSelector:
     matchLabels:
       metrics: enabled
