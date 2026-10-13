@@ -142,7 +142,9 @@ const defaultFetchTimeout = 2 * time.Minute
 // the config check could not clear within its rounds is held too, no stale
 // endpoint is deleted, and Synced is False with reason OperationsFailed
 // without an error, since retrying a deterministic failure with backoff gains
-// nothing. When the
+// nothing. A spec that yields no operation at all, not even a failed or
+// skipped one, fails the sync with reason NoOperations and keeps the endpoints
+// as they are. When the
 // config check cannot run, nothing is written or deleted and Synced is False
 // with reason ValidatorUnavailable, retried with backoff. A successful
 // reconcile that finds nothing to change writes nothing and runs no check.
@@ -231,6 +233,17 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	tracing.EndFailed(evaluate, err, "the CUE evaluation failed")
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, err, warnings)
+	}
+
+	// A spec with no operation at all, not even a failed or skipped one, is
+	// almost always a broken upstream (an empty or skeleton 200 response), and
+	// converging on it would delete every generated endpoint while reporting
+	// Synced. It is checked before the overrides so that an empty spec with
+	// overrides reports its true cause.
+	if len(cueOutput.Entries) == 0 && len(cueOutput.Failed) == 0 && len(cueOutput.Skipped) == 0 {
+		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonNoOperations, stderrors.New(
+			"the OpenAPI spec has no operations; the endpoints this AutoConfig generated are kept "+
+				"(delete the AutoConfig to remove them)"), warnings)
 	}
 
 	if reason, overrideErr := overrideFailure(cueOutput); overrideErr != nil {
