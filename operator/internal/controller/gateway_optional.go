@@ -212,10 +212,11 @@ type judgedError struct{ err error }
 func (e *judgedError) Error() string { return e.err.Error() }
 func (e *judgedError) Unwrap() error { return e.err }
 
-// judged marks err as one that cannot hide a refusal. nil stays nil.
+// judged marks err as one that cannot hide a refusal. nil stays nil, and so
+// does an error that carries a refusal: a mark never covers one.
 func judged(err error) error {
-	if err == nil {
-		return nil
+	if err == nil || len(notControlledIn(err)) > 0 {
+		return err
 	}
 	return &judgedError{err: err}
 }
