@@ -817,10 +817,11 @@ instead, for example:
 kubectl wait --for=condition=Ready krakendendpoint/<name> -n <ns> --timeout=2m
 ```
 
-### CRDs: apply them before upgrading the operator
+### CRDs: the chart applies them with the operator
 
-Helm does not upgrade CRDs (see *CRD Upgrades* above), and this release
-changes all four:
+The chart applies the new CRDs with the operator (see *CRD Upgrades* above).
+Run the admission audit first, before `helm upgrade`. This release changes all
+four CRDs:
 
 - `status.conditions` is a map keyed by `type` (`x-kubernetes-list-type: map`),
   so the API server rejects a status write that introduces two conditions of
@@ -1825,11 +1826,10 @@ unrelated changes. The exceptions are listed in the Pre-Upgrade Checklist:
 rules on a whole `spec`, evaluation errors, atomic lists, and the
 KrakenDAutoConfig name rule. Run the audit in the Pre-Upgrade Checklist to find
 such objects. These rules left the webhook for the CRDs (duplicate entries,
-policy minimums, and the license, OpenAPI port, PVC and script rules), and Helm
-does not upgrade CRDs, so with the old CRDs still installed nothing enforces
-them: run the audit, then apply the new CRDs as described in [CRDs: apply them
-before upgrading the operator](#crds-apply-them-before-upgrading-the-operator),
-then upgrade the operator. The chart refuses clusters below
+policy minimums, and the license, OpenAPI port, PVC and script rules). The
+chart applies the new CRDs with the operator (see [CRDs: the chart applies them
+with the operator](#crds-the-chart-applies-them-with-the-operator)), so run the
+audit first, then upgrade the operator. The chart refuses clusters below
 1.33 (`kubeVersion`). With
 Helm, use 3.18 or later: older releases default `helm template` and `helm lint`
 to Kubernetes capabilities below 1.33 and refuse the chart unless given
@@ -1869,7 +1869,7 @@ contains such a character. Stored objects ratchet like every other field rule:
 an entry the update leaves unchanged keeps validating, and an edit to the
 backends of an entry re-checks every host of that entry. The audit in
 step 5 of the Pre-Upgrade Checklist lists existing objects that hold one, so
-fix them before the CRDs are applied.
+fix them before the upgrade applies the CRDs.
 
 **KrakenDGateway schema.** `config.timeout`, `cacheTTL`, `dnsCacheTTL`,
 `cors.maxAge` and `redis.connectionPool.dialTimeout` must be KrakenD durations
@@ -2555,8 +2555,8 @@ condition, and its `Ready` now also requires `EndpointsReady`, so health
 checks keyed on `Ready` can read `False` for a conflicted or detached
 endpoint. `SpecWarning` events appear, and the evaluator-warning events stop.
 
-The CRDs gain the new optional status fields; apply them before the operator,
-as for any CRD change (see *CRD Upgrades*).
+The CRDs gain the new optional status fields; the chart applies them with the
+operator (see *CRD Upgrades*).
 
 ---
 
