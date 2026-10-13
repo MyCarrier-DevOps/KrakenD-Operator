@@ -411,12 +411,26 @@ func TestGatewayAdmission_LicenseSecretRefReviewIsOfTheRequesterToGetThatSecret(
 // A Secret reference the requester did not touch is not reviewed again: a user
 // who may edit the gateway but not read its Secrets can still tune it.
 func TestGatewayAdmission_UnchangedSecretReferencesAreNotReviewedAgain(t *testing.T) {
+	edit := func(mutate func(*v1alpha1.KrakenDGateway)) struct{ old, edited *v1alpha1.KrakenDGateway } {
+		edited := eeGatewayWithLicenseSecret("team-license")
+		mutate(edited)
+		return struct{ old, edited *v1alpha1.KrakenDGateway }{eeGatewayWithLicenseSecret("team-license"), edited}
+	}
 	cases := map[string]struct{ old, edited *v1alpha1.KrakenDGateway }{
-		"license secretRef, replicas changed": {
+		"license secretRef, replicas changed": edit(func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Replicas = ptr.To[int32](3)
+		}),
+		"license secretRef, images changed": edit(func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Image, gw.Spec.CEImage = "registry.example/krakend-ee:2.13.1", "registry.example/krakend:2.13.1"
+		}),
+		"license secretRef, fallback and expiry settings changed": edit(func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.License.FallbackToCE, gw.Spec.License.ExpiryWarningDays = true, 14
+		}),
+		"license removed": {
 			old: eeGatewayWithLicenseSecret("team-license"),
 			edited: func() *v1alpha1.KrakenDGateway {
 				gw := eeGatewayWithLicenseSecret("team-license")
-				gw.Spec.Replicas = ptr.To[int32](3)
+				gw.Spec.License = nil
 				return gw
 			}(),
 		},
@@ -430,6 +444,37 @@ func TestGatewayAdmission_UnchangedSecretReferencesAreNotReviewedAgain(t *testin
 
 			if !resp.Allowed || len(reviews) != 0 {
 				t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
+			}
+		})
+	}
+}
+
+// An update that adds or changes a Secret reference is reviewed like a create:
+// the requester must be able to read what the reference now names.
+func TestGatewayAdmission_UpdateThatChangesASecretReferenceIsReviewed(t *testing.T) {
+	keyChanged := eeGatewayWithLicenseSecret("team-license")
+	keyChanged.Spec.License.SecretRef.Key = "license.jwt"
+	noLicense := testGateway()
+	noLicense.Spec.Edition = v1alpha1.EditionEE
+	cases := map[string]*v1alpha1.KrakenDGateway{
+		"no license before": noLicense,
+		"another Secret":    eeGatewayWithLicenseSecret("other-license"),
+		"another key":       keyChanged,
+		"an empty license": func() *v1alpha1.KrakenDGateway {
+			gw := noLicense.DeepCopy()
+			gw.Spec.License = &v1alpha1.LicenseConfig{}
+			return gw
+		}(),
+	}
+	for name, old := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+			resp := review(t, v, "alice", eeGatewayWithLicenseSecret("team-license"), old)
+
+			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity || len(reviews) != 1 {
+				t.Errorf("response = %+v after %d reviews, want a 422 denial after one review", resp.Result, len(reviews))
 			}
 		})
 	}
