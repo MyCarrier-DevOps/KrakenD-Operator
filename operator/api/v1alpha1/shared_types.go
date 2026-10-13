@@ -185,6 +185,7 @@ const (
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonUnmatchedOverride             = "UnmatchedOverride"
 	ReasonAmbiguousOverride             = "AmbiguousOverride"
+	ReasonNoOperations                  = "NoOperations"
 	ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
 	ReasonEndpointRejected              = "EndpointRejected"
 	ReasonOperationsFailed              = "OperationsFailed"
