@@ -38,8 +38,10 @@ import (
 )
 
 // reviewingClient answers every SubjectAccessReview with allowed and records
-// the reviews it was asked for.
-func reviewingClient(allowed bool, reviews *[]authorizationv1.SubjectAccessReview) client.Client {
+// the reviews it was asked for. objs are stored objects it serves.
+func reviewingClient(
+	allowed bool, reviews *[]authorizationv1.SubjectAccessReview, objs ...client.Object,
+) client.Client {
 	return fakeClientBuilderWith(interceptor.Funcs{
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			sar, ok := obj.(*authorizationv1.SubjectAccessReview)
@@ -50,7 +52,7 @@ func reviewingClient(allowed bool, reviews *[]authorizationv1.SubjectAccessRevie
 			sar.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: allowed}
 			return nil
 		},
-	})
+	}, objs...)
 }
 
 // gatewayWithJob is a gateway whose post-restart Job is enabled and edited by
