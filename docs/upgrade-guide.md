@@ -4,11 +4,30 @@
 
 ### Via Helm
 
-```bash
-helm repo update
-helm upgrade krakend-operator krakend-operator/krakend-operator \
-  -n krakend-operator-system
-```
+Helm never upgrades the CRDs in a chart's `crds/` directory, so apply the
+release's CRDs yourself before you upgrade the operator:
+
+1. Work through the [Pre-Upgrade Checklist](#pre-upgrade-checklist). Its
+   admission audit runs before the CRDs change.
+2. Apply the release's CRDs, from its tag (see [CRD Upgrades](#crd-upgrades)):
+
+   ```bash
+   VERSION=<version>
+   for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
+     kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
+   done
+   ```
+
+3. Upgrade the operator:
+
+   ```bash
+   helm repo update
+   helm upgrade krakend-operator krakend-operator/krakend-operator \
+     -n krakend-operator-system --version "$VERSION"
+   ```
+
+With the old CRDs in place, the new operator's status fields are dropped on
+every write and the rules that now live in the CRDs are not enforced.
 
 A cluster installed from the old manifests moves to the chart once; see
 [The Helm chart is the only install path](#unreleased--the-helm-chart-is-the-only-install-path).
@@ -130,26 +149,36 @@ A cluster installed from the old manifests moves to the chart once; see
    - Metrics scrapes start succeeding once the scraper's ServiceAccount is
      bound to the `<fullname>-metrics-reader` ClusterRole.
 
+8. **Apply this release's CRDs** once the audit in item 5 is clean and before
+   `helm upgrade`, using the commands in
+   [CRD Upgrades](#crd-upgrades). Helm does not update them, so skipping this
+   leaves the old schemas in place.
+
 ---
 
 ## CRD Upgrades
 
 CRDs are installed in the Helm chart's `crds/` directory. Helm installs CRDs on first install but **does not update them on upgrade** by default.
 
-To update CRDs manually:
+To update CRDs manually, from the release's tag:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v<version>/charts/krakend-operator/crds/gateway.krakend.io_krakendgateways.yaml
-kubectl apply -f https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v<version>/charts/krakend-operator/crds/gateway.krakend.io_krakendendpoints.yaml
-kubectl apply -f https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v<version>/charts/krakend-operator/crds/gateway.krakend.io_krakendbackendpolicies.yaml
-kubectl apply -f https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v<version>/charts/krakend-operator/crds/gateway.krakend.io_krakendautoconfigs.yaml
+VERSION=<version>
+for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
+  kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
+done
 ```
 
 Or from a local checkout:
 
 ```bash
-kubectl apply -f charts/krakend-operator/crds/
+kubectl apply --server-side --force-conflicts -f charts/krakend-operator/crds/
 ```
+
+Helm creates the CRDs under the field manager `helm`, and `.spec.versions` is
+atomic, so a server-side apply that changes a schema without
+`--force-conflicts` fails with a conflict. Helm never updates installed CRDs,
+so taking the fields over leaves nothing contested.
 
 ### RBAC (ClusterRole) and webhook copies are generated
 
