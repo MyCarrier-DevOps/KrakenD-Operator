@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -930,19 +931,8 @@ func TestPostRestartJobExecutionKnobsChanged_DefaultOnlyDiffDoesNotTrigger(t *te
 // the gateway with no post-restart Job ever running again for this
 // revision.
 func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecksum(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
-	if err != nil {
-		t.Fatalf("computing job checksum: %v", err)
-	}
-	jobName := resources.PostRestartJobName(gw, jobChecksum)
-
-	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
-	resources.BuildPostRestartJob(existing, gw, "abc123", jobChecksum)
-	setJobCondition(existing, batchv1.JobFailed)
-
-	gw.Status.LastPostRestartJobChecksum = jobChecksum
-	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9)) // forces the recreate path
+	gw, existing := gatewayWithAFailedJobToRecreate(t)
+	jobChecksum := gw.Status.LastPostRestartJobChecksum
 
 	createCalls := 0
 	failingCreate := interceptor.Funcs{
@@ -1018,19 +1008,7 @@ func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecks
 // not once the Job object is actually gone), symmetric with the original
 // create path's existing AlreadyExists handling.
 func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
-	if err != nil {
-		t.Fatalf("computing job checksum: %v", err)
-	}
-	jobName := resources.PostRestartJobName(gw, jobChecksum)
-
-	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
-	resources.BuildPostRestartJob(existing, gw, "abc123", jobChecksum)
-	setJobCondition(existing, batchv1.JobFailed)
-
-	gw.Status.LastPostRestartJobChecksum = jobChecksum
-	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9)) // forces the recreate path
+	gw, existing := gatewayWithAFailedJobToRecreate(t)
 
 	alreadyExistsCreate := interceptor.Funcs{
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
@@ -1060,10 +1038,11 @@ func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *
 	}
 }
 
-// The persisted checksum is cleared before the failed Job is deleted: a crash
-// between the Delete and the Create then cannot leave a checksum that claims
-// the revision ran with no Job left to show for it.
-func TestReconcileExistingPostRestartRevision_ClearsTheChecksumBeforeDeletingTheJob(t *testing.T) {
+// gatewayWithAFailedJobToRecreate is a gateway whose post-restart Job for the
+// current revision failed and whose spec has since changed, so the Job is
+// deleted and created again, and the Job as it stands.
+func gatewayWithAFailedJobToRecreate(t *testing.T) (*v1alpha1.KrakenDGateway, *batchv1.Job) {
+	t.Helper()
 	gw := makeGWWithJob("echo ok")
 	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
@@ -1074,6 +1053,14 @@ func TestReconcileExistingPostRestartRevision_ClearsTheChecksumBeforeDeletingThe
 	setJobCondition(existing, batchv1.JobFailed)
 	gw.Status.LastPostRestartJobChecksum = jobChecksum
 	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9)) // forces the recreate path
+	return gw, existing
+}
+
+// The persisted checksum is cleared before the failed Job is deleted: a crash
+// between the Delete and the Create then cannot leave a checksum that claims
+// the revision ran with no Job left to show for it.
+func TestReconcileExistingPostRestartRevision_ClearsTheChecksumBeforeDeletingTheJob(t *testing.T) {
+	gw, existing := gatewayWithAFailedJobToRecreate(t)
 
 	var calls []string
 	recording := interceptor.Funcs{
@@ -1112,6 +1099,36 @@ func TestReconcileExistingPostRestartRevision_ClearsTheChecksumBeforeDeletingThe
 	want := []string{"status checksum=", "delete job", "create job"}
 	if !slices.Equal(calls, want) {
 		t.Errorf("calls = %q, want %q: the cleared checksum must be persisted before the Job is deleted", calls, want)
+	}
+}
+
+// A checksum clear that cannot be persisted stops the re-create: the failed
+// Job stays, so the revision is not left with neither a Job nor a record that
+// it ran.
+func TestReconcileExistingPostRestartRevision_AFailedChecksumClearKeepsTheFailedJob(t *testing.T) {
+	gw, existing := gatewayWithAFailedJobToRecreate(t)
+	failingClear := interceptor.Funcs{
+		SubResourceUpdate: func(context.Context, client.Client, string, client.Object,
+			...client.SubResourceUpdateOption,
+		) error {
+			return errors.New("etcd timeout")
+		},
+	}
+	c := fakeClientBuilder().
+		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
+		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
+		WithInterceptorFuncs(failingClear).
+		Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123"))
+
+	if err == nil {
+		t.Fatal("reconcile succeeded, want the failed checksum clear returned")
+	}
+	var kept batchv1.Job
+	if getErr := c.Get(context.Background(), client.ObjectKeyFromObject(existing), &kept); getErr != nil {
+		t.Errorf("the failed Job is gone after a failed checksum clear: %v", getErr)
 	}
 }
 
