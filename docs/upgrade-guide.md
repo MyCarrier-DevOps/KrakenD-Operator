@@ -151,7 +151,7 @@ Or from a local checkout:
 kubectl apply -f charts/krakend-operator/crds/
 ```
 
-### RBAC (ClusterRole) copies are generated
+### RBAC (ClusterRole) and webhook copies are generated
 
 The manager's ClusterRole exists in two places, both generated from the
 `+kubebuilder:rbac` markers:
@@ -160,8 +160,17 @@ The manager's ClusterRole exists in two places, both generated from the
 - `charts/krakend-operator/files/manager-role.yaml` — copied by
   `make manifests`; `templates/clusterrole.yaml` renders its rules.
 
+The chart's ValidatingWebhookConfiguration is generated the same way from the
+`+kubebuilder:webhook` markers: `operator/config/webhook/manifests.yaml` is
+copied by `make manifests` to
+`charts/krakend-operator/files/webhook-manifests.yaml`, and
+`templates/validating-webhook-configuration.yaml` renders every webhook's name,
+path, rules, `sideEffects` and `timeoutSeconds` from it. The template adds only
+the service reference, the `caBundle`, `failurePolicy` from
+`webhooks.failurePolicy` and the cert-manager annotation.
+
 `make verify-manifests` (the CI `Manifests Drift` job) fails when
-`config/rbac/role.yaml` or the chart copy is stale, and
+`config/rbac/role.yaml`, `config/webhook/manifests.yaml` or a chart copy is stale, and
 `TestManagerRoleGrantsOnlyUsedVerbs` fails when the generated role differs
 from the hand-kept table of verbs the controllers use. The integration suite
 runs its manager under that role against K3s, with the VirtualService CRD
