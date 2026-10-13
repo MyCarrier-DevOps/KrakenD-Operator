@@ -399,8 +399,10 @@ expect_absent "the webhook Service carries no metrics component label" "app.kube
 	--show-only templates/webhook-service.yaml
 
 # --- availability ---------------------------------------------------------
-expect_equal "the operator pod's grace period is the 10 s cmd/run_shape_test.go budgets for" "10" \
+expect_equal "the operator pod's grace period is the 30 s cmd/run_shape_test.go budgets for" "30" \
 	"$(render --show-only templates/deployment.yaml | awk '$1 == "terminationGracePeriodSeconds:" { print $2 }')"
+expect_equal "the manager sleeps 5 s in preStop, as cmd/run_shape_test.go budgets for" "5" \
+	"$(render --show-only templates/deployment.yaml | awk '$1 == "preStop:" { f = 1 } f && $1 == "seconds:" { print $2; exit }')"
 expect_contains "two replicas by default" "replicas: 2" --show-only templates/deployment.yaml
 expect_contains "a PodDisruptionBudget allows one disruption" "maxUnavailable: 1" \
 	--show-only templates/pdb.yaml
