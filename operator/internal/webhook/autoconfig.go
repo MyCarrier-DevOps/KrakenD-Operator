@@ -60,6 +60,11 @@ func (v *AutoConfigValidator) ValidateCreate(
 		return nil, unavailable(err)
 	}
 	errs = append(errs, validateFields(ac, nil)...)
+	authErrs, err := v.authorizeSourceAuth(ctx, ac)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	errs = append(errs, authErrs...)
 	warnings, err := v.policyRefWarnings(ctx, ac)
 	if err != nil {
 		return nil, unavailable(err)
@@ -190,6 +195,24 @@ func (v *AutoConfigValidator) validateGatewayRef(
 	}
 
 	return errs, nil
+}
+
+// authorizeSourceAuth requires the requester to be able to read the Secret
+// that spec.openapi.auth names. The operator sends it as the Authorization
+// header to spec.openapi.url with its own grant, so without this check an
+// AutoConfig writer would send any Secret of the namespace to a host of their
+// choice.
+func (v *AutoConfigValidator) authorizeSourceAuth(
+	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
+) (field.ErrorList, error) {
+	auth := ac.Spec.OpenAPI.Auth
+	if ac.Spec.OpenAPI.URL == "" || auth == nil || auth.BearerTokenSecret == nil || auth.BearerTokenSecret.Name == "" {
+		return nil, nil
+	}
+	return requireSecretRead(ctx, v.Client,
+		field.NewPath("spec", "openapi", "auth", "bearerTokenSecret", "name"),
+		ac.Namespace, auth.BearerTokenSecret.Name,
+		"the operator sends it as the Authorization header to spec.openapi.url")
 }
 
 // validateFields runs the field rules for ac. With a stored object (an
