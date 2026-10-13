@@ -146,6 +146,11 @@ func (v *GatewayValidator) structural(
 		return warnings, nil, unavailable(err)
 	}
 	errs = append(errs, licenseErrs...)
+	passwordErrs, err := v.authorizeDragonflyPassword(ctx, old, gw)
+	if err != nil {
+		return warnings, nil, unavailable(err)
+	}
+	errs = append(errs, passwordErrs...)
 	eeErrs, err := v.eeNamespacesOnCE(ctx, old, gw)
 	if err != nil {
 		return warnings, nil, unavailable(err)
@@ -1414,6 +1419,29 @@ func (v *GatewayValidator) authorizeLicense(
 		return v.requireExternalSecretCreate(ctx, gw)
 	}
 	return nil, nil
+}
+
+// authorizeDragonflyPassword requires the requester to be able to read the
+// Secret that spec.dragonfly.authentication.passwordFromSecret names, when it
+// is new or changed or Dragonfly is newly enabled. The Dragonfly operator puts
+// it into the environment of the container that runs spec.dragonfly.image.
+func (v *GatewayValidator) authorizeDragonflyPassword(
+	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
+) (field.ErrorList, error) {
+	if !dragonflyEnabled(gw) || gw.Spec.Dragonfly.Authentication == nil {
+		return nil, nil
+	}
+	auth := gw.Spec.Dragonfly.Authentication
+	if auth.PasswordFromSecret == nil || auth.PasswordFromSecret.Name == "" {
+		return nil, nil
+	}
+	if dragonflyEnabled(old) && equality.Semantic.DeepEqual(old.Spec.Dragonfly.Authentication, auth) {
+		return nil, nil // the requester did not touch it
+	}
+	return requireSecretRead(ctx, v.Client,
+		field.NewPath("spec", "dragonfly", "authentication", "passwordFromSecret", "name"),
+		gw.Namespace, auth.PasswordFromSecret.Name,
+		"the Dragonfly operator puts it into the environment of the container that runs spec.dragonfly.image")
 }
 
 // requireExternalSecretCreate is a Forbidden error on spec.license.externalSecret
