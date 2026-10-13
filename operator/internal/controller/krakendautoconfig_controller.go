@@ -505,11 +505,11 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 // truncateMessage), the endpoint readiness as of now (refreshReadiness), and
 // the Ready, phase and observedGeneration derived from them, then, once that
 // status write succeeds and only when the failure differs from the one the
-// stored status already shows (failureChanged), the buffered input warnings
-// followed by a Warning event with the same message. A failure that repeats
-// emits nothing: the recorder's per-object budget would otherwise go to the
-// repeated warnings and drop the event of a later, different failure. It
-// returns the status write's error, if any, other than a Conflict: a
+// stored status already shows (failureChanged), a Warning event with the same
+// message followed by the buffered input warnings. A failure that repeats
+// emits nothing, so repeated warnings do not spend the recorder's per-object
+// budget on every retry. The failure event comes first so that a changed
+// failure is the event that budget serves before the warnings. It returns the status write's error, if any, other than a Conflict: a
 // reconcile whose failure-status write conflicts read a stale copy of the
 // AutoConfig, but its sync failed all the same, so it records no events and
 // its caller returns the failure's own result. The quiet conflictRequeueDelay
@@ -551,8 +551,8 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 		return spanErr
 	}
 	if failureChanged(before, &ac.Status) {
-		warnings.emit(r.Recorder, ac)
 		r.Recorder.Event(ac, "Warning", reason, message)
+		warnings.emit(r.Recorder, ac)
 	}
 	return nil
 }
