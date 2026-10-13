@@ -232,3 +232,29 @@ func TestAutoConfigAdmission_ReviewRunsWithinTheAdmissionBudget(t *testing.T) {
 		t.Errorf("review deadline = %v (set: %v), want one within %v", deadline, hasDeadline, AdmissionBudget)
 	}
 }
+
+// The operator sends every auth Secret the spec names (the basic auth one
+// overwrites the bearer token), so each is reviewed, whether or not the CRD
+// allows both: the requester who may read only the bearer Secret is refused on
+// the basic one.
+func TestAutoConfigAdmission_EveryNamedAuthSecretIsReviewed(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	onlyBearer := func(a *authorizationv1.ResourceAttributes) bool { return a.Name == "spec-token" }
+	v := &AutoConfigValidator{Client: reviewingClientBy(onlyBearer, &reviews, testGateway())}
+	ac := autoConfigFetchingWithToken()
+	ac.Spec.OpenAPI.Auth.BasicAuthSecret = &v1alpha1.BasicAuthSecretRef{Name: "vendor-creds"}
+
+	resp := review(t, v, "alice", ac, nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.openapi.auth.basicAuthSecret.name" ||
+		!strings.Contains(causes[0].Message, "may not get Secret vendor-creds") {
+		t.Errorf("causes = %+v, want one Forbidden cause on the basic auth Secret's name", causes)
+	}
+	if len(reviews) != 2 {
+		t.Errorf("%d reviews, want 2", len(reviews))
+	}
+}
