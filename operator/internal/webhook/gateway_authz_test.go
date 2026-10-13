@@ -139,36 +139,55 @@ func TestGatewayAdmission_PostRestartJobReviewIsOfTheRequesterToCreatePods(t *te
 	}
 }
 
-// A requester whose access comes through a group (cluster admins through
-// system:masters) or through extra attributes is reviewed with them: the
-// review forwards the whole identity, not just the user name.
-func TestGatewayAdmission_PostRestartJobReviewCarriesTheRequestersGroupsAndExtra(t *testing.T) {
-	var reviews []authorizationv1.SubjectAccessReview
-	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
-	gw := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) { p.ServiceAccountName = "namespace-admin" })
-	ctx := admission.NewContextWithRequest(context.Background(), admission.Request{
-		AdmissionRequest: admissionv1.AdmissionRequest{UserInfo: authenticationv1.UserInfo{
-			Username: "alice", UID: "u1", Groups: []string{"team-a"},
-			Extra: map[string]authenticationv1.ExtraValue{"scopes": {"x"}},
-		}},
-	})
+// requesterWithGroupsAndExtra is the identity of a requester whose access
+// comes through a group (cluster admins through system:masters) or through
+// extra attributes.
+var requesterWithGroupsAndExtra = authenticationv1.UserInfo{
+	Username: "alice", UID: "u1", Groups: []string{"team-a"},
+	Extra: map[string]authenticationv1.ExtraValue{"scopes": {"x"}},
+}
 
-	if _, err := v.ValidateCreate(ctx, gw); err != nil {
-		t.Fatalf("denied: %v", err)
-	}
+// requestAs is a context that carries an admission request made by user.
+func requestAs(user authenticationv1.UserInfo) context.Context {
+	return admission.NewContextWithRequest(context.Background(),
+		admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{UserInfo: user}})
+}
 
-	if len(reviews) != 1 {
-		t.Fatalf("%d reviews, want 1", len(reviews))
+// A requester whose access comes through a group or through extra attributes
+// is reviewed with them: every review forwards the whole identity, not just
+// the user name.
+func TestGatewayAdmission_ReviewsCarryTheRequestersGroupsAndExtra(t *testing.T) {
+	cases := map[string]*v1alpha1.KrakenDGateway{
+		"a post-restart Job": gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) {
+			p.ServiceAccountName = "namespace-admin"
+		}),
+		"a license secretRef":         eeGatewayWithLicenseSecret("team-license"),
+		"a license ExternalSecret":    eeGatewayWithLicenseExternalSecret(),
+		"a Dragonfly password Secret": gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds"),
 	}
-	spec := reviews[0].Spec
-	if !slices.Equal(spec.Groups, []string{"team-a"}) {
-		t.Errorf("review groups = %v, want [team-a]", spec.Groups)
-	}
-	if spec.UID != "u1" {
-		t.Errorf("review UID = %q, want u1", spec.UID)
-	}
-	if !slices.Equal(spec.Extra["scopes"], authorizationv1.ExtraValue{"x"}) {
-		t.Errorf("review extra = %v, want scopes=[x]", spec.Extra)
+	for name, gw := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+
+			if _, err := v.ValidateCreate(requestAs(requesterWithGroupsAndExtra), gw); err != nil {
+				t.Fatalf("denied: %v", err)
+			}
+
+			if len(reviews) != 1 {
+				t.Fatalf("%d reviews, want 1", len(reviews))
+			}
+			spec := reviews[0].Spec
+			if !slices.Equal(spec.Groups, []string{"team-a"}) {
+				t.Errorf("review groups = %v, want [team-a]", spec.Groups)
+			}
+			if spec.UID != "u1" {
+				t.Errorf("review UID = %q, want u1", spec.UID)
+			}
+			if !slices.Equal(spec.Extra["scopes"], authorizationv1.ExtraValue{"x"}) {
+				t.Errorf("review extra = %v, want scopes=[x]", spec.Extra)
+			}
+		})
 	}
 }
 
@@ -655,5 +674,30 @@ func TestGatewayAdmission_DragonflyPasswordReviewIsOfTheRequesterToGetThatSecret
 	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "get" ||
 		attrs.Resource != "secrets" || attrs.Group != "" || attrs.Name != "db-creds" {
 		t.Errorf("review = %+v, want alice to get Secret db-creds in namespace default", spec)
+	}
+}
+
+// A review that cannot be made is not a verdict: a transient 500, for every
+// Secret reference as for the post-restart Job.
+func TestGatewayAdmission_SecretReferenceReviewFailureIs500(t *testing.T) {
+	cases := map[string]*v1alpha1.KrakenDGateway{
+		"a license secretRef":         eeGatewayWithLicenseSecret("team-license"),
+		"a license ExternalSecret":    eeGatewayWithLicenseExternalSecret(),
+		"a Dragonfly password Secret": gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds"),
+	}
+	for name, gw := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := fakeClientBuilderWith(interceptor.Funcs{
+				Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+					return errors.New("the server could not process the review")
+				},
+			})
+
+			resp := review(t, &GatewayValidator{Client: c, Checker: &scriptedChecker{}}, "alice", gw, nil)
+
+			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+				t.Errorf("response = %+v, want 500", resp.Result)
+			}
+		})
 	}
 }
