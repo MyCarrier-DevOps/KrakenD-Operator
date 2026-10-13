@@ -336,8 +336,11 @@ idle.
   `SpecWarning`, `DuplicateOperationId`, and
   `AdditionalEndpointOverride` warning events fire only when those inputs
   differ from the last successful sync's. A failed sync doesn't record its
-  inputs, so they repeat on each retry of a failing sync whose inputs
-  changed; a spec fetch failure emits `SpecFetchFailed` instead. A sync that
+  inputs, but it emits them, with its own failure event, only when its
+  failure differs from the one the `Synced` condition already shows, so a
+  failure that repeats on each retry is silent; inputs that change while the
+  same failure persists are emitted when the failure changes or the sync
+  succeeds. A spec fetch failure emits `SpecFetchFailed` instead. A sync that
   only holds operations (`OperationsFailed`) records its inputs like a
   successful one, so its warnings are not repeated on the next resync.
 - Endpoint write failures fail the sync: when a generated endpoint can't be
