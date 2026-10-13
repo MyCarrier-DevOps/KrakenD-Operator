@@ -17,6 +17,25 @@ helm install krakend-operator krakend-operator/krakend-operator -n krakend-opera
 
 Migrating from `make deploy`: see the [upgrade guide](../../docs/upgrade-guide.md#unreleased--the-helm-chart-is-the-only-install-path).
 
+## Upgrade
+
+Helm installs the CRDs in `crds/` on first install and never upgrades them.
+Apply the new release's CRDs from its tag before you upgrade the operator.
+Without them the operator drops its new status fields on every write, and the
+rules that now live in the CRDs are not enforced:
+
+```bash
+VERSION=<version>
+for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
+  kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
+done
+helm repo update
+helm upgrade krakend-operator krakend-operator/krakend-operator -n krakend-operator-system --version "$VERSION"
+```
+
+See the [upgrade guide](../../docs/upgrade-guide.md#general-upgrade-procedure)
+for the checklist to work through first.
+
 ## Configuration
 
 See [values.yaml](values.yaml) for the full list of configurable parameters.
