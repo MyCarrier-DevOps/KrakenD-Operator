@@ -407,3 +407,30 @@ func TestGatewayAdmission_LicenseSecretRefReviewIsOfTheRequesterToGetThatSecret(
 		t.Errorf("review = %+v, want alice to get Secret team-license in namespace default", spec)
 	}
 }
+
+// A Secret reference the requester did not touch is not reviewed again: a user
+// who may edit the gateway but not read its Secrets can still tune it.
+func TestGatewayAdmission_UnchangedSecretReferencesAreNotReviewedAgain(t *testing.T) {
+	cases := map[string]struct{ old, edited *v1alpha1.KrakenDGateway }{
+		"license secretRef, replicas changed": {
+			old: eeGatewayWithLicenseSecret("team-license"),
+			edited: func() *v1alpha1.KrakenDGateway {
+				gw := eeGatewayWithLicenseSecret("team-license")
+				gw.Spec.Replicas = ptr.To[int32](3)
+				return gw
+			}(),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+			resp := review(t, v, "alice", tc.edited, tc.old)
+
+			if !resp.Allowed || len(reviews) != 0 {
+				t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
+			}
+		})
+	}
+}
