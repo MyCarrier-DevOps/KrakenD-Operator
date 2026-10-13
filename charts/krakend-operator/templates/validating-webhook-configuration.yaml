@@ -9,102 +9,28 @@ metadata:
   annotations:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "krakend-operator.fullname" . }}-serving-cert
   {{- end }}
+# Webhooks are generated: files/webhook-manifests.yaml is copied from
+# operator/config/webhook/manifests.yaml by `make manifests`. Change the
+# +kubebuilder:webhook markers, not this file. The template adds only the
+# service reference, the caBundle, failurePolicy from values, and the
+# cert-manager annotation above.
 webhooks:
-  # Keep in sync with the +kubebuilder:webhook markers in operator/internal/webhook/webhook.go.
-  - name: vkrakendgateway.kb.io
+{{- range (.Files.Get "files/webhook-manifests.yaml" | fromYaml).webhooks }}
+  - name: {{ .name }}
     admissionReviewVersions:
-      - v1
+      {{- toYaml .admissionReviewVersions | nindent 6 }}
     clientConfig:
       service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendgateway
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
+        name: {{ include "krakend-operator.fullname" $ }}-webhook-service
+        namespace: {{ $.Release.Namespace }}
+        path: {{ .clientConfig.service.path }}
+      {{- if not $.Values.webhooks.certManager.enabled }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" $ }}
       {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
+    failurePolicy: {{ $.Values.webhooks.failurePolicy }}
     rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-        resources:
-          - krakendgateways
-    sideEffects: None
-    timeoutSeconds: 15
-  - name: vkrakendendpoint.kb.io
-    admissionReviewVersions:
-      - v1
-    clientConfig:
-      service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
-      {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
-    rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-        resources:
-          - krakendendpoints
-    sideEffects: None
-    timeoutSeconds: 15
-  - name: vkrakendbackendpolicy.kb.io
-    admissionReviewVersions:
-      - v1
-    clientConfig:
-      service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
-      {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
-    rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-        resources:
-          - krakendbackendpolicies
-    sideEffects: None
-    timeoutSeconds: 15
-  - name: vkrakendautoconfig.kb.io
-    admissionReviewVersions:
-      - v1
-    clientConfig:
-      service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
-      {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
-    rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-        resources:
-          - krakendautoconfigs
-    sideEffects: None
-    timeoutSeconds: 15
+      {{- toYaml .rules | nindent 6 }}
+    sideEffects: {{ .sideEffects }}
+    timeoutSeconds: {{ .timeoutSeconds }}
+{{- end }}
 {{- end }}
