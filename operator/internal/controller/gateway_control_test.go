@@ -28,12 +28,14 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -663,6 +665,63 @@ func TestGatewayReconcile_AFailedWriteDoesNotClearResourcesControlled(t *testing
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Errorf("ResourcesControlled = %+v, want it to stay False", cond)
 	}
+}
+
+// resolvedRefusalGateway is a serving gateway, with the post-restart Job
+// enabled, whose stored ResourcesControlled still says a Service was refused
+// although nothing is refused any more, and a client holding it and its
+// settled Deployment, with fail applied to every request.
+func resolvedRefusalGateway(
+	t *testing.T, fail interceptor.Funcs,
+) (*KrakenDGatewayReconciler, client.Client, *v1alpha1.KrakenDGateway) {
+	t.Helper()
+	const config = `{"version":3}`
+	checksum := hash.SHA256Hex([]byte(config))
+	gw := servingGateway(checksum, convergedImage)
+	gw.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionResourcesControlled, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonResourceNotControlled, Message: "service default/test-gw is somebody else's",
+	})
+	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, checksum)).
+		WithStatusSubresource(gw).WithInterceptorFuncs(fail).Build()
+	return newTestGatewayReconciler(c, renderOf(config), &mockValidator{}), c, gw
+}
+
+// requireResourcesControlledTrue fails unless gw's ResourcesControlled is True
+// and Ready does not blame an uncontrolled object.
+func requireResourcesControlledTrue(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) {
+	t.Helper()
+	conds := getGateway(t, c, gw).Status.Conditions
+	cond := meta.FindStatusCondition(conds, v1alpha1.ConditionResourcesControlled)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonResourcesControlled {
+		t.Errorf("ResourcesControlled = %+v, want True/ResourcesControlled", cond)
+	}
+	if ready := meta.FindStatusCondition(conds, v1alpha1.ConditionReady); ready != nil &&
+		ready.Reason == v1alpha1.ReasonResourceNotControlled {
+		t.Errorf("Ready = %+v, want it not to blame an uncontrolled object", ready)
+	}
+}
+
+// A refusal that has been resolved is not kept by a step that cannot refuse
+// anything: the post-restart Job failing every pass leaves every child the
+// gateway writes judged.
+func TestGatewayReconcile_AFailingPostRestartJobDoesNotKeepAResolvedRefusal(t *testing.T) {
+	r, c, gw := resolvedRefusalGateway(t, interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*batchv1.Job); ok {
+				return apierrors.NewForbidden(schema.GroupResource{Group: "batch", Resource: "jobs"}, "",
+					errors.New("exceeded quota: count/jobs.batch"))
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatalf("expected the failed Job create to be reported")
+	}
+
+	requireResourcesControlledTrue(t, c, gw)
 }
 
 // A Deployment the pass never wrote, because a hold applies, is not one the
