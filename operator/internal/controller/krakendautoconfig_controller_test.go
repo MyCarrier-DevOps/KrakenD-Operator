@@ -4396,7 +4396,7 @@ func TestAutoConfigReconcile_ReportsExternalRefsInConfigMapSpec(t *testing.T) {
 	}
 }
 
-func TestAutoConfigReconcile_SpecNotesEmittedBeforeUnmatchedFailure(t *testing.T) {
+func TestAutoConfigReconcile_UnmatchedFailureEmittedBeforeSpecNotes(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	f, ce, fi, g := defaultMocks()
@@ -4415,8 +4415,10 @@ func TestAutoConfigReconcile_SpecNotesEmittedBeforeUnmatchedFailure(t *testing.T
 		"not present in the OpenAPI spec: WebhookStatus"
 	events := drainEvents(rec)
 	noteIdx, unmatchedIdx := slices.Index(events, wantNote), slices.Index(events, wantUnmatched)
-	if noteIdx < 0 || unmatchedIdx < 0 || noteIdx > unmatchedIdx {
-		t.Errorf("expected %q before %q, got %v", wantNote, wantUnmatched, events)
+	// The failure comes first: the recorder's per-object budget is shared by
+	// every Warning, so the notes must not spend it ahead of the failure.
+	if noteIdx < 0 || unmatchedIdx < 0 || unmatchedIdx > noteIdx {
+		t.Errorf("expected %q before %q, got %v", wantUnmatched, wantNote, events)
 	}
 }
 
@@ -4434,8 +4436,9 @@ func TestAutoConfigReconcile_AFailingSyncWarnsOnceUntilItsFailureChanges(t *test
 	if _, err := reconcileAC(r, ac); err == nil {
 		t.Fatal("first pass: expected error for OnChange trigger, got nil")
 	}
-	if first := drainEvents(rec); len(first) != 2 {
-		t.Fatalf("first pass events = %v, want the spec warning and the failure", first)
+	first := drainEvents(rec)
+	if len(first) != 2 || eventReasonIndex(first, v1alpha1.ReasonUnmatchedOverride) != 0 {
+		t.Fatalf("first pass events = %v, want the failure, then the spec warning", first)
 	}
 
 	if _, err := reconcileAC(r, ac); err == nil {
@@ -4450,9 +4453,9 @@ func TestAutoConfigReconcile_AFailingSyncWarnsOnceUntilItsFailureChanges(t *test
 		t.Fatal("third pass: expected error for OnChange trigger, got nil")
 	}
 	third := drainEvents(rec)
-	if eventReasonIndex(third, v1alpha1.ReasonSpecWarning) < 0 ||
-		eventReasonIndex(third, v1alpha1.ReasonUnmatchedOverride) < 0 {
-		t.Errorf("a changed failure emitted %v, want the spec warning and the new failure", third)
+	if eventReasonIndex(third, v1alpha1.ReasonUnmatchedOverride) != 0 ||
+		eventReasonIndex(third, v1alpha1.ReasonSpecWarning) < 0 {
+		t.Errorf("a changed failure emitted %v, want the new failure first, then the spec warning", third)
 	}
 }
 
