@@ -2105,7 +2105,7 @@ Every validator follows the same rules (`admission.go`, `webhook.go`):
 
 - **Ratchet.** `ValidateUpdate` first admits an update to a terminating object that leaves the spec alone (`terminatingWithUnchangedSpec`, so a finalizer can be removed), then admits an update whose spec is unchanged without running a rule. A field rule rejects an update only for errors the stored object did not already have (`newErrors`, matched on the error's field, type, value and detail). References are checked only when added or changed, and endpoint entries are matched on (`endpoint`, `method`), so a reorder is not a change.
 - **Responses.** A rejected field is a `422 Invalid` with one cause per field error (`invalid`). A failed lookup, or a config check that cannot run or cannot get a validation slot, is a `500` (`unavailable`, `checkErr`): the request was not judged and is retried.
-- **Budget.** The three validators that run a render check (endpoint, gateway and policy) stop their work after `admissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
+- **Budget.** The three validators that run a render check (endpoint, gateway and policy) stop their work after `AdmissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
 - **Render checks.** The validators depend on one port, `ConfigChecker`, implemented by the `configcheck.Checker` the gateway controller also uses. Every check also takes the shared `lruMemo` (the 256 most recent verdicts of the pod, keyed by content, each keeping at most 16 KiB of output, untrusted: an inconsistent entry is a miss):
 
 ```go
@@ -2134,7 +2134,7 @@ Each object is judged on its own, and a denial quotes only the output of the obj
 func (v *GatewayValidator) admit(
     ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
-    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
     defer cancel()
 
     warnings, errs := v.validate(gw, old)
@@ -2166,7 +2166,7 @@ An update that renders the same config is skipped (`SameConfig`), and one that w
 func (v *EndpointValidator) admit(
     ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
     defer cancel()
 
     warnings, err := v.check(ctx, old, ep)
@@ -2205,7 +2205,7 @@ func (v *PolicyValidator) ValidateUpdate(
     if equality.Semantic.DeepEqual(old.Spec, policy.Spec) {
         return nil, nil
     }
-    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
     defer cancel()
     return checkPolicyRender(ctx, v.Client, v.Checker, v.Memo, old, policy)
 }
