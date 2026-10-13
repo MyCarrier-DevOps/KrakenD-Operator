@@ -85,6 +85,20 @@ func eeGatewayWithLicenseExternalSecret() *v1alpha1.KrakenDGateway {
 	return gw
 }
 
+// gatewayWithDragonfly is a gateway with the managed Dragonfly enabled, whose
+// password is read from key password of Secret passwordSecret when that is
+// not empty.
+func gatewayWithDragonfly(edition v1alpha1.Edition, passwordSecret string) *v1alpha1.KrakenDGateway {
+	gw := testGateway()
+	gw.Spec.Edition = edition
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	if passwordSecret != "" {
+		gw.Spec.Dragonfly.Authentication = &v1alpha1.DragonflyAuthSpec{PasswordFromSecret: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: passwordSecret}, Key: "password"}}
+	}
+	return gw
+}
+
 func secretEnvFrom(name string) []corev1.EnvFromSource {
 	return []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{
 		LocalObjectReference: corev1.LocalObjectReference{Name: name}}}}
@@ -572,5 +586,28 @@ func TestGatewayAdmission_ExternalSecretLicenseReviewIsOfTheRequesterToCreateExt
 	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "create" ||
 		attrs.Group != "external-secrets.io" || attrs.Resource != "externalsecrets" || attrs.Name != "" {
 		t.Errorf("review = %+v, want alice to create externalsecrets.external-secrets.io in namespace default", spec)
+	}
+}
+
+// The Dragonfly operator puts spec.dragonfly.authentication.passwordFromSecret
+// into the environment of the container that runs the writer's Dragonfly image,
+// so the requester must be able to read that Secret.
+func TestGatewayAdmission_DragonflyPasswordSecretNeedsGetOnThatSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.dragonfly.authentication.passwordFromSecret.name" ||
+		causes[0].Type != metav1.CauseTypeForbidden ||
+		!strings.Contains(causes[0].Message, "may not get Secret db-creds") {
+		t.Errorf("causes = %+v, want one Forbidden cause on the password Secret's name", causes)
+	}
+	if len(reviews) != 1 {
+		t.Errorf("%d reviews, want 1", len(reviews))
 	}
 }
