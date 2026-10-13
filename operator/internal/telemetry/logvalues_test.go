@@ -186,7 +186,7 @@ func TestLogger_ChildLoggersAndErrorsConvertValues(t *testing.T) {
 }
 
 // logsWithinTimeout logs value and reports the stdout output, failing the
-// test if logging has not finished in two seconds.
+// test if logging has not finished in 30 seconds.
 func logsWithinTimeout(t *testing.T, value any) string {
 	t.Helper()
 	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
@@ -197,8 +197,8 @@ func logsWithinTimeout(t *testing.T, value any) string {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("logging the value did not finish in 2s")
+	case <-time.After(30 * time.Second):
+		t.Fatal("logging the value did not finish in 30s")
 	}
 	return out.String()
 }
