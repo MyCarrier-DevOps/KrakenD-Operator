@@ -29,6 +29,20 @@ func TestOperatorManifest_ReturnsStdoutWithoutHelmWarnings(t *testing.T) {
 	}
 }
 
+func TestOperatorManifest_LeavesOutTheCRDsOnRequest(t *testing.T) {
+	stubHelm(t, `printf -- '---\nkind: CustomResourceDefinition\nmetadata:\n  name: gateways\n---\nkind: Deployment\nmetadata:\n  name: op\n'`)
+	got, err := OperatorManifest("ns", "repo/op:e2e", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(got, "CustomResourceDefinition") {
+		t.Errorf("manifest = %q, want no CustomResourceDefinition", got)
+	}
+	if !strings.Contains(got, "kind: Deployment") {
+		t.Errorf("manifest = %q, want the Deployment kept", got)
+	}
+}
+
 func TestOperatorManifest_CarriesHelmStderrInTheError(t *testing.T) {
 	stubHelm(t, `echo boom >&2; exit 1`)
 	_, err := OperatorManifest("ns", "repo/op:e2e", false)
