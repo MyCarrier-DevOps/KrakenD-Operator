@@ -4502,6 +4502,36 @@ func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoint
 	}
 }
 
+func TestAutoConfigReconcile_AnEmptyGeneratedSetDeletesTheEndpointsItOwned(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	owned := ownedCopy(t, ac, g.output.Endpoints[0])
+	// The spec still has an operation, but the generator keeps none of them,
+	// as when spec.filter excludes every operation: that is the owner's own
+	// narrowing, so the endpoints go, unlike a spec with no operation at all.
+	g.output.Endpoints = nil
+	c := fakeClientBuilder().WithObjects(ac, cm, owned).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	err := c.Get(context.Background(), client.ObjectKeyFromObject(owned), &v1alpha1.KrakenDEndpoint{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("the endpoint the AutoConfig owned should be deleted, got %v", err)
+	}
+	updated := getAC(t, c, ac)
+	synced := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if synced == nil || synced.Status != metav1.ConditionTrue || synced.Message != "Generated 0 endpoints" {
+		t.Errorf("Synced = %+v, want True \"Generated 0 endpoints\"", synced)
+	}
+	ready := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Message != "0 of 0 endpoints ready" {
+		t.Errorf("EndpointsReady = %+v, want True \"0 of 0 endpoints ready\"", ready)
+	}
+}
+
 func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
