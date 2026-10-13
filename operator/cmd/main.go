@@ -56,15 +56,19 @@ const configCheckSlots = 3
 const krakendBinary = "/usr/local/bin/krakend"
 
 // telemetryFlushTimeout bounds the final flush of traces, metrics and logs. The
-// pod's grace period is 10 seconds and the manager stops first, within
-// managerStopTimeout, so manager stop plus flush take at most 9. Stdout records
-// are written as they are logged: only batched OTLP data waits on the flush.
+// pod's grace period is 30 seconds: the preStop sleep (5 seconds, which lets
+// the endpoints stop routing to the pod) runs first, then the manager stops
+// within managerStopTimeout, then the flush, so the three take at most 25.
+// Stdout records are written as they are logged: only batched OTLP data waits
+// on the flush.
 const telemetryFlushTimeout = 5 * time.Second
 
 // managerStopTimeout bounds how long the manager waits for its runnables to
-// stop. controller-runtime's own default is 30 seconds, which the pod's 10
-// second grace period cannot hold: the flush that follows needs its own time.
-const managerStopTimeout = 4 * time.Second
+// stop. controller-runtime's own default is 30 seconds, which the pod's grace
+// period cannot hold: the flush that follows needs its own time. It outlasts
+// an admission call that is still running when SIGTERM arrives, which the
+// API server abandons at its 15 second timeout anyway.
+const managerStopTimeout = webhooksetup.AdmissionBudget + 3*time.Second
 
 var (
 	scheme   = runtime.NewScheme()
