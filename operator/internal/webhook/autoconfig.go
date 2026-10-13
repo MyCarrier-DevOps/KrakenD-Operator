@@ -60,7 +60,7 @@ func (v *AutoConfigValidator) ValidateCreate(
 		return nil, unavailable(err)
 	}
 	errs = append(errs, validateFields(ac, nil)...)
-	authErrs, err := v.authorizeSourceAuth(ctx, ac)
+	authErrs, err := v.authorizeSourceAuth(ctx, nil, ac)
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -105,6 +105,11 @@ func (v *AutoConfigValidator) ValidateUpdate(
 		errs = refErrs
 	}
 	errs = append(errs, validateFields(ac, old)...)
+	authErrs, err := v.authorizeSourceAuth(ctx, old, ac)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	errs = append(errs, authErrs...)
 	warnings, err := v.policyRefWarnings(ctx, ac)
 	if err != nil {
 		return nil, unavailable(err)
@@ -201,13 +206,18 @@ func (v *AutoConfigValidator) validateGatewayRef(
 // that spec.openapi.auth names. The operator sends it as the Authorization
 // header to spec.openapi.url with its own grant, so without this check an
 // AutoConfig writer would send any Secret of the namespace to a host of their
-// choice.
+// choice. old is the stored object on an update and nil on a create. The URL
+// decides where the Secret goes, so any change to spec.openapi is reviewed;
+// an update that leaves it as stored is not.
 func (v *AutoConfigValidator) authorizeSourceAuth(
-	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
+	ctx context.Context, old, ac *v1alpha1.KrakenDAutoConfig,
 ) (field.ErrorList, error) {
 	path, name := authSecretName(ac.Spec.OpenAPI.Auth)
 	if ac.Spec.OpenAPI.URL == "" || name == "" {
 		return nil, nil
+	}
+	if old != nil && equality.Semantic.DeepEqual(old.Spec.OpenAPI, ac.Spec.OpenAPI) {
+		return nil, nil // the requester did not touch it
 	}
 	return requireSecretRead(ctx, v.Client, path, ac.Namespace, name,
 		"the operator sends it as the Authorization header to spec.openapi.url")
