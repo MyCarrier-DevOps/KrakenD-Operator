@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -79,10 +80,10 @@ func TestGatewayValidator_ValidEE(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
-	_, err := v.ValidateCreate(context.Background(), gw)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+	if resp := review(t, v, "alice", gw, nil); !resp.Allowed {
+		t.Errorf("expected no error, got %+v", resp.Result)
 	}
 }
 
@@ -2238,9 +2239,6 @@ func TestGatewayValidator_WarnsAboutRedisSettingsWithNoEffect(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
 			Version: "2.13", Edition: v1alpha1.EditionEE,
-			License: &v1alpha1.LicenseConfig{SecretRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: "lic"}, Key: "LICENSE",
-			}},
 			Redis: &v1alpha1.RedisSpec{ConnectionPool: v1alpha1.RedisConnectionPool{
 				Addresses: []string{"redis:6379"}, ReadTimeout: "3s", WriteTimeout: "3s",
 				Password: &corev1.SecretKeySelector{
