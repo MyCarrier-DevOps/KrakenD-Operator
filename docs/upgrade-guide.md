@@ -9,14 +9,8 @@ release's CRDs yourself before you upgrade the operator:
 
 1. Work through the [Pre-Upgrade Checklist](#pre-upgrade-checklist). Its
    admission audit runs before the CRDs change.
-2. Apply the release's CRDs, from its tag (see [CRD Upgrades](#crd-upgrades)):
-
-   ```bash
-   VERSION=<version>
-   for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
-     kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
-   done
-   ```
+2. Apply the release's CRDs from its tag, with the loop in
+   [CRD Upgrades](#crd-upgrades), and set `VERSION` to that release.
 
 3. Upgrade the operator:
 
@@ -3277,7 +3271,7 @@ kubectl delete --ignore-not-found clusterrole krakend-operator-manager-role krak
   krakend-operator-krakend{gateway,endpoint,backendpolicy,autoconfig}-{admin,editor,viewer}-role
 # Helm skips CRDs that already exist: apply this release's CRDs first, from its tag.
 for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
-  kubectl apply --server-side -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
+  kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
 done
 helm repo add krakend-operator https://mycarrier-devops.github.io/KrakenD-Operator
 helm repo update
