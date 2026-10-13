@@ -1415,8 +1415,10 @@ infrastructure stage turns the refusals of a pass into the
 naming each object, its controller and the remedy), which `Ready` folds in the
 way it folds `PluginsResolved`. The decision is made on the exact version the
 write would replace, so a stale cache read cannot bypass it: a missed object
-fails the create with `AlreadyExists`, and a stale controlled or labelled read
-fails the update on its `resourceVersion` whenever the write changes anything.
+fails the create with `AlreadyExists` (or, when the API server rejects the create
+first, for its own reason: the condition then keeps its value unless an
+API-reader read finds nothing), and a stale controlled or labelled read fails
+the update on its `resourceVersion` whenever the write changes anything.
 
 Two children name a sibling, and follow its control. The HPA scales the
 Deployment named like the gateway: while the gateway may not take that
@@ -2197,7 +2199,7 @@ beside a refused Deployment.
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
 | `CEFallbackApplied` | The applied config is the CE-fallback render (reason `EEFeaturesStripped`); the message lists the Enterprise-only features it removed. Absent otherwise |
 | `PluginsResolved` | Every plugin ConfigMap the gateway mounts exists (`ConfigMapsFound`), or `False`/`ConfigMapNotFound` naming the missing ones, while the Deployment is held. Absent without ConfigMap plugin sources |
-| `ResourcesControlled` | `True` (`ResourcesControlled`) when no object the gateway wrote this pass was refused and every failure the pass had left the objects it writes judged (a post-restart Job or ConfigMap collection failure, or a write rejected after its take-over check passed); the condition keeps its last value while the pass held the Deployment or could not read an object; `False` (`ResourceNotControlled`) naming each existing object it leaves alone (kind, `<namespace>/<name>`, its controller if any) and the remedy |
+| `ResourcesControlled` | `True` (`ResourcesControlled`) when a pass refuses nothing, writes the Deployment and fails only in the post-restart Job, in ConfigMap collection, or in a write rejected after its take-over check passed (not a Conflict, an AlreadyExists, or a Create whose object the API server may hold); any other failure, or a held Deployment, keeps its last value; `False` (`ResourceNotControlled`) naming each existing object it leaves alone (kind, `<namespace>/<name>`, its controller if any) and the remedy |
 | `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator); `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed; `False`/`ResourceNotControlled` when the Dragonfly named like the gateway's is one the gateway refuses (nothing is rendered for it) |
 | `IstioConfigured` | VirtualService was successfully created/updated; `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed; `False`/`ResourceNotControlled` while the gateway refuses the Service named like it (no VirtualService is written, and the one the gateway controls is deleted) |
 | `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read; `True`/`CRDNotInstalled` when the license comes from an ExternalSecret whose CRD is not installed |
