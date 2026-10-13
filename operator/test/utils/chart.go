@@ -17,10 +17,16 @@ limitations under the License.
 package utils
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
+
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -34,7 +40,8 @@ const (
 )
 
 // OperatorManifest renders the operator chart for image into namespace and returns the
-// YAML, with the CRDs when crds is true.
+// YAML, with the CRDs when crds is true. The chart renders its CRDs as templates, so a
+// false crds drops their documents from the render.
 //
 // The suite applies the render with kubectl instead of running helm install: the chart
 // refuses Kubernetes older than 1.33, helm install reads the version from the cluster
@@ -56,7 +63,39 @@ func OperatorManifest(namespace, image string, crds bool) (string, error) {
 		}
 		return "", fmt.Errorf("%q failed: %w", "helm "+strings.Join(args, " "), err)
 	}
-	return string(out), nil
+	if crds {
+		return string(out), nil
+	}
+	return withoutCRDs(out)
+}
+
+// withoutCRDs returns the documents of the multi-document YAML manifest that are not
+// CustomResourceDefinitions.
+func withoutCRDs(manifest []byte) (string, error) {
+	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(manifest)))
+	var kept []string
+	for {
+		doc, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("splitting the helm output into documents: %w", err)
+		}
+		if len(bytes.TrimSpace(doc)) == 0 {
+			continue
+		}
+		var meta struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal(doc, &meta); err != nil {
+			return "", fmt.Errorf("reading the kind of a rendered document: %w", err)
+		}
+		if meta.Kind != "CustomResourceDefinition" {
+			kept = append(kept, string(doc))
+		}
+	}
+	return strings.Join(kept, "---\n"), nil
 }
 
 // operatorTemplateArgs is the helm template command line for OperatorManifest.
