@@ -731,6 +731,7 @@ spec:
 				g.Expect(err).To(HaveOccurred(),
 					"a gateway editor without create on externalsecrets was admitted a license ExternalSecret: %s",
 					output)
+				g.Expect(output).To(ContainSubstring("spec.license.externalSecret"))
 				g.Expect(output).To(ContainSubstring("may not create externalsecrets.external-secrets.io"))
 			}).Should(Succeed())
 
