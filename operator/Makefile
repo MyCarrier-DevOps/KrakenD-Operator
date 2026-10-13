@@ -62,11 +62,13 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	# that README.md alone; hand edits to the CRD *.yaml files themselves
 	# are still discarded on the next `make manifests` run.
 	cp config/crd/bases/*.yaml ../charts/krakend-operator/crds/
-	# The chart's manager ClusterRole renders its rules from this copy
-	# (templates/clusterrole.yaml), so it cannot drift from the markers;
-	# verify-manifests below gates the copy like the CRDs.
+	# The chart's manager ClusterRole and its ValidatingWebhookConfiguration
+	# render their rules from these copies (templates/clusterrole.yaml and
+	# templates/validating-webhook-configuration.yaml), so they cannot drift
+	# from the markers; verify-manifests below gates the copies like the CRDs.
 	mkdir -p ../charts/krakend-operator/files
 	cp config/rbac/role.yaml ../charts/krakend-operator/files/manager-role.yaml
+	cp config/webhook/manifests.yaml ../charts/krakend-operator/files/webhook-manifests.yaml
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -80,10 +82,12 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 #   - api/v1alpha1/zz_generated.deepcopy.go (controller-gen output, via the
 #     `generate` target)
 #   - ../charts/krakend-operator/crds and ../charts/krakend-operator/files,
-#     the chart's copies of the CRDs and of the manager ClusterRole, which the
-#     `manifests` target copies from the controller-gen output. The chart's
-#     templates/clusterrole.yaml renders the role copy, so the chart cannot
-#     drift from the +kubebuilder:rbac markers.
+#     the chart's copies of the CRDs, of the manager ClusterRole and of the
+#     webhook configuration, which the `manifests` target copies from the
+#     controller-gen output. The chart's templates/clusterrole.yaml and
+#     templates/validating-webhook-configuration.yaml render those copies, so
+#     the chart cannot drift from the +kubebuilder:rbac and
+#     +kubebuilder:webhook markers.
 # It also catches NEW untracked files under those paths as a whole, not just
 # modifications to already-tracked files: `git diff --exit-code` alone is blind
 # to a newly-generated file that was never committed.
