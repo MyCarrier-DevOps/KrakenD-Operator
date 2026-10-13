@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1056,6 +1057,61 @@ func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *
 	if gw.Status.LastPostRestartJobChecksum != "" {
 		t.Fatalf("expected the checksum to remain cleared (not re-set) after tolerating AlreadyExists, got %q",
 			gw.Status.LastPostRestartJobChecksum)
+	}
+}
+
+// The persisted checksum is cleared before the failed Job is deleted: a crash
+// between the Delete and the Create then cannot leave a checksum that claims
+// the revision ran with no Job left to show for it.
+func TestReconcileExistingPostRestartRevision_ClearsTheChecksumBeforeDeletingTheJob(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
+	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: resources.PostRestartJobName(gw, jobChecksum), Namespace: gw.Namespace}}
+	resources.BuildPostRestartJob(existing, gw, "abc123", jobChecksum)
+	setJobCondition(existing, batchv1.JobFailed)
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9)) // forces the recreate path
+
+	var calls []string
+	recording := interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			opts ...client.SubResourceUpdateOption,
+		) error {
+			if g, ok := obj.(*v1alpha1.KrakenDGateway); ok {
+				calls = append(calls, "status checksum="+g.Status.LastPostRestartJobChecksum)
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*batchv1.Job); ok {
+				calls = append(calls, "delete job")
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*batchv1.Job); ok {
+				calls = append(calls, "create job")
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}
+	c := fakeClientBuilder().
+		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
+		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
+		WithInterceptorFuncs(recording).
+		Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	want := []string{"status checksum=", "delete job", "create job"}
+	if !slices.Equal(calls, want) {
+		t.Errorf("calls = %q, want %q: the cleared checksum must be persisted before the Job is deleted", calls, want)
 	}
 }
 
