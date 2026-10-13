@@ -6,6 +6,7 @@ Installs the [KrakenD Operator](https://github.com/MyCarrier-DevOps/KrakenD-Oper
 
 - Kubernetes 1.33+
 - Helm 3.18 or later (older releases default `helm template` and `helm lint` to Kubernetes capabilities below 1.33 and refuse the chart's `kubeVersion` unless given `--kube-version`)
+- A deployer that can create and update CustomResourceDefinitions: the chart renders the CRDs, so install and upgrade write them
 
 ## Install
 
@@ -19,19 +20,19 @@ Migrating from `make deploy`: see the [upgrade guide](../../docs/upgrade-guide.m
 
 ## Upgrade
 
-Helm installs the CRDs in `crds/` on first install and never upgrades them.
-Apply the new release's CRDs from its tag before you upgrade the operator.
-Without them the operator drops its new status fields on every write, and the
-rules that now live in the CRDs are not enforced:
+The chart renders the CRDs, so a plain `helm upgrade` moves them with the
+operator:
 
 ```bash
-VERSION=<version>
-for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
-  kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
-done
 helm repo update
 helm upgrade krakend-operator krakend-operator/krakend-operator -n krakend-operator-system --version "$VERSION"
 ```
+
+Do not apply the CRDs by hand. A release installed from chart 0.14.x or earlier,
+which shipped the CRDs in `crds/`, needs a one-time migration first: see the
+[upgrade guide](../../docs/upgrade-guide.md#unreleased--the-crds-are-part-of-the-chart).
+Without it the upgrade refuses, naming the CRD it cannot import, and changes
+nothing.
 
 See the [upgrade guide](../../docs/upgrade-guide.md#general-upgrade-procedure)
 for the checklist to work through first.
@@ -245,9 +246,8 @@ To uninstall, in this order:
 
 ### Remove the CRDs
 
-This is not part of an uninstall. `helm uninstall` leaves the CRDs in place
-(the CRDs are planned to move into the chart templates with
-`helm.sh/resource-policy: keep`, which leaves them in place as well). Deleting
+This is not part of an uninstall. `helm uninstall` leaves the CRDs in place,
+because they carry `helm.sh/resource-policy: keep`. Deleting
 them deletes every KrakenD object, and with each gateway its Deployment,
 Service and ConfigMaps, so every gateway stops serving. Do it only to remove
 KrakenD from the cluster entirely, after the steps above. It hangs on
