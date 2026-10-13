@@ -206,40 +206,57 @@ func (v *AutoConfigValidator) validateGatewayRef(
 	return errs, nil
 }
 
-// authorizeSourceAuth requires the requester to be able to read the Secret
-// that spec.openapi.auth names. The operator sends it as the Authorization
+// authorizeSourceAuth requires the requester to be able to read every Secret
+// that spec.openapi.auth names. The operator sends them as the Authorization
 // header to spec.openapi.url with its own grant, so without this check an
 // AutoConfig writer would send any Secret of the namespace to a host of their
-// choice. old is the stored object on an update and nil on a create. The URL
-// decides where the Secret goes, so any change to spec.openapi is reviewed;
+// choice. Each Secret is reviewed on its own, whatever the CRD says about
+// naming both. old is the stored object on an update and nil on a create. The
+// URL decides where the Secrets go, so any change to spec.openapi is reviewed;
 // an update that leaves it as stored is not.
 func (v *AutoConfigValidator) authorizeSourceAuth(
 	ctx context.Context, old, ac *v1alpha1.KrakenDAutoConfig,
 ) (field.ErrorList, error) {
-	path, name := authSecretName(ac.Spec.OpenAPI.Auth)
-	if ac.Spec.OpenAPI.URL == "" || name == "" {
+	if ac.Spec.OpenAPI.URL == "" {
 		return nil, nil
 	}
 	if old != nil && equality.Semantic.DeepEqual(old.Spec.OpenAPI, ac.Spec.OpenAPI) {
 		return nil, nil // the requester did not touch it
 	}
-	return requireSecretRead(ctx, v.Client, path, ac.Namespace, name,
-		"the operator sends it as the Authorization header to spec.openapi.url")
+	var errs field.ErrorList
+	for _, ref := range authSecretRefs(ac.Spec.OpenAPI.Auth) {
+		denied, err := requireSecretRead(ctx, v.Client, ref.path, ac.Namespace, ref.name,
+			"the operator sends it as the Authorization header to spec.openapi.url")
+		if err != nil {
+			return nil, err
+		}
+		errs = append(errs, denied...)
+	}
+	return errs, nil
 }
 
-// authSecretName is the field and the name of the Secret that auth names; the
-// name is empty when it names none.
-func authSecretName(auth *v1alpha1.AuthConfig) (path *field.Path, name string) {
-	base := field.NewPath("spec", "openapi", "auth")
-	switch {
-	case auth == nil:
-		return nil, ""
-	case auth.BearerTokenSecret != nil:
-		return base.Child("bearerTokenSecret", "name"), auth.BearerTokenSecret.Name
-	case auth.BasicAuthSecret != nil:
-		return base.Child("basicAuthSecret", "name"), auth.BasicAuthSecret.Name
+// authSecretRef is a Secret that spec.openapi.auth names, and the field that
+// names it.
+type authSecretRef struct {
+	path *field.Path
+	name string
+}
+
+// authSecretRefs are the Secrets auth names; a reference with no name names
+// none.
+func authSecretRefs(auth *v1alpha1.AuthConfig) []authSecretRef {
+	if auth == nil {
+		return nil
 	}
-	return nil, ""
+	base := field.NewPath("spec", "openapi", "auth")
+	var refs []authSecretRef
+	if auth.BearerTokenSecret != nil && auth.BearerTokenSecret.Name != "" {
+		refs = append(refs, authSecretRef{base.Child("bearerTokenSecret", "name"), auth.BearerTokenSecret.Name})
+	}
+	if auth.BasicAuthSecret != nil && auth.BasicAuthSecret.Name != "" {
+		refs = append(refs, authSecretRef{base.Child("basicAuthSecret", "name"), auth.BasicAuthSecret.Name})
+	}
+	return refs
 }
 
 // validateFields runs the field rules for ac. With a stored object (an
