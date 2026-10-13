@@ -66,3 +66,24 @@ func TestAutoConfigAdmission_BearerTokenSecretNeedsGetOnThatSecret(t *testing.T)
 		t.Errorf("%d reviews, want 1", len(reviews))
 	}
 }
+
+func TestAutoConfigAdmission_BasicAuthSecretNeedsGetOnThatSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &AutoConfigValidator{Client: reviewingClient(false, &reviews, testGateway())}
+	ac := autoConfigFetchingWithToken()
+	ac.Spec.OpenAPI.Auth = &v1alpha1.AuthConfig{BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{Name: "spec-login"}}
+
+	resp := review(t, v, "alice", ac, nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.openapi.auth.basicAuthSecret.name" ||
+		!strings.Contains(causes[0].Message, "may not get Secret spec-login") {
+		t.Errorf("causes = %+v, want one Forbidden cause on the basic auth Secret's name", causes)
+	}
+	if len(reviews) != 1 {
+		t.Errorf("%d reviews, want 1", len(reviews))
+	}
+}
