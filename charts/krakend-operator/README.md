@@ -117,29 +117,38 @@ people.
 - `editor`: create, delete, get, list, patch, update and watch on the kind, and `get` on its status.
 - `viewer`: get, list and watch on the kind, and `get` on its status.
 
-The `krakendgateway` and `krakendautoconfig` admin and editor roles reach
-Secrets through the references below, which the operator follows with its own
-grant without checking what the person who wrote the object may read. Bound in
-a namespace, such a role lets its holder read any Secret there:
+The operator follows Secret references with its own permissions, so admission
+asks the API server whether the person who writes the object may do the same,
+when the reference is added or changed:
 
-- a gateway names a Secret in `spec.license.secretRef`, which is mounted into a
-  container that runs the `spec.image` or `spec.ceImage` the editor chooses;
-- a gateway names a Secret in `spec.dragonfly.authentication.passwordFromSecret`,
-  which the Dragonfly operator puts into the environment of a container that
-  runs the `spec.dragonfly.image` the editor chooses;
-- an AutoConfig names a Secret in `spec.openapi.auth.bearerTokenSecret` or
-  `basicAuthSecret`, which is sent as an `Authorization` header to
-  `spec.openapi.url`.
+- a gateway's `spec.license.secretRef` needs `get` on that Secret in the
+  gateway's namespace: the gateway mounts it into the container that runs
+  `spec.image`, or `spec.ceImage` under CE fallback;
+- a gateway's `spec.license.externalSecret` needs `create` on
+  `externalsecrets.external-secrets.io` in the namespace: the operator creates
+  an ExternalSecret that reads the named key through the named SecretStore, or
+  a ClusterSecretStore that admits the namespace;
+- a gateway's `spec.dragonfly.authentication.passwordFromSecret` needs `get` on
+  that Secret: the Dragonfly operator puts it into the environment of the
+  container that runs `spec.dragonfly.image`;
+- an AutoConfig's `spec.openapi.auth.bearerTokenSecret` or `basicAuthSecret`
+  needs `get` on that Secret, checked again whenever `spec.openapi` changes:
+  the operator sends it as an `Authorization` header to `spec.openapi.url`.
 
-They also reach any key that a SecretStore in that namespace, or a
-ClusterSecretStore that admits it, can read, through
-`spec.license.externalSecret`. A ClusterRoleBinding gives this reach in every
-namespace. Grant these roles only to people you would give `get secrets` in the
-namespace, and keep AutoConfig to trusted operators or CI (see the SSRF
-mitigation list in the
-[architecture document](../../architecture/README.md#ssrf-mitigation)). The
-viewer roles and the `krakendendpoint` and `krakendbackendpolicy` roles do not
-reach Secrets.
+A write without the right is refused with `422` naming the field. So these
+roles reach no Secret their holder could not read, with two exceptions, each
+limited to one value:
+
+- whoever may edit a gateway whose license or Dragonfly password is already set
+  can read that value by changing `spec.image`, `spec.ceImage` or
+  `spec.dragonfly.image`;
+- a holder of `create` on ExternalSecrets who may not `get` Secrets can read the
+  synced license through the gateway image.
+
+Keep AutoConfig to trusted operators or CI for the SSRF reasons in the
+[architecture document](../../architecture/README.md#ssrf-mitigation). The
+viewer roles and the `krakendendpoint` and `krakendbackendpolicy` roles reach no
+Secret.
 
 ```bash
 kubectl create rolebinding gateway-team-endpoints -n <namespace> \
