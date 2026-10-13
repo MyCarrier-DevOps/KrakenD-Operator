@@ -160,6 +160,19 @@ for webhook in $(awk '$1 == "name:" && $2 ~ /^v.*\.kb\.io$/ { print $2 }' operat
 		"$(manifest_operations "$webhook" operator/config/webhook/manifests.yaml)" "$(webhook_operations "$webhook")"
 done
 
+# --- a generated webhook field the template does not render fails the render ---
+# A marker can add fields (matchPolicy, a service port, a URL) that the template
+# does not name; dropping them silently would leave the install registering
+# something other than the markers describe.
+cp -r "$CHART" "$workdir/chart-extra-field"
+sed -i '0,/^  name: vkrakendgateway.kb.io$/s//  matchPolicy: Exact\n  name: vkrakendgateway.kb.io/' \
+	"$workdir/chart-extra-field/files/webhook-manifests.yaml"
+if helm template t "$workdir/chart-extra-field" --namespace krakend-operator-system --kube-version 1.33.0 >/dev/null 2>&1; then
+	fail "a generated webhook field the template does not render fails the render"
+else
+	pass "a generated webhook field the template does not render fails the render"
+fi
+
 # --- three concurrent krakend validations fit in the operator's limit ------
 memory_limit() {
 	render --show-only templates/deployment.yaml "$@" |
