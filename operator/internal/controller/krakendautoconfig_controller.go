@@ -510,10 +510,11 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 // message followed by the buffered input warnings. A failure that repeats
 // emits nothing, so repeated warnings do not spend the recorder's per-object
 // budget on every retry. The failure event comes first so that a changed
-// failure is the event that budget serves before the warnings. It returns the status write's error, if any, other than a Conflict: a
-// reconcile whose failure-status write conflicts read a stale copy of the
-// AutoConfig, but its sync failed all the same, so it records no events and
-// its caller returns the failure's own result. The quiet conflictRequeueDelay
+// failure is the event that budget serves before the warnings. It returns the
+// status write's error, if any, other than a Conflict: a reconcile whose
+// failure-status write conflicts read a stale copy of the AutoConfig, but its
+// sync failed all the same, so it records no events and its caller returns the
+// failure's own result. The quiet conflictRequeueDelay
 // requeue would make controller-runtime forget the item and reset its
 // exponential backoff, turning a persistent failure's retries into a
 // conflictRequeueDelay loop while the cache stays stale.
