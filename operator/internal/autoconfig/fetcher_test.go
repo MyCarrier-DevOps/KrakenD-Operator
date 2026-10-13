@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,7 +156,10 @@ func TestFetcher_HTTPBadStatus(t *testing.T) {
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
 	if err == nil {
-		t.Error("expected error for 500 status")
+		t.Fatal("expected error for 500 status")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error = %q, want it to name the status 500", err)
 	}
 }
 
