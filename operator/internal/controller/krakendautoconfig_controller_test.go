@@ -4521,20 +4521,38 @@ func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoint
 	}
 }
 
-func TestAutoConfigReconcile_AnEmptyGeneratedSetDeletesTheEndpointsItOwned(t *testing.T) {
-	cm := testCUEDefinitionsCM()
+func TestAutoConfigReconcile_AFilterThatExcludesEveryOperationDeletesTheEndpointsItOwned(t *testing.T) {
+	// The no-operations guard looks at what the spec yields, before spec.filter
+	// runs, so a filter that excludes every operation is the owner's own
+	// narrowing: the sync succeeds with 0 endpoints and deletes the owned ones.
 	ac := testAutoConfig()
-	f, ce, fi, g := defaultMocks()
-	owned := ownedCopy(t, ac, g.output.Endpoints[0])
-	// The spec still has an operation, but the generator keeps none of them,
-	// as when spec.filter excludes every operation: that is the owner's own
-	// narrowing, so the endpoints go, unlike a spec with no operation at all.
-	g.output.Endpoints = nil
-	c := fakeClientBuilder().WithObjects(ac, cm, owned).WithStatusSubresource(ac).Build()
-	r := newACReconciler(c, f, ce, fi, g)
-
+	c := fakeClientBuilder().WithObjects(ac).WithStatusSubresource(ac).Build()
+	spec := []byte(`{"paths": {"/api/users": {"get": {"operationId": "listUsers",
+		"responses": {"200": {"description": "OK"}}}}}}`)
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Fetcher:      &mockFetcher{result: &autoconfig.FetchResult{Data: spec}},
+		CUEEvaluator: autoconfig.NewCUEEvaluator(),
+		Filter:       autoconfig.NewFilter(),
+		Generator:    autoconfig.NewGenerator(),
+		Checker:      &fakeChecker{},
+	}
 	if _, err := reconcileAC(r, ac); err != nil {
-		t.Fatalf("reconcile: %v", err)
+		t.Fatalf("first reconcile: %v", err)
+	}
+	owned := &v1alpha1.KrakenDEndpoint{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-ac-listusers", Namespace: ac.Namespace},
+		owned); err != nil {
+		t.Fatalf("the first sync should create the endpoint: %v", err)
+	}
+
+	cur := getAC(t, c, ac)
+	cur.Spec.Filter = &v1alpha1.FilterSpec{ExcludeOperationIds: []string{"listUsers"}}
+	if err := c.Update(context.Background(), cur); err != nil {
+		t.Fatalf("adding the filter: %v", err)
+	}
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("second reconcile: %v", err)
 	}
 	err := c.Get(context.Background(), client.ObjectKeyFromObject(owned), &v1alpha1.KrakenDEndpoint{})
 	if !apierrors.IsNotFound(err) {
