@@ -112,3 +112,19 @@ func TestAutoConfigAdmission_AuthReviewIsOfTheRequesterToGetThatSecret(t *testin
 		t.Errorf("review identity = %+v, want groups, UID and extra forwarded", spec)
 	}
 }
+
+// Where the token goes is part of what the requester must be allowed to do: a
+// changed spec.openapi with auth set is reviewed like a create, so a stored
+// token cannot be sent to a new URL by someone who could not read it.
+func TestAutoConfigAdmission_URLChangeWithStoredAuthIsReviewed(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &AutoConfigValidator{Client: reviewingClient(false, &reviews, testGateway())}
+	edited := autoConfigFetchingWithToken()
+	edited.Spec.OpenAPI.URL = "https://attacker.example/api.json"
+
+	resp := review(t, v, "alice", edited, autoConfigFetchingWithToken())
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity || len(reviews) != 1 {
+		t.Errorf("response = %+v after %d reviews, want a 422 denial after one review", resp.Result, len(reviews))
+	}
+}
