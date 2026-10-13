@@ -173,7 +173,7 @@ The CRDs are templates of the Helm chart (`templates/crds.yaml`, rendered from
 - `helm uninstall` leaves the CRDs in place, and with them every KrakenD
   object. Delete them yourself, as the chart README's
   [Uninstall](../charts/krakend-operator/README.md#uninstall) section describes.
-- The account that runs Helm needs `create` and `update` on
+- The account that runs Helm needs `get`, `create` and `patch` on
   `customresourcedefinitions`.
 - `--skip-crds` has no effect: the CRDs are no longer in `crds/`.
 - Never remove `helm.sh/resource-policy` from a live CRD, and never
@@ -198,7 +198,7 @@ After the migration nothing but Helm writes the CRDs, so later upgrades never
 conflict. A manual `kubectl apply --server-side --force-conflicts` of a CRD
 takes `.spec.versions` from Helm again, and the next Helm 4 upgrade that
 changes a schema then fails with a conflict until you run it once with
-`--force-conflicts`.
+`--server-side=true --force-conflicts`.
 
 ### RBAC (ClusterRole) and webhook copies are generated
 
@@ -325,7 +325,8 @@ so there is no other route back. After migrating a `make deploy` install,
 > release: `kubectl apply --server-side --force-conflicts -f
 > operator/config/crd/bases` from a checkout of that tag. This is the one
 > manual CRD apply left, and under Helm 4 the next `helm upgrade` then needs
-> `--force-conflicts`. The older CRD then prunes `status.configEdition` on the
+> `--server-side=true --force-conflicts`: a release that a rollback returned to
+> client-side refuses `--force-conflicts` on its own. The older CRD then prunes `status.configEdition` on the
 > older operator's next write, as described in the *Gateway reconcile
 > correctness* note above.
 
@@ -3476,7 +3477,7 @@ that `helm upgrade` carries schema changes with the operator. Each CRD carries
 - The CRDs carry the release's ownership metadata, so one cluster holds one
   release. A reinstall under another release name or namespace needs
   `--take-ownership`.
-- The account that runs Helm needs `create` and `update` on
+- The account that runs Helm needs `get`, `create` and `patch` on
   `customresourcedefinitions`.
 
 ### One-time migration of an existing release
@@ -3541,6 +3542,17 @@ Notes:
   `meta.helm.sh/release-namespace=$NS` together with `helm.sh/resource-policy=keep`,
   and upgrade without `--take-ownership`. Under Helm 4 a release installed
   server-side still needs `--force-conflicts`.
+- **A failed step 3 adopts nothing.** A server-side apply that conflicts is
+  rejected whole, so the CRDs keep only the annotation from step 2 and name no
+  release until a later upgrade succeeds.
+- **GitOps tools.** Where a controller runs Helm for you, step 2 still comes
+  first. Flux's helm-controller adopts existing objects by default, so a plain
+  chart-version bump would adopt the CRDs before they carry the annotation:
+  annotate them, then bump the version. Argo CD renders the chart with
+  `helm template`, and maps `helm.sh/resource-policy: keep` to its
+  `Delete=false` sync option: that protects the CRDs from deleting the
+  Application, not from a sync prune. A prune that removes a CRD from the render
+  deletes every object of its kind.
 
 ### A `make deploy` or OLM install
 
