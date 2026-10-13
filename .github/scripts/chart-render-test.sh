@@ -525,6 +525,68 @@ done
 expect_absent "an empty log format passes no flag" "--log-format" --show-only templates/deployment.yaml \
 	--set telemetry.logs.format=
 
+# --- the CRDs are chart templates that helm never deletes -------------------
+# crd_docs: "<name> <policy>" per CRD document on stdin, where <policy> is
+# metadata.annotations["helm.sh/resource-policy"] ("-" when absent).
+crd_docs() {
+	awk '
+		function flush() { if (crd) print name, (policy == "" ? "-" : policy); crd = 0; name = ""; policy = ""; sect = "" }
+		/^---/ { flush(); next }
+		/^kind: CustomResourceDefinition$/ { crd = 1 }
+		/^metadata:/ { sect = "metadata"; next }
+		/^[^ #]/ { sect = "" }
+		sect == "metadata" && /^  name: / { name = $2 }
+		sect == "metadata" && /^  [^ ]/ { key = $1 }
+		sect == "metadata" && key == "annotations:" && /^    helm\.sh\/resource-policy: / { policy = $2 }
+		END { flush() }'
+}
+# chart_crd NAME: the rendered CRD NAME without what the chart adds to it: the
+# source comment, the labels and the resource-policy annotation.
+chart_crd() {
+	render | awk -v n="  name: $1" '
+		function out() { if (doc ~ /\nkind: CustomResourceDefinition\n/ && index(doc, "\n" n "\n")) { sub(/\n+$/, "\n", doc); printf "%s", doc } }
+		/^---/ { out(); doc = "---\n"; skip = 0; next }
+		/^# Source: / { next }
+		/^  labels:$/ { skip = 1; next }
+		skip && /^    / { next }
+		{ skip = 0 }
+		/^    helm\.sh\/resource-policy: keep$/ { next }
+		{ doc = doc $0 "\n" }
+		END { out() }'
+}
+generated_crds=(operator/config/crd/bases/*.yaml)
+want_policies=$(for f in "${generated_crds[@]}"; do printf '%s keep\n' "$(grep -m1 '^  name: ' "$f" | cut -d' ' -f4)"; done | sort)
+expect_equal "the chart has no crds/ directory (helm would install it outside the release)" "no" \
+	"$([ -e "$CHART/crds" ] && echo yes || echo no)"
+expect_equal "the chart renders one CRD per generated CRD, each with helm.sh/resource-policy: keep" \
+	"$want_policies" "$(render | crd_docs | sort)"
+expect_equal "no value drops the CRDs or their resource policy" "$want_policies" \
+	"$(render --set webhooks.enabled=false --set metrics.enabled=false | crd_docs | sort)"
+for f in "${generated_crds[@]}"; do
+	crd_name=$(grep -m1 '^  name: ' "$f" | cut -d' ' -f4)
+	# Not expect_equal: a CRD is too long to print on a mismatch.
+	if diff_out=$(diff "$f" <(chart_crd "$crd_name") | head -5 | tr "\n" ";") && [ -z "$diff_out" ]; then
+		pass "the chart's $crd_name is the generated CRD plus the chart labels and keep"
+	else
+		fail "the chart's $crd_name is the generated CRD plus the chart labels and keep (first differences: ${diff_out:-the chart renders none})"
+	fi
+done
+
+# --- a CRD header the template does not recognise fails the render -----------
+# The template adds keep to the header controller-gen writes. A file without it
+# must stop the render, never ship a CRD that helm would delete.
+cp -r "$CHART" "$workdir/chart-bad-crd"
+bad_crd=$(find "$workdir/chart-bad-crd/files/crds" -name '*.yaml' 2>/dev/null | sort | head -1 || true)
+if [ -n "$bad_crd" ]; then
+	sed -i '/^  annotations:$/,/^    controller-gen.kubebuilder.io\/version:/d' "$bad_crd"
+fi
+if [ -n "$bad_crd" ] && ! helm template t "$workdir/chart-bad-crd" --namespace krakend-operator-system \
+	--kube-version 1.33.0 >/dev/null 2>&1; then
+	pass "a CRD header the template does not recognise fails the render"
+else
+	fail "a CRD header the template does not recognise fails the render"
+fi
+
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
 	exit 1
