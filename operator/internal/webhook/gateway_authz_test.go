@@ -28,6 +28,7 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -758,5 +759,18 @@ func TestGatewayAdmission_LicenseSourceThatTakesOverIsReviewed(t *testing.T) {
 	if len(causes) != 1 || causes[0].Field != "spec.license.externalSecret" || len(reviews) != 1 {
 		t.Errorf("causes = %+v after %d reviews, want one cause on spec.license.externalSecret after one review",
 			causes, len(reviews))
+	}
+}
+
+// With no admission request in the context the requester is unknown, so the
+// review cannot be made: the write fails closed with a 500.
+func TestGatewayAdmission_NoAdmissionRequestFailsClosed(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+
+	_, err := v.ValidateCreate(context.Background(), eeGatewayWithLicenseSecret("team-license"))
+
+	if !apierrors.IsInternalError(err) || len(reviews) != 0 {
+		t.Errorf("error = %v after %d reviews, want an internal error and no review", err, len(reviews))
 	}
 }
