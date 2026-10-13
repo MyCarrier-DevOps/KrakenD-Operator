@@ -747,6 +747,14 @@ func TestGatewayReconcile_RenewedLicenseDoesNotRerunThePostRestartJob(t *testing
 	s.setLicenseBytes(t, "renewed certificate")
 
 	s.reconcileWhileCacheLags(t)
+	// The Deployment controller finishes rolling the pods to the renewed license.
+	dep := s.deployment(t)
+	dep.Status = appsv1.DeploymentStatus{
+		ObservedGeneration: dep.Generation, Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1,
+	}
+	if err := s.c.Status().Update(context.Background(), dep); err != nil {
+		t.Fatal(err)
+	}
 	if err := reconcileGateway(t, s.r, s.gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
