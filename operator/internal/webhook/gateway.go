@@ -1344,8 +1344,6 @@ func versionWarning(gw, old *v1alpha1.KrakenDGateway) admission.Warnings {
 		"the checks may not match what %s accepts", version, configcheck.ValidatorVersion, version)}
 }
 
-// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
-
 // authorizePostRestartJob requires the requester to be able to create pods in
 // the gateway's namespace when an enabled spec.postRestartJob would run as a
 // ServiceAccount other than the gateway's own, read a Secret, or relax the
@@ -1363,28 +1361,17 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 	if old != nil && equality.Semantic.DeepEqual(old.Spec.PostRestartJob, prj) {
 		return nil // the requester did not touch it
 	}
-	req, err := admission.RequestFromContext(ctx)
+	user, allowed, err := reviewRequester(ctx, v.Client, authorizationv1.ResourceAttributes{
+		Namespace: gw.Namespace, Verb: "create", Resource: "pods"})
 	if err != nil {
 		return unavailable(err)
 	}
-	extra := make(map[string]authorizationv1.ExtraValue, len(req.UserInfo.Extra))
-	for k, val := range req.UserInfo.Extra {
-		extra[k] = authorizationv1.ExtraValue(val)
-	}
-	createPods := &authorizationv1.ResourceAttributes{Namespace: gw.Namespace, Verb: "create", Resource: "pods"}
-	sar := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
-		User: req.UserInfo.Username, Groups: req.UserInfo.Groups, UID: req.UserInfo.UID, Extra: extra,
-		ResourceAttributes: createPods,
-	}}
-	if err := v.Create(ctx, sar); err != nil {
-		return unavailable(fmt.Errorf("reviewing the requester's access: %w", err))
-	}
-	if !sar.Status.Allowed {
+	if !allowed {
 		gr := schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendgateways"}
 		return apierrors.NewForbidden(gr, gw.Name, fmt.Errorf(
 			"spec.postRestartJob: %s may not create pods in namespace %s, so the post-restart Job may not "+
 				"run as another ServiceAccount, read a Secret, or relax the operator's default security context",
-			req.UserInfo.Username, gw.Namespace))
+			user, gw.Namespace))
 	}
 	return nil
 }
