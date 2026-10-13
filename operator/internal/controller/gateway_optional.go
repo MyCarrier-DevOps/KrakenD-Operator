@@ -318,24 +318,42 @@ func (r *KrakenDGatewayReconciler) applyOwned(
 	ctx, span := tracing.Start(ctx, r.Tracer, "apply "+kind,
 		trace.WithAttributes(tracing.KeyName.String(obj.GetName())))
 	defer func() { tracing.End(span, retErr) }()
-	checked := false
+	checked, absent := false, false
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
 		if err := refuseUncontrolled(gw, obj, kind, consent); err != nil {
 			return err
 		}
-		checked = true
+		checked, absent = true, obj.GetResourceVersion() == ""
 		build()
 		return controllerutil.SetControllerReference(gw, obj, r.Scheme)
 	}); err != nil {
-		// A write that fails after the check passed cannot hide a refusal,
-		// unless the check ran on a stale copy (Conflict) or an absent one
-		// (AlreadyExists).
-		if checked && !apierrors.IsConflict(err) && !apierrors.IsAlreadyExists(err) {
+		if checked && r.cannotHideRefusal(ctx, obj, absent, err) {
 			err = judged(err)
 		}
 		return fmt.Errorf("reconciling %s: %w", kind, err)
 	}
 	return nil
+}
+
+// cannotHideRefusal reports whether err, from writing obj after its take-over
+// check passed, leaves no refusal hidden. A Conflict does not: the check ran on
+// a stale copy. Nor does AlreadyExists, or any error of a Create (absent) that
+// the API server may have rejected before its existence check, unless a read
+// through the API reader finds nothing there: the check ran on a cache miss.
+func (r *KrakenDGatewayReconciler) cannotHideRefusal(
+	ctx context.Context, obj client.Object, absent bool, err error,
+) bool {
+	if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+		return false
+	}
+	if !absent {
+		return true
+	}
+	probe, ok := obj.DeepCopyObject().(client.Object)
+	if !ok || r.APIReader == nil {
+		return false
+	}
+	return apierrors.IsNotFound(r.APIReader.Get(ctx, client.ObjectKeyFromObject(obj), probe))
 }
 
 // applyOptional creates or updates gw's child of the optional kind gvk, built
