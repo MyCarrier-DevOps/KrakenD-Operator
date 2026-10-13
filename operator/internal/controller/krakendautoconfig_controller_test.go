@@ -4414,6 +4414,42 @@ func TestAutoConfigReconcile_SpecNotesEmittedBeforeUnmatchedFailure(t *testing.T
 	}
 }
 
+func TestAutoConfigReconcile_AFailingSyncWarnsOnceUntilItsFailureChanges(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	configMapSpecWithExternalRef(ac, f)
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("first pass: expected error for OnChange trigger, got nil")
+	}
+	if first := drainEvents(rec); len(first) != 2 {
+		t.Fatalf("first pass events = %v, want the spec warning and the failure", first)
+	}
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("second pass: expected error for OnChange trigger, got nil")
+	}
+	if second := drainEvents(rec); len(second) != 0 {
+		t.Errorf("a repeated failure emitted %v, want no events", second)
+	}
+
+	ce.output.UnmatchedOverrides = []string{"OtherOp"}
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("third pass: expected error for OnChange trigger, got nil")
+	}
+	third := drainEvents(rec)
+	if eventReasonIndex(third, v1alpha1.ReasonSpecWarning) < 0 ||
+		eventReasonIndex(third, v1alpha1.ReasonUnmatchedOverride) < 0 {
+		t.Errorf("a changed failure emitted %v, want the spec warning and the new failure", third)
+	}
+}
+
 func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
