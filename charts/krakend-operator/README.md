@@ -182,12 +182,53 @@ The operator uses OpenTelemetry for its logs, traces and metrics.
 
 ## Uninstall
 
-```bash
-helm uninstall krakend-operator -n krakend-operator-system
-```
+The operator puts the finalizer `gateway.krakend.io/policy-protection` on every
+KrakenDBackendPolicy, and only the operator removes it. Once it is gone, deleting a
+policy, or a namespace that holds one, stays `Terminating`, and so does the
+`krakendbackendpolicies` CRD. Reinstalling the operator also releases policies
+that no endpoint references. To uninstall cleanly, in this order:
 
-CRDs are not removed on uninstall. To remove them manually:
+1. Uninstall the release:
 
-```bash
-kubectl delete crd krakendgateways.gateway.krakend.io krakendendpoints.gateway.krakend.io krakendbackendpolicies.gateway.krakend.io krakendautoconfigs.gateway.krakend.io
-```
+   ```bash
+   helm uninstall krakend-operator -n krakend-operator-system
+   ```
+
+2. Wait for the operator pods to exit. A pod that is still running re-adds the
+   finalizer. If the command reports that no resources match, the pods are
+   already gone and you can carry on:
+
+   ```bash
+   kubectl -n krakend-operator-system wait --for=delete pod \
+     -l app.kubernetes.io/instance=krakend-operator,control-plane=controller-manager \
+     --timeout=60s
+   ```
+
+3. Strip the finalizer from every policy. The command is idempotent, and needs
+   `get`, `list` and `patch` on `krakendbackendpolicies` in every namespace:
+
+   ```bash
+   kubectl get krakendbackendpolicies -A -o json \
+     | jq -r '.items[] | .metadata as $m
+         | ($m.finalizers // [] | index("gateway.krakend.io/policy-protection")) as $i
+         | select($i != null) | "\($m.namespace) \($m.name) \($i)"' \
+     | while read -r ns name i; do
+         kubectl patch krakendbackendpolicy "$name" -n "$ns" --type=json -p "[
+           {\"op\":\"test\",\"path\":\"/metadata/finalizers/$i\",\"value\":\"gateway.krakend.io/policy-protection\"},
+           {\"op\":\"remove\",\"path\":\"/metadata/finalizers/$i\"}]"
+       done
+   ```
+
+   The `test` operation makes a patch fail, rather than remove another
+   finalizer, if the list changed in the meantime. The patch is an UPDATE that
+   the policy webhook would intercept, but the release's webhook configuration
+   is gone after step 1. A policy that is already `Terminating` is deleted as
+   soon as its finalizer is gone.
+
+4. Delete the CRDs, which `helm uninstall` leaves in place. This also deletes
+   every KrakenD object, and it hangs on `krakendbackendpolicies` if step 3 was
+   skipped:
+
+   ```bash
+   kubectl delete crd krakendgateways.gateway.krakend.io krakendendpoints.gateway.krakend.io krakendbackendpolicies.gateway.krakend.io krakendautoconfigs.gateway.krakend.io
+   ```
