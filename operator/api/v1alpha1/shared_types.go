@@ -140,11 +140,11 @@ const (
 	// ConditionResourcesControlled is False while the gateway leaves an
 	// existing object alone because the name it would write is taken by one it
 	// does not control; its message names each. It is True once a pass refuses
-	// nothing and writes the Deployment, and each failure it had left every
-	// object it would write judged (a post-restart Job or ConfigMap collection
-	// failure, or a write rejected after its take-over check passed). A pass
-	// that holds the Deployment, or could not read an object, leaves it as it
-	// was. Only the gateway controller writes it.
+	// nothing, writes the Deployment, and fails only where no refusal can hide:
+	// the post-restart Job, ConfigMap collection, or a write rejected after its
+	// take-over check passed (other than Conflict, AlreadyExists, or a Create
+	// whose object the API server may hold). Any other failure, or a held
+	// Deployment, leaves it as it was. Only the gateway controller writes it.
 	ConditionResourcesControlled = "ResourcesControlled"
 
 	// ConditionEndpointsExcluded is True while the gateway leaves out one or
