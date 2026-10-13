@@ -74,9 +74,6 @@ jobs:
           sed -i "s/^version:.*/version: ${VERSION}/" Chart.yaml
           sed -i "s/^appVersion:.*/appVersion: \"${VERSION}\"/" Chart.yaml
 
-      - name: Copy CRDs into chart
-        run: cp operator/config/crd/bases/*.yaml charts/krakend-operator/crds/
-
       - uses: azure/setup-helm@v5
         with:
           version: v4.3.0
