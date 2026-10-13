@@ -98,6 +98,27 @@ people.
 - `editor`: create, delete, get, list, patch, update and watch on the kind, and `get` on its status.
 - `viewer`: get, list and watch on the kind, and `get` on its status.
 
+The `krakendgateway` and `krakendautoconfig` admin and editor roles reach
+Secrets through the operator, which reads them with its own grant and does not
+check what the person who wrote the object may read. Bound in a namespace, such
+a role lets its holder read any Secret there:
+
+- a gateway names a Secret in `spec.license.secretRef`, which is mounted into a
+  container that runs the `spec.image` or `spec.ceImage` the editor chooses;
+- an AutoConfig names a Secret in `spec.openapi.auth.bearerTokenSecret` or
+  `basicAuthSecret`, which is sent as an `Authorization` header to
+  `spec.openapi.url`.
+
+They also reach any key that a SecretStore in that namespace, or a
+ClusterSecretStore that admits it, can read, through
+`spec.license.externalSecret`. A ClusterRoleBinding gives this reach in every
+namespace. Grant these roles only to people you would give `get secrets` in the
+namespace, and keep AutoConfig to trusted operators or CI (see the SSRF
+mitigation list in the
+[architecture document](../../architecture/README.md#ssrf-mitigation)). The
+viewer roles and the `krakendendpoint` and `krakendbackendpolicy` roles do not
+reach Secrets.
+
 ```bash
 kubectl create rolebinding gateway-team-endpoints -n <namespace> \
   --clusterrole=krakend-operator-krakendendpoint-editor-role \
