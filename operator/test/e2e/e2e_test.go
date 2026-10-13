@@ -552,6 +552,77 @@ spec:
 		})
 	})
 
+	// ── Admission: post-restart Job that borrows a ServiceAccount ──────────
+
+	Context("Admission — post-restart Job that borrows a ServiceAccount", func() {
+		const (
+			borrowingGateway = "e2e-borrowing-job"
+			editorUser       = "e2e-gateway-editor"
+			editorBinding    = "e2e-gateway-editor-binding"
+		)
+		borrowingManifest := `
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: ` + borrowingGateway + `
+spec:
+  version: "2.9"
+  edition: CE
+  config: {}
+  postRestartJob:
+    enabled: true
+    script: "true"
+    serviceAccountName: default
+`
+
+		It("admits it for a requester who may create pods and denies it for one who may not", func() {
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "krakendgateway", borrowingGateway,
+					"-n", testNamespace, "--ignore-not-found", "--timeout=60s")
+				_, _ = utils.Run(cmd)
+				cmd = exec.Command("kubectl", "delete", "rolebinding", editorBinding,
+					"-n", testNamespace, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			})
+
+			By("admitting the gateway for the cluster admin, whose pods/create comes through a group")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+				cmd.Stdin = strings.NewReader(borrowingManifest)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(),
+					"the cluster admin was refused a post-restart Job that borrows the default ServiceAccount: "+
+						"the SubjectAccessReview failed or dropped the requester's groups: %s", output)
+			}).Should(Succeed())
+
+			By("removing it before the rollout so the Job never runs")
+			cmd := exec.Command("kubectl", "delete", "krakendgateway", borrowingGateway,
+				"-n", testNamespace, "--timeout=60s")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("binding a user to the chart's krakendgateway editor role, which carries no pods/create")
+			cmd = exec.Command("kubectl", "create", "rolebinding", editorBinding,
+				"-n", testNamespace, "--clusterrole=krakend-operator-krakendgateway-editor-role",
+				"--user="+editorUser)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("denying the same gateway for that user")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "--as="+editorUser, "-f", "-")
+				cmd.Stdin = strings.NewReader(borrowingManifest)
+				output, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(),
+					"a gateway editor without pods/create was admitted a post-restart Job that borrows "+
+						"the default ServiceAccount; output: %s", output)
+				g.Expect(output).To(ContainSubstring("may not create pods"),
+					"the apply failed, but not with the post-restart Job denial (a role binding that has "+
+						"not propagated yet, or a webhook error)")
+			}).Should(Succeed())
+		})
+	})
+
 	// ── CRD Lifecycle: Gateway with Istio ──────────────────────────────────
 
 	Context("CRD Lifecycle — Gateway with Istio", func() {
