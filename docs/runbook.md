@@ -863,6 +863,42 @@ annotations the ReadMe publisher uses). A `500` with `reviewing the requester's
 access` instead means the review itself failed: check that the operator's role
 has `create` on `subjectaccessreviews`.
 
+### Admission refuses a Secret reference with `Forbidden`
+
+**Symptom:** `kubectl apply` of a KrakenDGateway or KrakenDAutoConfig fails with
+`The KrakenDGateway "x" is invalid:` or `The KrakenDAutoConfig "x" is invalid:`
+and one of these causes:
+
+- `spec.license.secretRef.name: Forbidden: "<user>" may not get Secret <name> in namespace <ns>; the gateway mounts it into the container that runs spec.image (or spec.ceImage)`
+- `spec.license.externalSecret: Forbidden: "<user>" may not create externalsecrets.external-secrets.io in namespace <ns>; the operator creates the license ExternalSecret, which reads <kind> <store>`
+- `spec.dragonfly.authentication.passwordFromSecret.name: Forbidden: "<user>" may not get Secret <name> in namespace <ns>; the Dragonfly operator puts it into the environment of the container that runs spec.dragonfly.image`
+- `spec.openapi.auth.bearerTokenSecret.name: Forbidden: "<user>" may not get Secret <name> in namespace <ns>; the operator sends it as the Authorization header to spec.openapi.url` (or `basicAuthSecret.name`)
+
+**Cause:** The reference is new or changed, and the user making the request, or
+the ServiceAccount a GitOps controller impersonates, lacks `get` on the named
+Secret in that namespace, or `create` on `externalsecrets.external-secrets.io`.
+The operator reads these Secrets, and creates the ExternalSecret, with its own
+permissions, so the webhook asks the API server (SubjectAccessReview) whether
+the requester could do the same. For an AutoConfig, any change to
+`spec.openapi` counts, because the URL decides where the token goes. An edit
+that leaves the reference as stored is not reviewed.
+
+**Resolution:** Have a user who may read the Secret make the change, or grant
+the requester the right. A Role scoped to the one Secret is enough:
+
+```bash
+kubectl create role license-reader -n <namespace> --verb=get \
+  --resource=secrets --resource-name=<secret-name>
+kubectl create rolebinding license-reader -n <namespace> \
+  --role=license-reader --user=<user>
+```
+
+For a license ExternalSecret, grant `create` on
+`externalsecrets.external-secrets.io` instead. Or leave the reference
+unchanged. A `500` with `reviewing the requester's access` instead means the
+review itself failed: check that the operator's role has `create` on
+`subjectaccessreviews`.
+
 ### Admission rejects an endpoint with a krakend finding
 
 **Symptom:** `kubectl apply` of a KrakenDEndpoint fails with `The
@@ -1345,6 +1381,11 @@ object (or delete the stale object), then run the audit again. For an
 Enterprise-only line on a CE gateway, remove the namespace or move the gateway
 to EE. The audit judges Enterprise-only names by the list the renderer strips,
 so a namespace missing from that list is never reported.
+
+The audit cannot list refusals of a Secret reference (see *Admission refuses a
+Secret reference with `Forbidden`*): they depend on who writes the object, which
+a stored object does not record. The upgrade guide's *Complete admission*
+section has a `jq` inventory of the objects that name such a Secret.
 
 ---
 
