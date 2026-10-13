@@ -302,3 +302,26 @@ func TestAutoConfigAdmission_NoAdmissionRequestFailsClosed(t *testing.T) {
 		t.Errorf("error = %v after %d reviews, want an internal error and no review", err, len(reviews))
 	}
 }
+
+// With both auth Secrets denied, each is a cause of its own.
+func TestAutoConfigAdmission_BothAuthSecretsDeniedGiveTwoCauses(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &AutoConfigValidator{Client: reviewingClient(false, &reviews, testGateway())}
+	ac := autoConfigFetchingWithToken()
+	ac.Spec.OpenAPI.Auth.BasicAuthSecret = &v1alpha1.BasicAuthSecretRef{Name: "vendor-creds"}
+
+	resp := review(t, v, "alice", ac, nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	var fields []string
+	for _, cause := range resp.Result.Details.Causes {
+		fields = append(fields, cause.Field)
+	}
+	slices.Sort(fields)
+	want := []string{"spec.openapi.auth.basicAuthSecret.name", "spec.openapi.auth.bearerTokenSecret.name"}
+	if !slices.Equal(fields, want) {
+		t.Errorf("cause fields = %v, want %v", fields, want)
+	}
+}
