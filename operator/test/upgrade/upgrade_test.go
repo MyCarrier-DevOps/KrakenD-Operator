@@ -183,8 +183,11 @@ var _ = Describe("The operator CRDs under Helm "+helmVersion.raw, func() {
 						"conflict with field manager kubectl on .spec.versions")
 				Expect(out).To(And(ContainSubstring("conflict"), ContainSubstring(`"kubectl"`),
 					ContainSubstring(".spec.versions")), "the failed upgrade did not name a conflict with kubectl on .spec.versions")
+				expectRevisionHoldsCRDs("the failed upgrade", currentRevision(), len(crdNames))
 				helmRollback("rolling back to revision 1 after the failed upgrade", 1)
-				expectCRDsAdopted("after rolling back the failed upgrade")
+				// The conflicted apply is rejected whole, so it wrote nothing: the CRDs keep
+				// keep, from the annotate step, and are not adopted by the release.
+				expectCRDsKeptNotAdopted("after rolling back the failed upgrade")
 				expectObjects("after rolling back a failed upgrade", uids)
 			}
 
@@ -340,12 +343,36 @@ func expectCRDsAdopted(step string) {
 	}
 }
 
+// expectCRDsKeptNotAdopted expects every live CRD to carry keep and to name no
+// release: what a rejected adoption leaves behind.
+func expectCRDsKeptNotAdopted(step string) {
+	GinkgoHelper()
+	for _, crd := range crdNames {
+		Expect(crdField(crd, `{.metadata.annotations.helm\.sh/resource-policy}`)).To(Equal("keep"),
+			"%s: CRD %s: annotation helm.sh/resource-policy", step, crd)
+		Expect(crdField(crd, `{.metadata.annotations.meta\.helm\.sh/release-name}`)).To(BeEmpty(),
+			"%s: CRD %s: annotation meta.helm.sh/release-name: a rejected upgrade must not adopt the CRD", step, crd)
+	}
+}
+
+var crdDocument = regexp.MustCompile(`(?m)^kind: CustomResourceDefinition$`)
+
 // expectCRDsInManifest expects the stored manifest of the release to hold want CRDs.
 func expectCRDsInManifest(step string, want int) {
 	GinkgoHelper()
 	out := mustRun("reading the manifest of the release", "helm", "get", "manifest", release, "--namespace", namespace)
-	got := len(regexp.MustCompile(`(?m)^kind: CustomResourceDefinition$`).FindAllString(out, -1))
-	Expect(got).To(Equal(want), "%s: CRDs in the manifest of release %s", step, release)
+	Expect(crdDocument.FindAllString(out, -1)).To(HaveLen(want), "%s: CRDs in the manifest of release %s", step, release)
+}
+
+// expectRevisionHoldsCRDs expects the stored manifest of one revision to hold
+// want CRDs. A failed upgrade is recorded with the CRDs in it, which is why a
+// rollback needs keep on the live CRDs.
+func expectRevisionHoldsCRDs(step string, revision, want int) {
+	GinkgoHelper()
+	out := mustRun("reading the manifest of revision "+strconv.Itoa(revision), "helm", "get", "manifest", release,
+		"--namespace", namespace, "--revision", strconv.Itoa(revision))
+	Expect(crdDocument.FindAllString(out, -1)).To(HaveLen(want),
+		"%s: CRDs in the manifest of revision %d of release %s", step, revision, release)
 }
 
 // expectHelmOwnsSpecVersions expects helm to be the only field manager of the
