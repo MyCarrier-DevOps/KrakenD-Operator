@@ -632,11 +632,12 @@ kubectl get kac -A -o json | jq -r '.items[] | select((.status.generatedEndpoint
 
 The list can include AutoConfigs that are unaffected: one whose `spec.filter`
 excludes every operation, one whose operations are all skipped
-(`status.skippedOperations` is not empty), and one that holds operations
-(`status.failedOperations` is not empty). For each of the others, decide whether the upstream spec is
-broken (fix it) or the service has no operations (delete the AutoConfig, which
-removes its endpoints through their owner reference). Afterwards, find the
-affected resources cluster-wide:
+(`status.skippedOperations` is not empty), one that holds operations
+(`status.failedOperations` is not empty), and one whose generated endpoints
+are all replaced by `additionalEndpoints`. For each of the others, decide
+whether the upstream spec is broken (fix it) or the service has no operations
+(delete the AutoConfig, which removes its endpoints through their owner
+reference). Afterwards, find the affected resources cluster-wide:
 
 ```bash
 kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .reason=="NoOperations")) | "\(.metadata.namespace)/\(.metadata.name)"'
