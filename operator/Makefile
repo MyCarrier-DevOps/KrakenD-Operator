@@ -47,21 +47,19 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
-	# Keep the Helm chart's CRD copy in sync with the generated source (review
-	# id 3812030497, round-5 #1): release.yml's own "Copy CRDs into chart"
-	# step runs AFTER the release tag is already cut and never commits the
-	# result back, so the committed charts/ copy — which both documented
-	# CRD-upgrade paths (raw.githubusercontent.com at a tag, and a charts/
-	# checkout) actually read — would otherwise only be refreshed by hand.
-	# Doing the copy here, gated by verify-manifests below, is what makes a
-	# future `make manifests` run that changes a CRD fail the gate instead of
-	# silently leaving the chart copy stale.
-	# ../charts/krakend-operator/crds/ is therefore fully generated output —
-	# see the README.md in that directory (review id 3812913995, round-6
-	# #2). The *.yaml glob below only ever touches CRD files, so it leaves
-	# that README.md alone; hand edits to the CRD *.yaml files themselves
-	# are still discarded on the next `make manifests` run.
-	cp config/crd/bases/*.yaml ../charts/krakend-operator/crds/
+	# The chart renders the CRDs as templates (templates/crds.yaml) from these
+	# copies, so that `helm upgrade` carries schema changes with the operator.
+	# charts/krakend-operator/files/crds/ is therefore fully generated output:
+	# see the README.md in that directory. Copying here, gated by
+	# verify-manifests below, makes a `make manifests` run that changes a CRD
+	# fail the gate instead of silently leaving the chart copy stale. The rm
+	# drops the copy of a CRD that was renamed or removed: the chart would
+	# install it, and helm.sh/resource-policy: keep would then strand it in the
+	# cluster. The *.yaml globs only ever touch CRD files, so they leave that
+	# README.md alone; hand edits to the CRD files are discarded on the next run.
+	mkdir -p ../charts/krakend-operator/files/crds
+	rm -f ../charts/krakend-operator/files/crds/*.yaml
+	cp config/crd/bases/*.yaml ../charts/krakend-operator/files/crds/
 	# The chart's manager ClusterRole and its ValidatingWebhookConfiguration
 	# render their rules from these copies (templates/clusterrole.yaml and
 	# templates/validating-webhook-configuration.yaml), so they cannot drift
@@ -81,13 +79,13 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 #     (controller-gen output, via the `manifests` target)
 #   - api/v1alpha1/zz_generated.deepcopy.go (controller-gen output, via the
 #     `generate` target)
-#   - ../charts/krakend-operator/crds and ../charts/krakend-operator/files,
-#     the chart's copies of the CRDs, of the manager ClusterRole and of the
-#     webhook configuration, which the `manifests` target copies from the
-#     controller-gen output. The chart's templates/clusterrole.yaml and
+#   - ../charts/krakend-operator/files, the chart's copies of the CRDs, of the
+#     manager ClusterRole and of the webhook configuration, which the
+#     `manifests` target copies from the controller-gen output. The chart's
+#     templates/crds.yaml, templates/clusterrole.yaml and
 #     templates/validating-webhook-configuration.yaml render those copies, so
-#     the chart cannot drift from the +kubebuilder:rbac and
-#     +kubebuilder:webhook markers.
+#     the chart cannot drift from the Go types or from the +kubebuilder:rbac
+#     and +kubebuilder:webhook markers.
 # It also catches NEW untracked files under those paths as a whole, not just
 # modifications to already-tracked files: `git diff --exit-code` alone is blind
 # to a newly-generated file that was never committed.
@@ -98,7 +96,7 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # gate exists to close. CI is never affected, since CI checkouts carry no local
 # scratch files. If this trips locally,
 # `git clean -n -- $(VERIFY_MANIFESTS_PATHS)` shows what would be removed.
-VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml api/v1alpha1/zz_generated.deepcopy.go ../charts/krakend-operator/crds ../charts/krakend-operator/files
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml api/v1alpha1/zz_generated.deepcopy.go ../charts/krakend-operator/files
 verify-manifests: manifests generate ## Verify generated manifests (CRDs/RBAC/webhook/chart copies) match committed source. May fail on local untracked scratch files under gated paths (not a bug, CI-safe; see the Makefile comment above this target).
 	@untracked=$$(git status --porcelain -- $(VERIFY_MANIFESTS_PATHS) | grep '^??' || true); \
 	if [ -n "$$untracked" ]; then \
@@ -139,6 +137,13 @@ test-audit: ## Run the admission audit against its fixtures.
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet ## Run the e2e tests in an ephemeral K3s cluster via testcontainers.
 	go test -tags=e2e -v -timeout 30m ./test/e2e/ -ginkgo.v
+
+# The Helm upgrade suite runs the helm binary on PATH against an ephemeral K3s
+# cluster, so it needs a container runtime and network access to the chart repo.
+# Run it with each Helm the upgrade guide supports.
+.PHONY: test-upgrade
+test-upgrade: ## Run the Helm upgrade tests in an ephemeral K3s cluster via testcontainers.
+	go test -tags=upgrade -v -timeout 20m ./test/upgrade/
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
