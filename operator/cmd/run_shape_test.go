@@ -364,7 +364,8 @@ func TestCommand_WrapsNoMetricsHandlerInOtelHTTP(t *testing.T) {
 
 // podTerminationGracePeriod and preStopSleep are the chart's
 // terminationGracePeriodSeconds and the manager container's preStop sleep,
-// pinned by .github/scripts/chart-render-test.sh.
+// pinned by .github/scripts/chart-render-test.sh, whose rows under
+// "availability" assert the chart's values: change both together.
 const (
 	podTerminationGracePeriod = 30 * time.Second
 	preStopSleep              = 5 * time.Second
