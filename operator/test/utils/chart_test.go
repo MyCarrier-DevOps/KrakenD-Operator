@@ -20,7 +20,7 @@ func stubHelm(t *testing.T, script string) {
 
 func TestOperatorManifest_ReturnsStdoutWithoutHelmWarnings(t *testing.T) {
 	stubHelm(t, `echo "kind: Deployment"; echo "WARNING: x" >&2`)
-	got, err := OperatorManifest("ns", "repo/op:e2e", false)
+	got, err := OperatorManifest("ns", "repo/op:e2e", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,20 +59,10 @@ func TestOperatorTemplateArgs_RendersTheReleaseForTheImage(t *testing.T) {
 	want := []string{
 		"template", "krakend-operator", "../charts/krakend-operator", "--namespace", "krakend-operator-system",
 		"--kube-version", "1.33.0", "--set", "image.repository=ghcr.io/mycarrier-devops/krakend-operator",
-		"--set", "image.tag=e2e", "--set", "replicaCount=1", "--include-crds",
+		"--set", "image.tag=e2e", "--set", "replicaCount=1",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("args = %q, want %q", got, want)
-	}
-}
-
-func TestOperatorTemplateArgs_LeavesOutTheCRDsOnRequest(t *testing.T) {
-	got, err := operatorTemplateArgs("ns", "repo/op:e2e", false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if slices.Contains(got, "--include-crds") {
-		t.Errorf("args = %q, want no --include-crds", got)
 	}
 }
 
