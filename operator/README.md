@@ -91,8 +91,10 @@ make run        # Run the operator outside the cluster
 
 ## Deploying
 
-Helm never updates CRDs that are already installed. After changing the API
-types, run `make install` before `helm upgrade`.
+The chart renders the CRDs, so `helm upgrade` carries a change to the API
+types after `make manifests`. `make install` is only for `make run` against a
+cluster without the chart. Where it created the CRDs, the first chart install
+needs `--take-ownership`, and under Helm 4 also `--force-conflicts`.
 
 ```bash
 helm upgrade --install krakend-operator ../charts/krakend-operator \
