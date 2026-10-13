@@ -783,6 +783,18 @@ func TestGatewayReconcile_ARejectedWriteKeepsAResolvedRefusalOnlyWhenItsCheckCou
 	}
 }
 
+// bareWrapper is an error that has an Unwrap method but wraps nothing.
+type bareWrapper struct{}
+
+func (bareWrapper) Error() string { return "wraps nothing" }
+func (bareWrapper) Unwrap() error { return nil }
+
+// bareJoin is an error with an empty list of wrapped errors.
+type bareJoin struct{}
+
+func (bareJoin) Error() string   { return "joins nothing" }
+func (bareJoin) Unwrap() []error { return nil }
+
 // An error nobody has marked as unable to hide a refusal keeps the condition as
 // it was, so a step added later can never turn it True over a live refusal.
 func TestSetResourcesControlled_OnlyMarkedErrorsLetAResolvedRefusalClear(t *testing.T) {
@@ -792,12 +804,14 @@ func TestSetResourcesControlled_OnlyMarkedErrorsLetAResolvedRefusalClear(t *test
 		err  error
 		want metav1.ConditionStatus
 	}{
-		"no error":              {err: nil, want: metav1.ConditionTrue},
-		"only judged errors":    {err: errors.Join(judged(unknown), judged(unknown)), want: metav1.ConditionTrue},
-		"a wrapped judged one":  {err: fmt.Errorf("stage: %w", judged(unknown)), want: metav1.ConditionTrue},
-		"an unknown error":      {err: unknown, want: metav1.ConditionFalse},
-		"unknown beside judged": {err: errors.Join(judged(unknown), unknown), want: metav1.ConditionFalse},
-		"a refusal beside one":  {err: errors.Join(judged(unknown), refusal), want: metav1.ConditionFalse},
+		"no error":                      {err: nil, want: metav1.ConditionTrue},
+		"only judged errors":            {err: errors.Join(judged(unknown), judged(unknown)), want: metav1.ConditionTrue},
+		"a wrapped judged one":          {err: fmt.Errorf("stage: %w", judged(unknown)), want: metav1.ConditionTrue},
+		"an unknown error":              {err: unknown, want: metav1.ConditionFalse},
+		"unknown beside judged":         {err: errors.Join(judged(unknown), unknown), want: metav1.ConditionFalse},
+		"a refusal beside one":          {err: errors.Join(judged(unknown), refusal), want: metav1.ConditionFalse},
+		"an error that wraps nothing":   {err: bareWrapper{}, want: metav1.ConditionFalse},
+		"an empty join beside a judged": {err: errors.Join(judged(unknown), bareJoin{}), want: metav1.ConditionFalse},
 		"a refusal inside a judged one": {
 			err: judged(errors.Join(unknown, refusal)), want: metav1.ConditionFalse,
 		},
