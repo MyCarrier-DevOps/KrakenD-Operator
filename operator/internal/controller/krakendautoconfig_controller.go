@@ -242,7 +242,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// overrides reports its true cause.
 	if len(cueOutput.Entries) == 0 && len(cueOutput.Failed) == 0 && len(cueOutput.Skipped) == 0 {
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonNoOperations, stderrors.New(
-			"the OpenAPI spec has no operations; the endpoints this AutoConfig generated are kept "+
+			"evaluating the OpenAPI spec produced no operations (the spec has none, or the CUE definitions "+
+				"emit no endpoint entry for them); the endpoints this AutoConfig generated are kept "+
 				"(delete the AutoConfig to remove them)"), warnings)
 	}
 
