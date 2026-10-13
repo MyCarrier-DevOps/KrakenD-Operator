@@ -736,3 +736,27 @@ func TestGatewayAdmission_BothLicenseSourcesAreReviewed(t *testing.T) {
 		t.Errorf("%d reviews, want 2", len(reviews))
 	}
 }
+
+// When an edit changes which license the gateway uses, the source that takes
+// over is reviewed even though its own reference is unchanged: removing the
+// secretRef of a gateway that also names an ExternalSecret mounts the synced
+// Secret.
+func TestGatewayAdmission_LicenseSourceThatTakesOverIsReviewed(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	deny := func(*authorizationv1.ResourceAttributes) bool { return false }
+	v := &GatewayValidator{Client: reviewingClientBy(deny, &reviews), Checker: &scriptedChecker{}}
+	old := eeGatewayWithLicenseExternalSecret()
+	old.Spec.License.SecretRef = eeGatewayWithLicenseSecret("public-license").Spec.License.SecretRef
+	edited := eeGatewayWithLicenseExternalSecret()
+
+	resp := review(t, v, "alice", edited, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.license.externalSecret" || len(reviews) != 1 {
+		t.Errorf("causes = %+v after %d reviews, want one cause on spec.license.externalSecret after one review",
+			causes, len(reviews))
+	}
+}
