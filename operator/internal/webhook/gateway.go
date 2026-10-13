@@ -1395,13 +1395,11 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 //   - create on ExternalSecrets, because the operator creates the license
 //     ExternalSecret, which pulls a key of the writer's choice from a store.
 //
-// Each is reviewed on its own, whatever the CRD says about naming both, and
-// the source in use is reviewed when an edit changes which Secret the license
-// is read from.
-// Without
+// Each is reviewed on its own, whatever the CRD says about naming both. Without
 // it a gateway writer would read, with the operator's grant, what they could
 // not read themselves. An update that leaves a reference as stored is not
-// reviewed.
+// reviewed, unless the edit changes which Secret the license is read from: the
+// ExternalSecret that then takes over is reviewed.
 func (v *GatewayValidator) authorizeLicense(
 	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
@@ -1414,7 +1412,7 @@ func (v *GatewayValidator) authorizeLicense(
 		stored = *old.Spec.License
 	}
 	moved := old != nil && licenseSourceMoved(old, gw)
-	secretRefNew := old == nil || moved || !equality.Semantic.DeepEqual(stored.SecretRef, lic.SecretRef)
+	secretRefNew := old == nil || !equality.Semantic.DeepEqual(stored.SecretRef, lic.SecretRef)
 	// The ExternalSecret is the license in use only when no secretRef is set.
 	externalSecretNew := old == nil || (moved && lic.SecretRef == nil) || stored.ExternalSecret != lic.ExternalSecret
 	var errs field.ErrorList
@@ -1437,12 +1435,13 @@ func (v *GatewayValidator) authorizeLicense(
 	return errs, nil
 }
 
-// licenseSourceMoved reports whether an edit changes which Secret the license
-// is read from: a source whose own reference is unchanged is then newly in use.
+// licenseSourceMoved reports whether an edit changes which Secret and key the
+// license is read from. A named secretRef always wins, so an ExternalSecret
+// whose own reference is unchanged is newly in use only when this is true.
 func licenseSourceMoved(old, gw *v1alpha1.KrakenDGateway) bool {
-	oldName, oldKey, oldOK := resources.LicenseSecret(old)
-	name, key, ok := resources.LicenseSecret(gw)
-	return oldName != name || oldKey != key || oldOK != ok
+	oldName, oldKey, _ := resources.LicenseSecret(old)
+	name, key, _ := resources.LicenseSecret(gw)
+	return oldName != name || oldKey != key
 }
 
 // authorizeDragonflyPassword requires the requester to be able to read the
