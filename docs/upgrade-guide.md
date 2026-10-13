@@ -3364,11 +3364,14 @@ Namespace as well.
    overlay's `metrics-server-cert` Secret is yours to delete; set
    `metrics.certManager.enabled: true` instead.
 4. Delete the old certificate Secret, after its Certificate is gone.
-5. Apply this release's CRDs (see *CRD Upgrades*). Helm skips CRDs that
-   already exist.
-6. Run `helm install` with the release name `krakend-operator`, which keeps the
-   object names. Set `replicaCount: 1` and
-   `nodeSelector: {kubernetes.io/os: linux}` to keep the old shape.
+5. Mark the four CRDs `helm.sh/resource-policy=keep`, so that no failed
+   install or rollback can delete them.
+6. Run `helm install --take-ownership` with the release name `krakend-operator`,
+   which keeps the object names and adopts the CRDs. Under Helm 4, also pass
+   `--force-conflicts`: Helm 4 installs server-side, and kustomize's
+   `kubectl-client-side-apply` (or OLM) owns `.spec.versions`. Set
+   `replicaCount: 1` and `nodeSelector: {kubernetes.io/os: linux}` to keep the
+   old shape.
 7. Verify (see *Post-Upgrade Verification*).
 
 Run the block in bash or zsh: it uses brace expansion. Set `VERSION` to the
@@ -3396,14 +3399,17 @@ kubectl -n "$NS" delete --ignore-not-found secret/webhook-server-cert
 kubectl delete --ignore-not-found clusterrolebinding krakend-operator-manager-rolebinding krakend-operator-metrics-auth-rolebinding
 kubectl delete --ignore-not-found clusterrole krakend-operator-manager-role krakend-operator-metrics-auth-role krakend-operator-metrics-reader \
   krakend-operator-krakend{gateway,endpoint,backendpolicy,autoconfig}-{admin,editor,viewer}-role
-# Helm skips CRDs that already exist: apply this release's CRDs first, from its tag.
-for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
-  kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
-done
+# The CRDs stay. Mark them keep, then let the install adopt them.
+kubectl annotate crd krakend{gateways,endpoints,backendpolicies,autoconfigs}.gateway.krakend.io \
+  helm.sh/resource-policy=keep --overwrite
 helm repo add krakend-operator https://mycarrier-devops.github.io/KrakenD-Operator
 helm repo update
+#    Helm 3.18 or later:
 helm install krakend-operator krakend-operator/krakend-operator -n "$NS" --version "$VERSION" \
-  --set replicaCount=1 --set-string 'nodeSelector.kubernetes\.io/os=linux'
+  --take-ownership --set replicaCount=1 --set-string 'nodeSelector.kubernetes\.io/os=linux'
+#    Helm 4:
+helm install krakend-operator krakend-operator/krakend-operator -n "$NS" --version "$VERSION" \
+  --take-ownership --force-conflicts --set replicaCount=1 --set-string 'nodeSelector.kubernetes\.io/os=linux'
 ```
 
 Notes:
@@ -3412,14 +3418,18 @@ Notes:
   bindings resolve again.
 - The metrics Service is now `krakend-operator-metrics-service`. Update scrape
   configs that name it; the ServiceMonitor selects by label.
-- `helm install --take-ownership` is not an option: the Deployment's selector
-  changes, and a selector is immutable.
+- `--take-ownership` adopts only what still exists. After the deletes above,
+  that is the four CRDs. The old Deployment is deleted first because its
+  selector changes, and a selector is immutable.
+- Check the result as in *The CRDs are part of the chart* above: each CRD names
+  the release and carries `helm.sh/resource-policy: keep`.
 
 ### OLM
 
 The bundle was never published. A self-built one is removed by deleting its
-Subscription and ClusterServiceVersion (OLM keeps the CRDs), then running
-`helm install` as above.
+Subscription and ClusterServiceVersion (OLM keeps the CRDs), then marking the
+CRDs keep and running `helm install --take-ownership` as above. Under Helm 4 the
+install also needs `--force-conflicts`, because OLM owns `.spec.versions`.
 
 ### Rollback
 
