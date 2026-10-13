@@ -26,6 +26,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 )
 
 // These tests read run()'s source. run() starts a manager against a cluster, so
@@ -360,16 +362,35 @@ func TestCommand_WrapsNoMetricsHandlerInOtelHTTP(t *testing.T) {
 	}
 }
 
-// podTerminationGracePeriod is the chart's terminationGracePeriodSeconds,
+// podTerminationGracePeriod and preStopSleep are the chart's
+// terminationGracePeriodSeconds and the manager container's preStop sleep,
 // pinned by .github/scripts/chart-render-test.sh.
-const podTerminationGracePeriod = 10 * time.Second
+const (
+	podTerminationGracePeriod = 30 * time.Second
+	preStopSleep              = 5 * time.Second
+)
 
-// On SIGTERM the manager stops first and the telemetry flush follows: both fit
-// the pod's termination grace period only if the manager is bound too.
+// On SIGTERM the pre-stop sleep runs first, then the manager stops and the
+// telemetry flush follows: all three fit the pod's termination grace period
+// only if the manager is bound too.
 func TestShutdown_ManagerStopAndFlushFitTheGracePeriod(t *testing.T) {
-	if got := managerStopTimeout + telemetryFlushTimeout; got > podTerminationGracePeriod {
-		t.Errorf("manager stop %s plus flush %s = %s, want at most the %s grace period",
-			managerStopTimeout, telemetryFlushTimeout, got, podTerminationGracePeriod)
+	if got := preStopSleep + managerStopTimeout + telemetryFlushTimeout; got > podTerminationGracePeriod {
+		t.Errorf("pre-stop sleep %s plus manager stop %s plus flush %s = %s, want at most the %s grace period",
+			preStopSleep, managerStopTimeout, telemetryFlushTimeout, got, podTerminationGracePeriod)
+	}
+}
+
+// A validator may work for the whole admission budget, so the manager must
+// outlast it: otherwise a call still running when SIGTERM arrives gets no
+// answer.
+func TestShutdown_ManagerStopOutlastsAnAdmissionCall(t *testing.T) {
+	if managerStopTimeout <= webhooksetup.AdmissionBudget {
+		t.Errorf("manager stop %s does not outlast the %s admission budget",
+			managerStopTimeout, webhooksetup.AdmissionBudget)
+	}
+	if want := 15 * time.Second; managerStopTimeout != want {
+		t.Errorf("manager stop = %s, want %s: the API server gives up on a webhook call at its 15 s timeout",
+			managerStopTimeout, want)
 	}
 }
 
