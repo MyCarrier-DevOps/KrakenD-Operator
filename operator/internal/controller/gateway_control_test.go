@@ -724,6 +724,25 @@ func TestGatewayReconcile_AFailingPostRestartJobDoesNotKeepAResolvedRefusal(t *t
 	requireResourcesControlledTrue(t, c, gw)
 }
 
+// Nor does the collection of old config ConfigMaps, which refuses nothing.
+func TestGatewayReconcile_AFailingConfigMapCollectionDoesNotKeepAResolvedRefusal(t *testing.T) {
+	r, c, gw := resolvedRefusalGateway(t, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*metav1.PartialObjectMetadataList); ok {
+				return apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "",
+					errors.New("denied by policy"))
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatalf("expected the failed collection to be reported")
+	}
+
+	requireResourcesControlledTrue(t, c, gw)
+}
+
 // A Deployment the pass never wrote, because a hold applies, is not one the
 // gateway is known to control: the condition does not turn True on it.
 func TestGatewayReconcile_AHeldDeploymentDoesNotSetResourcesControlled(t *testing.T) {
