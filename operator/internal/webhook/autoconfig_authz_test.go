@@ -17,6 +17,8 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -27,6 +29,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -187,5 +191,44 @@ func TestAutoConfigAdmission_UnchangedOrConfigMapSourceIsNotReviewed(t *testing.
 				t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
 			}
 		})
+	}
+}
+
+// A review that cannot be made is not a verdict: a transient 500.
+func TestAutoConfigAdmission_AuthReviewFailureIs500(t *testing.T) {
+	c := fakeClientBuilderWith(interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			return errors.New("the server could not process the review")
+		},
+	}, testGateway())
+
+	resp := review(t, &AutoConfigValidator{Client: c}, "alice", autoConfigFetchingWithToken(), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+}
+
+// The review is the validator's first network call, so it runs within the
+// admission budget: a hung review ends with a clear 500, not the API server's
+// generic timeout.
+func TestAutoConfigAdmission_ReviewRunsWithinTheAdmissionBudget(t *testing.T) {
+	var deadline time.Time
+	var hasDeadline bool
+	c := fakeClientBuilderWith(interceptor.Funcs{
+		Create: func(ctx context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
+			deadline, hasDeadline = ctx.Deadline()
+			obj.(*authorizationv1.SubjectAccessReview).Status.Allowed = true
+			return nil
+		},
+	}, testGateway())
+
+	resp := review(t, &AutoConfigValidator{Client: c}, "alice", autoConfigFetchingWithToken(), nil)
+
+	if !resp.Allowed {
+		t.Fatalf("denied: %+v", resp.Result)
+	}
+	if !hasDeadline || time.Until(deadline) > AdmissionBudget {
+		t.Errorf("review deadline = %v (set: %v), want one within %v", deadline, hasDeadline, AdmissionBudget)
 	}
 }
