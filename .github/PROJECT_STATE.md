@@ -144,7 +144,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 
 - The kustomize tree and the OLM bundle are removed (owner decision: no kustomize). The chart is the only way to install, upgrade and roll back; `make deploy`, `undeploy` and `build-installer` are gone, and `make install` and `uninstall` apply `config/crd/bases` with kubectl. `config/` keeps the generated CRDs, the manager role, the webhook manifests and the samples.
 - The chart gained what the kustomize install provided: the 12 admin, editor and viewer ClusterRoles (always rendered), an opt-in cert-manager serving certificate for metrics (`metrics.certManager.enabled`) and an opt-in NetworkPolicy that admits the webhook port (`networkPolicy.*`).
-- The render tests read only `config/rbac/role.yaml` and `config/webhook/manifests.yaml`, and pin the termination grace period. e2e installs the operator from the chart (`helm template` with `--kube-version 1.33.0`, then `kubectl apply --server-side`), and the CI e2e job installs helm.
+- The render tests read `config/crd/bases`, `config/rbac/role.yaml` and `config/webhook/manifests.yaml`, and pin the termination grace period. e2e installs the operator from the chart (`helm template` with `--kube-version 1.33.0`, then `kubectl apply --server-side`), and the CI e2e job installs helm.
 - `make verify-manifests` runs `manifests` and `generate` and gates the CRDs, the role, the webhook manifests and the chart copies; it no longer downloads operator-sdk or kustomize.
 - `docs/upgrade-guide.md` has the exact steps to move a `make deploy` install to the chart without deleting a CRD. Verified by review only: no 1.33 cluster with a kustomize install was available.
 
