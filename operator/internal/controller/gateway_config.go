@@ -277,11 +277,16 @@ const configMapHistoryLimit = 3
 //
 // The ConfigMap an earlier operator version kept under the gateway's own name
 // is collected on the same terms, but never counts toward the history.
+//
+// Collection refuses nothing, so every error it returns is judged.
 func (r *KrakenDGatewayReconciler) collectConfigMaps(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, inUse, mounted string,
 ) (retErr error) {
 	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.collect_configmaps")
-	defer func() { tracing.End(span, retErr) }()
+	defer func() {
+		retErr = judged(retErr)
+		tracing.End(span, retErr)
+	}()
 	list := &metav1.PartialObjectMetadataList{}
 	list.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMapList"))
 	if err := r.List(ctx, list, client.InNamespace(gw.Namespace),
