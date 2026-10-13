@@ -3727,8 +3727,11 @@ func TestAutoConfigReconcile_TransientWriteErrorTakesPrecedenceOverHeldOperation
 		rejected  map[string]error
 		endpoints []*v1alpha1.KrakenDEndpoint
 	}{
-		"a failed operation":  {failed: []autoconfig.OperationIssue{failedGetB()}},
-		"a rejected endpoint": {rejected: map[string]error{"test-ac-getb": invalidError("test-ac-getb")}},
+		"a failed operation": {failed: []autoconfig.OperationIssue{failedGetB()}},
+		"a rejected endpoint": {
+			rejected:  map[string]error{"test-ac-getb": invalidError("test-ac-getb")},
+			endpoints: []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getB", "/b")},
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -3746,6 +3749,9 @@ func TestAutoConfigReconcile_TransientWriteErrorTakesPrecedenceOverHeldOperation
 
 			if _, err := reconcileAC(r, ac); err == nil {
 				t.Fatal("expected the transient write error to be returned for backoff")
+			}
+			if tt.rejected != nil && !slices.Contains(ops, "create test-ac-getb") {
+				t.Fatalf("writes = %v, want the rejected endpoint attempted, so the case really has a rejection", ops)
 			}
 			cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
 			if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonEndpointReconcileFailed {
