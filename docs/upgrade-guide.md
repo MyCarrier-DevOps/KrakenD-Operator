@@ -2108,8 +2108,18 @@ Removing a reference is never reviewed. A change to `spec.image`, `spec.ceImage`
 or `spec.dragonfly.image` is not reviewed either, so whoever may edit a gateway
 whose license or Dragonfly password is already set can read that one value
 through a new image. A holder of `create` on ExternalSecrets who may not `get`
-Secrets can likewise read the synced license through the gateway image. Both
-are documented under *User roles* in the chart README.
+Secrets can likewise read the synced license through the gateway image, and can
+read an existing Secret named `<gateway>-license` with a `LICENSE` key: the
+Deployment mounts it while the ExternalSecret has not synced, indefinitely if
+its remote key does not exist. These exceptions are documented under *User
+roles* in the chart README.
+
+Every Secret an object names is reviewed on its own, whether or not the CRD
+allows naming two (a gateway's `secretRef` and `externalSecret`, an
+AutoConfig's bearer and basic auth), with one `422` cause per denied reference.
+An edit that changes which Secret a gateway's license is read from, such as
+removing the `secretRef` of a gateway that also names an ExternalSecret, reviews
+the source that takes over.
 
 The webhooks need no new permission: `create` on `subjectaccessreviews` came
 with the post-restart Job check. The AutoConfig webhook now runs within the same
