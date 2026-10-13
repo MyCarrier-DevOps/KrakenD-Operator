@@ -21,12 +21,14 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -57,6 +59,16 @@ func gatewayWithJob(mutate func(*v1alpha1.PostRestartJobSpec)) *v1alpha1.KrakenD
 	gw := testGateway()
 	gw.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true"}
 	mutate(gw.Spec.PostRestartJob)
+	return gw
+}
+
+// eeGatewayWithLicenseSecret is an Enterprise gateway whose license is read
+// from key LICENSE of Secret name.
+func eeGatewayWithLicenseSecret(name string) *v1alpha1.KrakenDGateway {
+	gw := testGateway()
+	gw.Spec.Edition = v1alpha1.EditionEE
+	gw.Spec.License = &v1alpha1.LicenseConfig{SecretRef: &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: "LICENSE"}}
 	return gw
 }
 
@@ -351,5 +363,28 @@ func TestGatewayAdmission_PostRestartJobAllowListedSecurityContextNeedsNoReview(
 				t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
 			}
 		})
+	}
+}
+
+// The gateway mounts spec.license.secretRef into the container that runs the
+// writer's image, so the requester must be able to read that Secret. The denial
+// is a 422 on the field.
+func TestGatewayAdmission_LicenseSecretRefNeedsGetOnThatSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", eeGatewayWithLicenseSecret("team-license"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.license.secretRef.name" ||
+		causes[0].Type != metav1.CauseTypeForbidden ||
+		!strings.Contains(causes[0].Message, "may not get Secret team-license") {
+		t.Errorf("causes = %+v, want one Forbidden cause on spec.license.secretRef.name naming the Secret", causes)
+	}
+	if len(reviews) != 1 {
+		t.Errorf("%d reviews, want 1", len(reviews))
 	}
 }
