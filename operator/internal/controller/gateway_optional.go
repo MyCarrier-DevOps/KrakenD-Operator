@@ -202,38 +202,78 @@ func refuseUncontrolled(gw *v1alpha1.KrakenDGateway, obj client.Object, kind str
 	return refused
 }
 
-// notControlledIn returns every notControlledError in err's tree. errors.As
-// finds only the first, so it walks the tree by hand.
-func notControlledIn(err error) []*notControlledError {
+// judgedError marks an error from a step that cannot hide a refusal: one with
+// no take-over check to run, or whose check had already passed when it failed.
+// setResourcesControlled looks through it; an error without the mark may hide
+// one, so a pass that carries it leaves the condition as it was.
+type judgedError struct{ err error }
+
+func (e *judgedError) Error() string { return e.err.Error() }
+func (e *judgedError) Unwrap() error { return e.err }
+
+// judged marks err as one that cannot hide a refusal. nil stays nil.
+func judged(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &judgedError{err: err}
+}
+
+// errorLeaves returns the errors at the ends of err's tree: those that wrap
+// nothing, and every notControlledError and judgedError, which are not looked
+// into. errors.As finds only the first match, so it walks the tree by hand.
+func errorLeaves(err error) []error {
 	switch e := err.(type) { //nolint:errorlint // walks the tree; errors.As returns one match
 	case nil:
 		return nil
-	case *notControlledError:
-		return []*notControlledError{e}
+	case *notControlledError, *judgedError:
+		return []error{e}
 	case interface{ Unwrap() []error }:
-		var all []*notControlledError
+		var all []error
 		for _, inner := range e.Unwrap() {
-			all = append(all, notControlledIn(inner)...)
+			all = append(all, errorLeaves(inner)...)
 		}
 		return all
 	case interface{ Unwrap() error }:
-		return notControlledIn(e.Unwrap())
+		return errorLeaves(e.Unwrap())
 	}
-	return nil
+	return []error{err}
+}
+
+// notControlledIn returns every notControlledError in err's tree.
+func notControlledIn(err error) []*notControlledError {
+	var all []*notControlledError
+	for _, leaf := range errorLeaves(err) {
+		if e, ok := leaf.(*notControlledError); ok { //nolint:errorlint // leaves are matched exactly
+			all = append(all, e)
+		}
+	}
+	return all
+}
+
+// mayHideRefusal reports whether err carries an error that is not marked as
+// one that cannot hide a refusal.
+func mayHideRefusal(err error) bool {
+	return slices.ContainsFunc(errorLeaves(err), func(leaf error) bool {
+		_, ok := leaf.(*judgedError) //nolint:errorlint // leaves are matched exactly
+		return !ok
+	})
 }
 
 // setResourcesControlled records on gw which existing objects this pass left
 // alone, found in the errors err carries: False, naming each and what to do,
-// while there is one. It is True only when the pass refused nothing, failed
-// nothing and wrote the Deployment (deploymentWritten); a pass that failed for
-// another reason, or held the Deployment, could not evaluate every child, so it
-// leaves the condition as it was.
+// while there is one. It is True when the pass refused nothing and wrote the
+// Deployment (deploymentWritten), and each failure it had left every object it
+// would write judged: a post-restart Job or ConfigMap collection failure, or a
+// write rejected after its take-over check passed. A pass that held the
+// Deployment, or failed in a way that might hide a refusal, such as an object
+// it could not read, leaves the condition as it was.
 func (r *KrakenDGatewayReconciler) setResourcesControlled(
 	gw *v1alpha1.KrakenDGateway, err error, deploymentWritten bool,
 ) {
 	refused := notControlledIn(err)
 	if len(refused) == 0 {
-		if err != nil || !deploymentWritten {
+		if mayHideRefusal(err) || !deploymentWritten {
 			return
 		}
 		r.setConditionWithEvent(gw, metav1.Condition{
