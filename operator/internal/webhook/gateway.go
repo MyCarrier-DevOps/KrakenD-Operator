@@ -1395,7 +1395,10 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 //   - create on ExternalSecrets, because the operator creates the license
 //     ExternalSecret, which pulls a key of the writer's choice from a store.
 //
-// Each is reviewed on its own, whatever the CRD says about naming both. Without
+// Each is reviewed on its own, whatever the CRD says about naming both, and
+// the source in use is reviewed when an edit changes which Secret the license
+// is read from.
+// Without
 // it a gateway writer would read, with the operator's grant, what they could
 // not read themselves. An update that leaves a reference as stored is not
 // reviewed.
@@ -1410,9 +1413,12 @@ func (v *GatewayValidator) authorizeLicense(
 	if old != nil && old.Spec.License != nil {
 		stored = *old.Spec.License
 	}
+	moved := old != nil && licenseSourceMoved(old, gw)
+	secretRefNew := old == nil || moved || !equality.Semantic.DeepEqual(stored.SecretRef, lic.SecretRef)
+	// The ExternalSecret is the license in use only when no secretRef is set.
+	externalSecretNew := old == nil || (moved && lic.SecretRef == nil) || stored.ExternalSecret != lic.ExternalSecret
 	var errs field.ErrorList
-	if lic.SecretRef != nil && lic.SecretRef.Name != "" &&
-		(old == nil || !equality.Semantic.DeepEqual(stored.SecretRef, lic.SecretRef)) {
+	if lic.SecretRef != nil && lic.SecretRef.Name != "" && secretRefNew {
 		path := field.NewPath("spec", "license", "secretRef", "name")
 		denied, err := requireSecretRead(ctx, v.Client, path, gw.Namespace, lic.SecretRef.Name,
 			"the gateway mounts it into the container that runs spec.image (or spec.ceImage)")
@@ -1421,7 +1427,7 @@ func (v *GatewayValidator) authorizeLicense(
 		}
 		errs = append(errs, denied...)
 	}
-	if lic.ExternalSecret.Enabled && (old == nil || stored.ExternalSecret != lic.ExternalSecret) {
+	if lic.ExternalSecret.Enabled && externalSecretNew {
 		denied, err := v.requireExternalSecretCreate(ctx, gw)
 		if err != nil {
 			return nil, err
@@ -1429,6 +1435,14 @@ func (v *GatewayValidator) authorizeLicense(
 		errs = append(errs, denied...)
 	}
 	return errs, nil
+}
+
+// licenseSourceMoved reports whether an edit changes which Secret the license
+// is read from: a source whose own reference is unchanged is then newly in use.
+func licenseSourceMoved(old, gw *v1alpha1.KrakenDGateway) bool {
+	oldName, oldKey, oldOK := resources.LicenseSecret(old)
+	name, key, ok := resources.LicenseSecret(gw)
+	return oldName != name || oldKey != key || oldOK != ok
 }
 
 // authorizeDragonflyPassword requires the requester to be able to read the
