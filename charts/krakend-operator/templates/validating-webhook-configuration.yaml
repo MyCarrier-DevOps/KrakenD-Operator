@@ -14,8 +14,18 @@ metadata:
 # +kubebuilder:webhook markers, not this file. The template adds only the
 # service reference, the caBundle, failurePolicy from values, and the
 # cert-manager annotation above.
+# A generated field this template does not render fails the render, so the
+# install never registers something other than the markers describe.
 webhooks:
-{{- range (.Files.Get "files/webhook-manifests.yaml" | fromYaml).webhooks }}
+{{- $generated := .Files.Get "files/webhook-manifests.yaml" | fromYaml }}
+{{- if or (ne (toString $generated.kind) "ValidatingWebhookConfiguration") (not $generated.webhooks) }}
+{{- fail "files/webhook-manifests.yaml must hold one ValidatingWebhookConfiguration with webhooks" }}
+{{- end }}
+{{- range $generated.webhooks }}
+{{- $unknown := concat (keys (omit . "name" "admissionReviewVersions" "clientConfig" "failurePolicy" "rules" "sideEffects" "timeoutSeconds")) (keys (omit .clientConfig "service")) (keys (omit (.clientConfig.service | default dict) "name" "namespace" "path")) }}
+{{- if $unknown }}
+{{- fail (printf "webhook %s in files/webhook-manifests.yaml sets %s, which templates/validating-webhook-configuration.yaml does not render" .name (sortAlpha $unknown | join ", ")) }}
+{{- end }}
   - name: {{ .name }}
     admissionReviewVersions:
       {{- toYaml .admissionReviewVersions | nindent 6 }}
