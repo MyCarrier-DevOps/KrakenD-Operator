@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "charts/**"
+      - "operator/config/crd/**"
       - "operator/config/rbac/**"
       - "operator/config/webhook/**"
       - ".github/workflows/helm-ci.yml"
