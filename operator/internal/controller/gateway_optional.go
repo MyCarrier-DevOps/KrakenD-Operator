@@ -222,7 +222,7 @@ func judged(err error) error {
 }
 
 // errorLeaves returns the errors at the ends of err's tree: those that wrap
-// nothing, and every notControlledError and judgedError, which are not looked
+// nothing (or nothing the walk can reach), and every notControlledError and judgedError, which are not looked
 // into. errors.As finds only the first match, so it walks the tree by hand.
 func errorLeaves(err error) []error {
 	switch e := err.(type) { //nolint:errorlint // walks the tree; errors.As returns one match
@@ -235,9 +235,13 @@ func errorLeaves(err error) []error {
 		for _, inner := range e.Unwrap() {
 			all = append(all, errorLeaves(inner)...)
 		}
-		return all
+		if len(all) > 0 {
+			return all
+		}
 	case interface{ Unwrap() error }:
-		return errorLeaves(e.Unwrap())
+		if inner := errorLeaves(e.Unwrap()); len(inner) > 0 {
+			return inner
+		}
 	}
 	return []error{err}
 }
