@@ -217,9 +217,15 @@ func TestFetch_AnUnparseableRedirectLocationLeaksNothing(t *testing.T) {
 	requireNoSecretInSpans(t, rec.Ended(), "LOCSECRET")
 }
 
-// Nothing between clientSpans and the network can add a header: the transport
-// each production client wraps is the SSRF-safe *http.Transport itself.
+// Nothing between clientSpans and the network can add a header, and what each
+// production client wraps is the SSRF-safe transport: it refuses loopback,
+// which http.DefaultTransport (also an *http.Transport) does not. The strict
+// client also refuses a private address, which the lenient one allows.
 func TestNewFetcher_NothingWrapsTheTransportUnderTheSpans(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"openapi":"3.0.0"}`))
+	}))
+	defer srv.Close()
 	f := NewFetcher(fakeClient(), nil).(*httpFetcher)
 
 	for name, c := range map[string]*http.Client{"strict": f.strictClient, "lenient": f.lenientClient} {
@@ -230,6 +236,21 @@ func TestNewFetcher_NothingWrapsTheTransportUnderTheSpans(t *testing.T) {
 		if _, ok := spans.next.(*http.Transport); !ok {
 			t.Errorf("the %s client's clientSpans wraps %T, want *http.Transport", name, spans.next)
 		}
+		if resp, err := c.Get(srv.URL); err == nil {
+			_ = resp.Body.Close()
+			t.Errorf("the %s client reached loopback %s: it does not wrap the SSRF-safe transport", name, srv.URL)
+		}
+	}
+
+	// The address is never dialled: the strict client refuses it first. A
+	// strict client built on the lenient policy would dial it instead and
+	// fail only after the dial timeout.
+	resp, err := f.strictClient.Get("http://10.255.255.1:1/")
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "private address") {
+		t.Errorf("the strict client's error for a private address = %v, want a refusal naming a private address", err)
 	}
 }
 
