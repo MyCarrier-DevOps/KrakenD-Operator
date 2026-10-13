@@ -989,8 +989,8 @@ kubectl get krakendendpoints -A -o json | jq -r --arg ns <policy-namespace> --ar
 
 Remove or repoint those references and the deletion completes. If the operator
 is down, it completes when the operator is back. To remove the finalizer by
-hand, use the command in the upgrade guide under
-[Rollback](upgrade-guide.md#rollback). It is an UPDATE, which the policy webhook
+hand, use the command in the chart README's
+[Uninstall](../charts/krakend-operator/README.md#uninstall) section. It is an UPDATE, which the policy webhook
 still intercepts with `failurePolicy: Fail`, so it works only while the
 operator is up, or after the operator's webhook configuration is removed.
 Repoint the referencing endpoints first: a policy that is deleted while still
