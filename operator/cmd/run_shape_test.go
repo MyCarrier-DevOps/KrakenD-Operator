@@ -431,8 +431,8 @@ func TestRun_FlushesTelemetryOnEveryReturnWithinItsBudget(t *testing.T) {
 	if !ok {
 		t.Fatalf("the statement after telemetry.Setup is a %T, want the check of its error", run.Body.List[setup+1])
 	}
-	if cond, ok := check.Cond.(*ast.BinaryExpr); !ok || expr(cond.X) != "err" {
-		t.Fatal("the statement after telemetry.Setup does not compare err")
+	if cond, ok := check.Cond.(*ast.BinaryExpr); !ok || cond.Op != token.NEQ || expr(cond.Y) != "nil" {
+		t.Fatal("the statement after telemetry.Setup is not a check of the form <error> != nil")
 	}
 	deferred, ok := run.Body.List[setup+2].(*ast.DeferStmt)
 	if !ok {
