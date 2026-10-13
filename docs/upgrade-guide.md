@@ -120,7 +120,11 @@ A cluster installed from the old manifests moves to the chart once; see
      admission audit in item 5 prints lists same-shape endpoint pairs of one
      AutoConfig. After the upgrade such an AutoConfig reports
      `OperationsFailed` and keeps its stale endpoints until the pair is
-     resolved.
+     resolved;
+   - the no-operations audit under *Unreleased — AutoConfig fails sync on a
+     spec with no operations* lists the AutoConfigs whose spec generates
+     nothing; each fails with `NoOperations` after the upgrade, and its
+     endpoints are kept.
 
 7. **Check the chart values and the operator's new defaults** (Helm
    installs; read-only). This prints only the values you set, so `null` means the
@@ -586,14 +590,18 @@ case with no spec. A spec whose operations are all `HEAD`, `OPTIONS` or `TRACE`
 An AutoConfig that legitimately generates zero endpoints, a service that has
 retired every operation, was `Synced` before the upgrade and reports this
 failure after it. Before upgrading, list the AutoConfigs that currently
-generate nothing:
+generate nothing from their spec: those with no generated endpoint, and those
+whose generated endpoints are no more than their `additionalEndpoints` (an
+empty spec kept alive by `additionalEndpoints` is caught too):
 
 ```bash
-kubectl get kac -A -o json | jq -r '.items[] | select((.status.generatedEndpoints // 0) == 0) | "\(.metadata.namespace)/\(.metadata.name)"'
+kubectl get kac -A -o json | jq -r '.items[] | select((.status.generatedEndpoints // 0) <= ((.spec.additionalEndpoints // []) | length)) | "\(.metadata.namespace)/\(.metadata.name)"'
 ```
 
-An entry that is empty because its `spec.filter` excludes everything is
-unaffected; for each of the others, decide whether the upstream spec is
+The list can include AutoConfigs that are unaffected: one whose `spec.filter`
+excludes every operation, one whose operations are all skipped
+(`status.skippedOperations` is not empty), and one that holds operations
+(`status.failedOperations` is not empty). For each of the others, decide whether the upstream spec is
 broken (fix it) or the service has no operations (delete the AutoConfig, which
 removes its endpoints through their owner reference). Afterwards, find the
 affected resources cluster-wide:
