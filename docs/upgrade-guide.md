@@ -561,6 +561,49 @@ skip only the admission render check (see *Complete admission*).
 
 ---
 
+## Unreleased — AutoConfig fails sync on a spec with no operations
+
+Previously, an AutoConfig whose fetched spec yielded no operation at all
+(an empty `200` body, `{}`, a JSON error body, or an OpenAPI document without
+`paths`) synced successfully with 0 generated endpoints and deleted every
+endpoint it had generated, with `Synced=True` and no alert. This is now a
+fail-closed error, in line with the unmatched-override rule above.
+
+When the spec has no entry, no failed operation and no skipped operation, the
+sync fails: `status.phase` becomes `Error`, the `Synced` condition goes
+`False` with reason `NoOperations`, the `krakend_operator_autoconfig_synced`
+gauge goes to `0` (so `KrakenDAutoConfigNotSynced` fires), and a matching
+`Warning` event is emitted. The check runs before the overrides, so the
+endpoints the AutoConfig generated are kept as they were until the spec yields
+operations again. It applies on the first sync too, and also when
+`additionalEndpoints` would keep the generated set non-empty: an AutoConfig
+needs a spec with operations, and plain `KrakenDEndpoint` objects serve the
+case with no spec. A spec whose operations are all `HEAD`, `OPTIONS` or `TRACE`
+(skipped), or all excluded by `spec.filter`, is not affected.
+
+An AutoConfig that legitimately generates zero endpoints, a service that has
+retired every operation, was `Synced` before the upgrade and reports this
+failure after it. Before upgrading, list the AutoConfigs that currently
+generate nothing:
+
+```bash
+kubectl get kac -A -o json | jq -r '.items[] | select((.status.generatedEndpoints // 0) == 0) | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+An entry that is empty because its `spec.filter` excludes everything is
+unaffected; for each of the others, decide whether the upstream spec is
+broken (fix it) or the service has no operations (delete the AutoConfig, which
+removes its endpoints through their owner reference). Afterwards, find the
+affected resources cluster-wide:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .reason=="NoOperations")) | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+See *AutoConfig sync fails with `NoOperations`* in the runbook.
+
+---
+
 ## Unreleased — Gateway validation, status and admission fixes
 
 ### Config validation runs offline
