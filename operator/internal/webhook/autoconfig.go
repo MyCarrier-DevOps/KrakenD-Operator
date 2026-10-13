@@ -229,7 +229,7 @@ func (v *AutoConfigValidator) authorizeSourceAuth(
 
 // authSecretName is the field and the name of the Secret that auth names; the
 // name is empty when it names none.
-func authSecretName(auth *v1alpha1.AuthConfig) (*field.Path, string) {
+func authSecretName(auth *v1alpha1.AuthConfig) (path *field.Path, name string) {
 	base := field.NewPath("spec", "openapi", "auth")
 	switch {
 	case auth == nil:
