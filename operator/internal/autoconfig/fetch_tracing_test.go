@@ -220,7 +220,7 @@ func TestFetch_AnUnparseableRedirectLocationLeaksNothing(t *testing.T) {
 // Nothing between clientSpans and the network can add a header, and what each
 // production client wraps is the SSRF-safe transport: it refuses loopback,
 // which http.DefaultTransport (also an *http.Transport) does not. The strict
-// client also refuses a private address, which the lenient one allows.
+// client also refuses a private address.
 func TestNewFetcher_NothingWrapsTheTransportUnderTheSpans(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"openapi":"3.0.0"}`))
