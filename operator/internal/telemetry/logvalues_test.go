@@ -186,7 +186,9 @@ func TestLogger_ChildLoggersAndErrorsConvertValues(t *testing.T) {
 }
 
 // logsWithinTimeout logs value and reports the stdout output, failing the
-// test if logging has not finished in 30 seconds.
+// test if logging has not finished in 30 seconds. The bound only has to tell
+// a walk that ends from one that never does, so it is generous: a tight one
+// fails under -race on a loaded shared runner.
 func logsWithinTimeout(t *testing.T, value any) string {
 	t.Helper()
 	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
