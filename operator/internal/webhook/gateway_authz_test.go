@@ -72,6 +72,19 @@ func eeGatewayWithLicenseSecret(name string) *v1alpha1.KrakenDGateway {
 	return gw
 }
 
+// eeGatewayWithLicenseExternalSecret is an Enterprise gateway whose license is
+// pulled by an ExternalSecret from the vault ClusterSecretStore.
+func eeGatewayWithLicenseExternalSecret() *v1alpha1.KrakenDGateway {
+	gw := testGateway()
+	gw.Spec.Edition = v1alpha1.EditionEE
+	gw.Spec.License = &v1alpha1.LicenseConfig{ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{
+		Enabled:        true,
+		SecretStoreRef: v1alpha1.SecretStoreRef{Name: "vault", Kind: "ClusterSecretStore"},
+		RemoteRef:      v1alpha1.ExternalRemoteRef{Key: "krakend/license"},
+	}}
+	return gw
+}
+
 func secretEnvFrom(name string) []corev1.EnvFromSource {
 	return []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{
 		LocalObjectReference: corev1.LocalObjectReference{Name: name}}}}
@@ -477,5 +490,28 @@ func TestGatewayAdmission_UpdateThatChangesASecretReferenceIsReviewed(t *testing
 				t.Errorf("response = %+v after %d reviews, want a 422 denial after one review", resp.Result, len(reviews))
 			}
 		})
+	}
+}
+
+// The operator creates the license ExternalSecret, which pulls a key of the
+// writer's choice from a store, so the requester must be able to create
+// ExternalSecrets in the namespace.
+func TestGatewayAdmission_ExternalSecretLicenseNeedsCreateExternalSecrets(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", eeGatewayWithLicenseExternalSecret(), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.license.externalSecret" ||
+		causes[0].Type != metav1.CauseTypeForbidden ||
+		!strings.Contains(causes[0].Message, "may not create externalsecrets.external-secrets.io") {
+		t.Errorf("causes = %+v, want one Forbidden cause on spec.license.externalSecret", causes)
+	}
+	if len(reviews) != 1 {
+		t.Errorf("%d reviews, want 1", len(reviews))
 	}
 }
