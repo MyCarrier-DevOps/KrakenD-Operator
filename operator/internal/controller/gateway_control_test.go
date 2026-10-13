@@ -798,6 +798,9 @@ func TestSetResourcesControlled_OnlyMarkedErrorsLetAResolvedRefusalClear(t *test
 		"an unknown error":      {err: unknown, want: metav1.ConditionFalse},
 		"unknown beside judged": {err: errors.Join(judged(unknown), unknown), want: metav1.ConditionFalse},
 		"a refusal beside one":  {err: errors.Join(judged(unknown), refusal), want: metav1.ConditionFalse},
+		"a refusal inside a judged one": {
+			err: judged(errors.Join(unknown, refusal)), want: metav1.ConditionFalse,
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
