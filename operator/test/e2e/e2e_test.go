@@ -496,11 +496,12 @@ spec:
 			verifyLicenseState := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-dragonfly",
 					"-n", testNamespace, "-o",
-					"jsonpath={.status.conditions[?(@.type==\"LicenseSecretUnavailable\")].status}"+
-						"{.status.conditions[?(@.type==\"CEFallbackApplied\")].status}")
+					"jsonpath=unavailable={.status.conditions[?(@.type==\"LicenseSecretUnavailable\")].status}"+
+						",fallback={.status.conditions[?(@.type==\"CEFallbackApplied\")].status}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("True"))
+				g.Expect(output).To(Equal("unavailable=True,fallback="),
+					"want LicenseSecretUnavailable True and no CEFallbackApplied condition")
 			}
 			Eventually(verifyLicenseState).Should(Succeed())
 
