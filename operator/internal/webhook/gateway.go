@@ -1381,33 +1381,61 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 	return nil
 }
 
-// authorizeLicense requires the requester to be able to read the Secret that
-// spec.license.secretRef names. The gateway mounts it into the container that
-// runs spec.image (or spec.ceImage under CE fallback), so without this check a
-// gateway writer would read any Secret of the namespace with the operator's
-// grant. An update that leaves the reference as stored is not reviewed.
+// authorizeLicense requires the requester to hold the rights the operator
+// uses on the license the gateway names, when spec.license.secretRef or
+// spec.license.externalSecret is new or changed:
+//   - get on the Secret of spec.license.secretRef, which the gateway mounts
+//     into the container that runs spec.image (or spec.ceImage under CE
+//     fallback);
+//   - create on ExternalSecrets, because the operator creates the license
+//     ExternalSecret, which pulls a key of the writer's choice from a store.
+//
+// Without it a gateway writer would read, with the operator's grant, what they
+// could not read themselves. An update that leaves the reference as stored is
+// not reviewed.
 func (v *GatewayValidator) authorizeLicense(
 	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
-	if gw.Spec.License == nil || gw.Spec.License.SecretRef == nil || gw.Spec.License.SecretRef.Name == "" {
+	lic := gw.Spec.License
+	if lic == nil {
 		return nil, nil
 	}
-	if old != nil && old.Spec.License != nil &&
-		equality.Semantic.DeepEqual(old.Spec.License.SecretRef, gw.Spec.License.SecretRef) {
-		return nil, nil // the requester did not touch it
+	var stored v1alpha1.LicenseConfig
+	if old != nil && old.Spec.License != nil {
+		stored = *old.Spec.License
 	}
-	name := gw.Spec.License.SecretRef.Name
+	if lic.SecretRef != nil && lic.SecretRef.Name != "" &&
+		(old == nil || !equality.Semantic.DeepEqual(stored.SecretRef, lic.SecretRef)) {
+		path := field.NewPath("spec", "license", "secretRef", "name")
+		return requireSecretRead(ctx, v.Client, path, gw.Namespace, lic.SecretRef.Name,
+			"the gateway mounts it into the container that runs spec.image (or spec.ceImage)")
+	}
+	if lic.ExternalSecret.Enabled && (old == nil || stored.ExternalSecret != lic.ExternalSecret) {
+		return v.requireExternalSecretCreate(ctx, gw)
+	}
+	return nil, nil
+}
+
+// requireExternalSecretCreate is a Forbidden error on spec.license.externalSecret
+// unless the requester may create ExternalSecrets in the gateway's namespace.
+// The review carries no name: RBAC cannot restrict create by name.
+func (v *GatewayValidator) requireExternalSecretCreate(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway,
+) (field.ErrorList, error) {
 	user, allowed, err := reviewRequester(ctx, v.Client, authorizationv1.ResourceAttributes{
-		Namespace: gw.Namespace, Verb: "get", Resource: "secrets", Name: name})
-	if err != nil {
+		Namespace: gw.Namespace, Verb: "create", Group: "external-secrets.io", Resource: "externalsecrets"})
+	if err != nil || allowed {
 		return nil, err
 	}
-	if allowed {
-		return nil, nil
+	ref := gw.Spec.License.ExternalSecret.SecretStoreRef
+	kind := ref.Kind
+	if kind == "" {
+		kind = "SecretStore"
 	}
-	return field.ErrorList{field.Forbidden(field.NewPath("spec", "license", "secretRef", "name"), fmt.Sprintf(
-		"%q may not get Secret %s in namespace %s; the gateway mounts it into the container that runs "+
-			"spec.image (or spec.ceImage)", user, truncate(name, echoLimit), gw.Namespace))}, nil
+	return field.ErrorList{field.Forbidden(field.NewPath("spec", "license", "externalSecret"), fmt.Sprintf(
+		"%q may not create externalsecrets.external-secrets.io in namespace %s; the operator creates the "+
+			"license ExternalSecret, which reads %s %s", user, gw.Namespace,
+		truncate(kind, echoLimit), truncate(ref.Name, echoLimit)))}, nil
 }
 
 // postRestartJobBorrowsRights reports whether the Job would run as a
