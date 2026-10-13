@@ -272,22 +272,9 @@ so there is no other route back. After migrating a `make deploy` install,
 > holds one. Roll back first, then remove the finalizer from every policy: the
 > current operator re-adds it on any reconcile, so removing it before the older
 > operator runs does not last. Run the same command after you uninstall the
-> operator while policies remain. It is idempotent:
->
-> ```bash
-> kubectl get krakendbackendpolicies -A -o json \
->   | jq -r '.items[] | .metadata as $m
->       | ($m.finalizers // [] | index("gateway.krakend.io/policy-protection")) as $i
->       | select($i != null) | "\($m.namespace) \($m.name) \($i)"' \
->   | while read -r ns name i; do
->       kubectl patch krakendbackendpolicy "$name" -n "$ns" --type=json -p "[
->         {\"op\":\"test\",\"path\":\"/metadata/finalizers/$i\",\"value\":\"gateway.krakend.io/policy-protection\"},
->         {\"op\":\"remove\",\"path\":\"/metadata/finalizers/$i\"}]"
->     done
-> ```
->
-> The `test` operation makes a patch fail, rather than remove another
-> finalizer, if the list changed in the meantime.
+> operator while policies remain, with the command in the chart README's
+> [Uninstall](../charts/krakend-operator/README.md#uninstall) section. It is
+> idempotent.
 >
 > Removing the finalizer from a policy that is already `Terminating` and still
 > referenced deletes it at once: its endpoints then report `PolicyNotFound` and
