@@ -2,6 +2,8 @@
 The operator does not use these roles. They exist for cluster admins to bind
 (with a RoleBinding or ClusterRoleBinding) to the people who manage each kind.
 They carry no aggregation labels, so nothing is granted until they are bound.
+The krakendgateway and krakendautoconfig admin and editor roles also reach any Secret in
+the namespace they are bound in, through the operator; grant them like `get secrets`.
 */ -}}
 {{- $fullname := include "krakend-operator.fullname" . }}
 {{- range $kind, $resource := dict "krakendgateway" "krakendgateways" "krakendendpoint" "krakendendpoints" "krakendbackendpolicy" "krakendbackendpolicies" "krakendautoconfig" "krakendautoconfigs" }}
