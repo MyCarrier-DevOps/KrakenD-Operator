@@ -53,6 +53,8 @@ func (v *AutoConfigValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", obj)
 	}
+	ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
+	defer cancel()
 	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
 	defer func() { endRules(span, retErr) }()
 	errs, err := v.validateGatewayRef(ctx, ac)
@@ -94,6 +96,8 @@ func (v *AutoConfigValidator) ValidateUpdate(
 	if equality.Semantic.DeepEqual(old.Spec, ac.Spec) {
 		return nil, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
+	defer cancel()
 	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
 	defer func() { endRules(span, retErr) }()
 	var errs field.ErrorList
