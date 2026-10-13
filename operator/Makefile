@@ -198,7 +198,7 @@ endif
 
 .PHONY: install
 install: manifests ## Install the CRDs into the cluster of the current kubeconfig.
-	$(KUBECTL) apply --server-side -f config/crd/bases
+	$(KUBECTL) apply --server-side --force-conflicts -f config/crd/bases
 
 .PHONY: uninstall
 uninstall: manifests ## Uninstall the CRDs (and every KrakenD object). Call with ignore-not-found=true to ignore resource not found errors during deletion.
