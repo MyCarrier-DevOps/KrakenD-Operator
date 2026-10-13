@@ -1477,7 +1477,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		// Only after the Deployment has rolled out the applied config, image
 		// and plugins. Jobs are idempotent by name so each unique config
 		// revision produces exactly one Job.
-		errs = append(errs, r.reconcilePostRestartJob(ctx, gw, in))
+		errs = append(errs, judged(r.reconcilePostRestartJob(ctx, gw, in)))
 	}
 	errs = append(errs,
 		r.reconcileDragonfly(ctx, gw),
