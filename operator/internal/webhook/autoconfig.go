@@ -205,14 +205,27 @@ func (v *AutoConfigValidator) validateGatewayRef(
 func (v *AutoConfigValidator) authorizeSourceAuth(
 	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
 ) (field.ErrorList, error) {
-	auth := ac.Spec.OpenAPI.Auth
-	if ac.Spec.OpenAPI.URL == "" || auth == nil || auth.BearerTokenSecret == nil || auth.BearerTokenSecret.Name == "" {
+	path, name := authSecretName(ac.Spec.OpenAPI.Auth)
+	if ac.Spec.OpenAPI.URL == "" || name == "" {
 		return nil, nil
 	}
-	return requireSecretRead(ctx, v.Client,
-		field.NewPath("spec", "openapi", "auth", "bearerTokenSecret", "name"),
-		ac.Namespace, auth.BearerTokenSecret.Name,
+	return requireSecretRead(ctx, v.Client, path, ac.Namespace, name,
 		"the operator sends it as the Authorization header to spec.openapi.url")
+}
+
+// authSecretName is the field and the name of the Secret that auth names; the
+// name is empty when it names none.
+func authSecretName(auth *v1alpha1.AuthConfig) (*field.Path, string) {
+	base := field.NewPath("spec", "openapi", "auth")
+	switch {
+	case auth == nil:
+		return nil, ""
+	case auth.BearerTokenSecret != nil:
+		return base.Child("bearerTokenSecret", "name"), auth.BearerTokenSecret.Name
+	case auth.BasicAuthSecret != nil:
+		return base.Child("basicAuthSecret", "name"), auth.BasicAuthSecret.Name
+	}
+	return nil, ""
 }
 
 // validateFields runs the field rules for ac. With a stored object (an
