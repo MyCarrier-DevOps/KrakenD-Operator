@@ -4,15 +4,12 @@
 
 ### Via Helm
 
-Helm never upgrades the CRDs in a chart's `crds/` directory, so apply the
-release's CRDs yourself before you upgrade the operator:
+The CRDs are part of the chart, so `helm upgrade` moves them together with the
+operator. Do not apply them by hand:
 
 1. Work through the [Pre-Upgrade Checklist](#pre-upgrade-checklist). Its
    admission audit runs before the CRDs change.
-2. Apply the release's CRDs from its tag, with the loop in
-   [CRD Upgrades](#crd-upgrades), and set `VERSION` to that release.
-
-3. Upgrade the operator:
+2. Upgrade the operator:
 
    ```bash
    helm repo update
@@ -20,8 +17,11 @@ release's CRDs yourself before you upgrade the operator:
      -n krakend-operator-system --version "$VERSION"
    ```
 
-With the old CRDs in place, the new operator's status fields are dropped on
-every write and the rules that now live in the CRDs are not enforced.
+The first upgrade to the release that moved the CRDs into the chart needs a
+one-time migration instead: see
+[The CRDs are part of the chart](#unreleased--the-crds-are-part-of-the-chart).
+Until a release has been migrated, a plain `helm upgrade` refuses, naming the
+CRD it cannot import, and changes nothing.
 
 A cluster installed from the old manifests moves to the chart once; see
 [The Helm chart is the only install path](#unreleased--the-helm-chart-is-the-only-install-path).
@@ -147,10 +147,10 @@ A cluster installed from the old manifests moves to the chart once; see
    - Metrics scrapes start succeeding once the scraper's ServiceAccount is
      bound to the `<fullname>-metrics-reader` ClusterRole.
 
-8. **Apply this release's CRDs** once the audit in item 5 is clean and before
-   `helm upgrade`, using the commands in
-   [CRD Upgrades](#crd-upgrades). Helm does not update them, so skipping this
-   leaves the old schemas in place.
+8. **First upgrade to the release that moved the CRDs into the chart only: run
+   the one-time CRD migration** once the audit in item 5 is clean, as
+   [The CRDs are part of the chart](#unreleased--the-crds-are-part-of-the-chart)
+   describes. Every later upgrade is a plain `helm upgrade`.
 
 9. **Check who writes Secret references** (read-only). Writers of gateways with
    a `spec.license.secretRef`, a license `externalSecret` or a Dragonfly
@@ -164,27 +164,41 @@ A cluster installed from the old manifests moves to the chart once; see
 
 ## CRD Upgrades
 
-CRDs are installed in the Helm chart's `crds/` directory. Helm installs CRDs on first install but **does not update them on upgrade** by default.
+The CRDs are templates of the Helm chart (`templates/crds.yaml`, rendered from
+`charts/krakend-operator/files/crds/`), and every one carries
+`helm.sh/resource-policy: keep`:
 
-To update CRDs manually, from the release's tag:
+- `helm upgrade` and `helm rollback` move the CRD schemas together with the
+  operator. Do not apply CRDs by hand.
+- `helm uninstall` leaves the CRDs in place, and with them every KrakenD
+  object. Delete them yourself, as the chart README's
+  [Uninstall](../charts/krakend-operator/README.md#uninstall) section describes.
+- The account that runs Helm needs `create` and `update` on
+  `customresourcedefinitions`.
+- `--skip-crds` has no effect: the CRDs are no longer in `crds/`.
+- Never remove `helm.sh/resource-policy` from a live CRD, and never
+  `kubectl replace` one: a replace drops the annotation and Helm's ownership
+  metadata. Helm reads the annotation from the live object when an upgrade or a
+  rollback drops a resource, and a CRD without it is deleted with every object
+  of its kind.
 
-```bash
-VERSION=<version>
-for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
-  kubectl apply --server-side --force-conflicts -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
-done
-```
+Under Helm 4 the schemas are applied server-side, and `.spec.versions` is an
+atomic field with one owner. The field managers on a live CRD by how it got
+there:
 
-Or from a local checkout:
+| How the CRD was created | Owner of `.spec.versions` |
+|---|---|
+| `crds/` of a chart before this change, Helm 3 | `helm` (update) |
+| `crds/` of a chart before this change, Helm 4 | `helm` (apply) |
+| `kubectl apply --server-side`, which these docs used to tell you to run | `kubectl` |
+| `kubectl apply` (a `make deploy` install) | `kubectl-client-side-apply` |
+| The one-time migration | `helm` alone: `helm upgrade --take-ownership` on Helm 3, and with `--server-side=true --force-conflicts` on Helm 4 |
 
-```bash
-kubectl apply --server-side --force-conflicts -f charts/krakend-operator/crds/
-```
-
-Helm creates the CRDs under the field manager `helm`, and `.spec.versions` is
-atomic, so a server-side apply that changes a schema without
-`--force-conflicts` fails with a conflict. Helm never updates installed CRDs,
-so taking the fields over leaves nothing contested.
+After the migration nothing but Helm writes the CRDs, so later upgrades never
+conflict. A manual `kubectl apply --server-side --force-conflicts` of a CRD
+takes `.spec.versions` from Helm again, and the next Helm 4 upgrade that
+changes a schema then fails with a conflict until you run it once with
+`--force-conflicts`.
 
 ### RBAC (ClusterRole) and webhook copies are generated
 
@@ -257,7 +271,19 @@ so there is no other route back. After migrating a `make deploy` install,
 `helm rollback` has no earlier revision to return to; see
 [Unreleased — the Helm chart is the only install path](#unreleased--the-helm-chart-is-the-only-install-path).
 
-> **Note:** CRD changes cannot be rolled back via Helm. If a CRD schema change is incompatible, restore from backup.
+> **CRDs on rollback.**
+>
+> - `helm rollback`, and `helm upgrade --version <older>`, between two releases
+>   that both render the CRDs move the schemas back to the older release's.
+>   Pruning applies as for any older schema. A version that
+>   `status.storedVersions` still lists cannot be removed, so that CRD update
+>   fails without deleting anything. There is one version today, `v1alpha1`.
+> - A rollback to a release from before the CRDs moved into the chart leaves
+>   the CRDs at the newer schema. Helm skips deleting them because the live
+>   objects carry `helm.sh/resource-policy: keep`, and they drop out of the
+>   release manifest. The older operator then runs against the newer CRDs. The
+>   next `helm upgrade` to a release that renders the CRDs adopts them again
+>   without `--take-ownership`.
 
 > **Downgrading the operator past *Gateway reconcile correctness*.** Expect
 > these effects on every gateway:
@@ -291,11 +317,17 @@ so there is no other route back. After migrating a `make deploy` install,
 > `patch` on `krakendgateways` and `krakendgateways/status` (the Enterprise
 > license monitor). The trimmed ClusterRole grants none of them. `helm rollback` restores the older
 > role together with the older operator, and so does
-> `helm upgrade --version <previous-version>`. Neither restores the older CRDs
-> (Helm does not touch an installed CRD). If the older operator needs them,
-> apply the older release's CRDs with `kubectl apply -f`; the older CRD then
-> prunes `status.configEdition` on the older operator's next write, as
-> described in the *Gateway reconcile correctness* note above.
+> `helm upgrade --version <previous-version>`. Going back to a release that
+> renders the CRDs restores that release's CRDs too. A release from before the
+> CRDs moved into the chart leaves the newer CRDs in place (see *CRDs on
+> rollback* above). If the older operator needs the older CRDs, apply them
+> from the older tag, which has them at `operator/config/crd/bases` at every
+> release: `kubectl apply --server-side --force-conflicts -f
+> operator/config/crd/bases` from a checkout of that tag. This is the one
+> manual CRD apply left, and under Helm 4 the next `helm upgrade` then needs
+> `--force-conflicts`. The older CRD then prunes `status.configEdition` on the
+> older operator's next write, as described in the *Gateway reconcile
+> correctness* note above.
 
 ---
 
