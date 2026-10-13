@@ -112,7 +112,7 @@ func (v *EndpointValidator) ValidateDelete(
 func (v *EndpointValidator) admit(
 	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
 	defer cancel()
 
 	warnings, err := v.check(ctx, old, ep)

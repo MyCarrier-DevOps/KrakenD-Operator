@@ -58,7 +58,7 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", obj)
 	}
-	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
 	defer cancel()
 	return checkPolicyRender(ctx, v.Tracer, v.Client, v.Checker, v.Memo, nil, policy)
 }
@@ -82,7 +82,7 @@ func (v *PolicyValidator) ValidateUpdate(
 	if equality.Semantic.DeepEqual(old.Spec, policy.Spec) {
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
 	defer cancel()
 	return checkPolicyRender(ctx, v.Tracer, v.Client, v.Checker, v.Memo, old, policy)
 }

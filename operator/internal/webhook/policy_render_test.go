@@ -325,8 +325,8 @@ func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 		t.Errorf("checks received %s, want %s", got, strings.Join(wantArgs, " "))
 	}
 	for i, d := range chk.deadlines {
-		if d <= 0 || d > admissionBudget {
-			t.Errorf("check %d had %s left, want a deadline within %s", i, d, admissionBudget)
+		if d <= 0 || d > AdmissionBudget {
+			t.Errorf("check %d had %s left, want a deadline within %s", i, d, AdmissionBudget)
 		}
 	}
 }

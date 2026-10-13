@@ -54,8 +54,8 @@ func TestEndpointAdmission_DeniesAnEndpointThatFailsOnItsOwn(t *testing.T) {
 		t.Errorf("checks = %s, want the root alone then the endpoint alone", got)
 	}
 	for i, d := range chk.deadlines {
-		if d <= 0 || d > admissionBudget || !chk.memos[i] {
-			t.Errorf("check %d ran with %s left and memo %v, want a deadline within %s and the memo", i, d, chk.memos[i], admissionBudget)
+		if d <= 0 || d > AdmissionBudget || !chk.memos[i] {
+			t.Errorf("check %d ran with %s left and memo %v, want a deadline within %s and the memo", i, d, chk.memos[i], AdmissionBudget)
 		}
 	}
 }

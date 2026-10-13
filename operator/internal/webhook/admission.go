@@ -29,10 +29,11 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
 
-// admissionBudget is how long a validator works on one request. The API
+// AdmissionBudget is how long a validator works on one request. The API
 // server cuts a webhook call off at 15 s with a generic timeout; stopping
-// earlier lets the validator answer with a clear, transient error.
-const admissionBudget = 12 * time.Second
+// earlier lets the validator answer with a clear, transient error. The
+// operator's shutdown waits on it, so it is exported.
+const AdmissionBudget = 12 * time.Second
 
 // warningLimit bounds, in bytes, a verdict's summary quoted in a warning or a
 // denial.

@@ -113,7 +113,7 @@ func (v *GatewayValidator) ValidateDelete(
 func (v *GatewayValidator) admit(
 	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
-	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
 	defer cancel()
 
 	warnings, errs, err := v.structural(ctx, old, gw)

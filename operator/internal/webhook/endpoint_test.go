@@ -481,8 +481,8 @@ func TestEndpointAdmission_RouteCheckListRunsUnderTheAdmissionBudget(t *testing.
 
 	review(t, v, "alice", testEndpoint("new", "/a"), nil)
 
-	if left <= 0 || left > admissionBudget {
-		t.Errorf("the endpoint List ran with %s left, want a deadline within %s", left, admissionBudget)
+	if left <= 0 || left > AdmissionBudget {
+		t.Errorf("the endpoint List ran with %s left, want a deadline within %s", left, AdmissionBudget)
 	}
 }
 

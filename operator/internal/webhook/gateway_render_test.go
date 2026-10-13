@@ -251,8 +251,8 @@ func TestGatewayAdmission_ChecksRunUnderTheAdmissionBudget(t *testing.T) {
 		t.Fatalf("%d checks ran, want 6", len(chk.deadlines))
 	}
 	for i, left := range chk.deadlines {
-		if left <= 0 || left > admissionBudget {
-			t.Errorf("check %d ran with %s left, want a deadline within %s", i+1, left, admissionBudget)
+		if left <= 0 || left > AdmissionBudget {
+			t.Errorf("check %d ran with %s left, want a deadline within %s", i+1, left, AdmissionBudget)
 		}
 	}
 }
@@ -452,8 +452,8 @@ func TestGatewayAdmission_EditionSwitchLookupsRunUnderTheAdmissionBudget(t *test
 	review(t, v, "alice", testGateway(), old)
 
 	for what, d := range map[string]time.Duration{"endpoint List": listed, "policy Get": got} {
-		if d <= 0 || d > admissionBudget {
-			t.Errorf("the %s ran with %s left, want a deadline within %s", what, d, admissionBudget)
+		if d <= 0 || d > AdmissionBudget {
+			t.Errorf("the %s ran with %s left, want a deadline within %s", what, d, AdmissionBudget)
 		}
 	}
 }
