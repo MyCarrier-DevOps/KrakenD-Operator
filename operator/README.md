@@ -101,6 +101,10 @@ helm upgrade --install krakend-operator ../charts/krakend-operator \
 helm uninstall krakend-operator -n krakend-operator-system   # Leaves the CRDs
 ```
 
+Before you delete policies, their namespaces or the CRDs after an uninstall, follow the
+[chart README's Uninstall section](../charts/krakend-operator/README.md#uninstall): policies keep a
+finalizer that only the running operator removes. `make uninstall` hangs on them in the same way.
+
 ## License
 
 Copyright 2026 The KrakenD Operator Authors.
