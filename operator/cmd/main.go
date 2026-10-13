@@ -245,8 +245,9 @@ func run() int {
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
 
-		// The manager stops first on SIGTERM; the telemetry flush follows within
-		// the pod's grace period.
+		// The preStop sleep runs before SIGTERM reaches the process. Then the
+		// manager stops first; the telemetry flush follows within the pod's
+		// grace period.
 		GracefulShutdownTimeout: new(managerStopTimeout),
 	})
 	if err != nil {
