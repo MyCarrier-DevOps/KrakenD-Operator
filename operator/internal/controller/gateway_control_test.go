@@ -783,6 +783,41 @@ func TestGatewayReconcile_ARejectedWriteKeepsAResolvedRefusalOnlyWhenItsCheckCou
 	}
 }
 
+// An error nobody has marked as unable to hide a refusal keeps the condition as
+// it was, so a step added later can never turn it True over a live refusal.
+func TestSetResourcesControlled_OnlyMarkedErrorsLetAResolvedRefusalClear(t *testing.T) {
+	unknown := errors.New("something nobody has judged")
+	refusal := &notControlledError{kind: "service", namespace: "default", name: "test-gw"}
+	cases := map[string]struct {
+		err  error
+		want metav1.ConditionStatus
+	}{
+		"no error":              {err: nil, want: metav1.ConditionTrue},
+		"only judged errors":    {err: errors.Join(judged(unknown), judged(unknown)), want: metav1.ConditionTrue},
+		"a wrapped judged one":  {err: fmt.Errorf("stage: %w", judged(unknown)), want: metav1.ConditionTrue},
+		"an unknown error":      {err: unknown, want: metav1.ConditionFalse},
+		"unknown beside judged": {err: errors.Join(judged(unknown), unknown), want: metav1.ConditionFalse},
+		"a refusal beside one":  {err: errors.Join(judged(unknown), refusal), want: metav1.ConditionFalse},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gw := reconciledGateway()
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type: v1alpha1.ConditionResourcesControlled, Status: metav1.ConditionFalse,
+				Reason: v1alpha1.ReasonResourceNotControlled, Message: "stored",
+			})
+			r := newTestGatewayReconciler(fakeClientBuilder().Build(), nil, nil)
+
+			r.setResourcesControlled(gw, tc.err, true)
+
+			cond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionResourcesControlled)
+			if cond == nil || cond.Status != tc.want {
+				t.Errorf("ResourcesControlled = %+v, want %s", cond, tc.want)
+			}
+		})
+	}
+}
+
 // A Deployment the pass never wrote, because a hold applies, is not one the
 // gateway is known to control: the condition does not turn True on it.
 func TestGatewayReconcile_AHeldDeploymentDoesNotSetResourcesControlled(t *testing.T) {
