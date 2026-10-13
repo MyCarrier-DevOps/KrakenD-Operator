@@ -148,6 +148,14 @@ A cluster installed from the old manifests moves to the chart once; see
    [CRD Upgrades](#crd-upgrades). Helm does not update them, so skipping this
    leaves the old schemas in place.
 
+9. **Check who writes Secret references** (read-only). Writers of gateways with
+   a `spec.license.secretRef`, a license `externalSecret` or a Dragonfly
+   `passwordFromSecret`, and of AutoConfigs with URL auth, need `get` on those
+   Secrets, and `create` on `externalsecrets.external-secrets.io` for a license
+   ExternalSecret, or their next change to the reference is refused. Run the
+   two `jq` listings under *Complete admission*, and grant the rights to those
+   writers, GitOps ServiceAccounts included.
+
 ---
 
 ## CRD Upgrades
@@ -2019,6 +2027,76 @@ KrakenDGateways that use these fields. A GitOps controller's ServiceAccount, for
 example, needs `create` on `pods` in the gateway's namespace (for instance
 through the `edit` ClusterRole), or its sync of that gateway is refused.
 
+**A new Secret reference needs the right to read it.** The operator follows
+four Secret references with its own permissions, so what a gateway or an
+AutoConfig names used to be reachable whoever wrote the object. The webhooks now
+ask the API server whether the requesting user (the identity the API server
+authenticated, not the operator) may do what the operator does for them:
+
+- `spec.license.secretRef` on a gateway needs `get` on that Secret in the
+  gateway's namespace;
+- `spec.license.externalSecret`, when enabled, needs `create` on
+  `externalsecrets.external-secrets.io` in the gateway's namespace;
+- `spec.dragonfly.authentication.passwordFromSecret` on a gateway with Dragonfly
+  enabled needs `get` on that Secret;
+- `spec.openapi.auth.bearerTokenSecret` or `basicAuthSecret` on an AutoConfig
+  that fetches from a `spec.openapi.url` needs `get` on that Secret. An
+  AutoConfig that reads a ConfigMap sends no auth and needs no review.
+
+A write without the right is refused with `422 Invalid` naming the field, for
+example `spec.license.secretRef.name: Forbidden: "alice" may not get Secret
+team-license in namespace payments; the gateway mounts it into the container
+that runs spec.image (or spec.ceImage)`. A review that cannot be made, for
+example when the operator lacks `create` on `subjectaccessreviews`, is a
+`500` that controllers and GitOps tools retry. The Post-restart Job check above
+keeps its `403`.
+
+The review runs when the reference is new or changed, so stored objects keep
+reconciling, and an edit that leaves the reference as stored is admitted without
+a review, by anyone:
+
+- a gateway is reviewed when it is created, when `spec.license.secretRef`
+  (the name, key or `optional`) or `spec.license.externalSecret` changes, when
+  `spec.dragonfly.authentication` changes, or when Dragonfly is turned on while
+  a password is set;
+- an AutoConfig is reviewed when it is created or when anything in
+  `spec.openapi` changes, the URL included, because the URL decides where the
+  token goes.
+
+Removing a reference is never reviewed. A change to `spec.image`, `spec.ceImage`
+or `spec.dragonfly.image` is not reviewed either, so whoever may edit a gateway
+whose license or Dragonfly password is already set can read that one value
+through a new image. A holder of `create` on ExternalSecrets who may not `get`
+Secrets can likewise read the synced license through the gateway image. Both
+are documented under *User roles* in the chart README.
+
+The webhooks need no new permission: `create` on `subjectaccessreviews` came
+with the post-restart Job check. The AutoConfig webhook now runs within the same
+12 s budget as the gateway webhook, because the review is its first network
+call.
+
+Before upgrading, check who writes these objects:
+
+```bash
+kubectl get krakendgateways -A -o json | jq -r '.items[]
+  | select(.spec.license.secretRef.name or .spec.license.externalSecret.enabled
+           or .spec.dragonfly.authentication.passwordFromSecret.name)
+  | "\(.metadata.namespace)/\(.metadata.name)"'
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[]
+  | select(.spec.openapi.url and .spec.openapi.auth)
+  | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+Give their writers the rights above in each of those namespaces. A GitOps
+controller applies as its own identity (with Flux `spec.serviceAccountName` or
+Argo CD sync impersonation, the impersonated ServiceAccount), and a default
+install that is bound to a cluster-wide `*` passes. A restricted ServiceAccount
+needs `get` on `secrets` for each referenced Secret (`resourceNames` works; the
+built-in `edit` ClusterRole grants it namespace-wide) and, where a gateway uses
+`spec.license.externalSecret`, `create` on `externalsecrets.external-secrets.io`
+from a Role of your own. Server-side dry-runs and Argo CD's server-side diff run
+the webhooks too, so they need the same rights, or the diff shows the `422`.
+
 **Policy writes are checked alone and in every gateway that uses them.** A
 KrakenDBackendPolicy whose `raw` (or typed fields) KrakenD rejects is refused on
 its own, before anything references it, unless the stored policy already failed
@@ -2464,7 +2542,9 @@ The leader-election Role drops ConfigMaps and keeps `get`, `create` and
 `update` on Leases. The role also gains one rule: `create` on
 `authorization.k8s.io/subjectaccessreviews`, which the gateway webhook uses to
 check that a user who sets a post-restart Job's ServiceAccount, Secret
-references or a relaxed security context may create pods (see *Complete admission*). The chart used to grant
+references or a relaxed security context may create pods, and that a user who
+adds or changes a license, Dragonfly password or AutoConfig auth Secret reference
+may read that Secret (see *Complete admission*). The chart used to grant
 SubjectAccessReviews only with `metrics.enabled`, for the metrics endpoint; the
 manager role now carries the grant on every install.
 
