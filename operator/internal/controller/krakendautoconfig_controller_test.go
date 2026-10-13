@@ -4450,6 +4450,58 @@ func TestAutoConfigReconcile_AFailingSyncWarnsOnceUntilItsFailureChanges(t *test
 	}
 }
 
+func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoints(t *testing.T) {
+	bodies := map[string]string{
+		"an empty 200 body":                 ``,
+		"an empty JSON object":              `{}`,
+		"an OpenAPI document without paths": `{"openapi":"3.0.0","info":{"title":"t","version":"1"}}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := testAutoConfig()
+			c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+			f, ce, fi, g := defaultMocks()
+			r := newACReconciler(c, f, ce, fi, g)
+			m, reg := testMetrics(t)
+			r.Metrics = m
+
+			if _, err := reconcileAC(r, ac); err != nil {
+				t.Fatalf("first reconcile: %v", err)
+			}
+			const kept = "test-ac-listusers"
+			if err := c.Get(context.Background(), types.NamespacedName{Name: kept, Namespace: ac.Namespace},
+				&v1alpha1.KrakenDEndpoint{}); err != nil {
+				t.Fatalf("the first sync should create %s: %v", kept, err)
+			}
+
+			f.result = &autoconfig.FetchResult{Data: []byte(body)}
+			ce.output = &autoconfig.CUEOutput{}
+			g.output = &autoconfig.GenerateOutput{}
+			if _, err := reconcileAC(r, ac); err == nil {
+				t.Fatal("expected error for OnChange trigger, got nil")
+			}
+
+			if err := c.Get(context.Background(), types.NamespacedName{Name: kept, Namespace: ac.Namespace},
+				&v1alpha1.KrakenDEndpoint{}); err != nil {
+				t.Errorf("the endpoint of the last good sync must be kept: %v", err)
+			}
+			updated := getAC(t, c, ac)
+			synced := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+			if synced == nil || synced.Status != metav1.ConditionFalse || synced.Reason != v1alpha1.ReasonNoOperations {
+				t.Errorf("Synced = %+v, want False with reason %s", synced, v1alpha1.ReasonNoOperations)
+			}
+			if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+				t.Errorf("phase = %q, want %q", updated.Status.Phase, v1alpha1.AutoConfigPhaseError)
+			}
+			if got, ok := metricValue(t, reg, "krakend_operator_autoconfig_synced",
+				"namespace", ac.Namespace, "name", ac.Name); !ok || got != 0 {
+				t.Errorf("synced gauge = %v (present %v), want 0", got, ok)
+			}
+		})
+	}
+}
+
 func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
