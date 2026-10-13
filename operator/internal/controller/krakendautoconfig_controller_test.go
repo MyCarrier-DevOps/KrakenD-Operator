@@ -4460,18 +4460,30 @@ func TestAutoConfigReconcile_AFailingSyncWarnsOnceUntilItsFailureChanges(t *test
 }
 
 func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoints(t *testing.T) {
+	// Real evaluator, filter and generator, and no CUE definitions ConfigMap,
+	// so the embedded ones are used: each body goes through the spec
+	// post-processing and the CUE evaluation before it reaches the guard.
+	const goodSpec = `{"paths": {"/api/users": {"get": {"operationId": "listUsers",
+		"responses": {"200": {"description": "OK"}}}}}}`
 	bodies := map[string]string{
 		"an empty 200 body":                 ``,
 		"an empty JSON object":              `{}`,
+		"a JSON error body":                 `{"error":"upstream unavailable"}`,
 		"an OpenAPI document without paths": `{"openapi":"3.0.0","info":{"title":"t","version":"1"}}`,
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
-			cm := testCUEDefinitionsCM()
 			ac := testAutoConfig()
-			c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
-			f, ce, fi, g := defaultMocks()
-			r := newACReconciler(c, f, ce, fi, g)
+			c := fakeClientBuilder().WithObjects(ac).WithStatusSubresource(ac).Build()
+			f := &mockFetcher{result: &autoconfig.FetchResult{Data: []byte(goodSpec)}}
+			r := &KrakenDAutoConfigReconciler{
+				Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+				Fetcher:      f,
+				CUEEvaluator: autoconfig.NewCUEEvaluator(),
+				Filter:       autoconfig.NewFilter(),
+				Generator:    autoconfig.NewGenerator(),
+				Checker:      &fakeChecker{},
+			}
 			m, reg := testMetrics(t)
 			r.Metrics = m
 
@@ -4485,8 +4497,6 @@ func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoint
 			}
 
 			f.result = &autoconfig.FetchResult{Data: []byte(body)}
-			ce.output = &autoconfig.CUEOutput{}
-			g.output = &autoconfig.GenerateOutput{}
 			if _, err := reconcileAC(r, ac); err == nil {
 				t.Fatal("expected error for OnChange trigger, got nil")
 			}
