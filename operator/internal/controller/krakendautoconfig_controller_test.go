@@ -4510,6 +4510,11 @@ func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoint
 			if synced == nil || synced.Status != metav1.ConditionFalse || synced.Reason != v1alpha1.ReasonNoOperations {
 				t.Errorf("Synced = %+v, want False with reason %s", synced, v1alpha1.ReasonNoOperations)
 			}
+			// A CUE definition that emits no entry gives the same output, so the
+			// message must not blame the spec alone.
+			if synced != nil && !strings.Contains(synced.Message, "CUE definitions") {
+				t.Errorf("message %q should name the CUE definitions as a possible cause", synced.Message)
+			}
 			if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
 				t.Errorf("phase = %q, want %q", updated.Status.Phase, v1alpha1.AutoConfigPhaseError)
 			}
