@@ -52,7 +52,7 @@ func TestOperatorManifest_CarriesHelmStderrInTheError(t *testing.T) {
 }
 
 func TestOperatorTemplateArgs_RendersTheReleaseForTheImage(t *testing.T) {
-	got, err := operatorTemplateArgs("krakend-operator-system", "ghcr.io/mycarrier-devops/krakend-operator:e2e", true)
+	got, err := operatorTemplateArgs("krakend-operator-system", "ghcr.io/mycarrier-devops/krakend-operator:e2e")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestOperatorTemplateArgs_RendersTheReleaseForTheImage(t *testing.T) {
 }
 
 func TestOperatorTemplateArgs_SplitsTheTagAfterARegistryPort(t *testing.T) {
-	got, err := operatorTemplateArgs("ns", "localhost:5000/op:e2e", true)
+	got, err := operatorTemplateArgs("ns", "localhost:5000/op:e2e")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestOperatorTemplateArgs_SplitsTheTagAfterARegistryPort(t *testing.T) {
 }
 
 func TestOperatorTemplateArgs_RefusesAnImageWithoutATag(t *testing.T) {
-	if got, err := operatorTemplateArgs("ns", "localhost:5000/op", true); err == nil {
+	if got, err := operatorTemplateArgs("ns", "localhost:5000/op"); err == nil {
 		t.Errorf("args = %q, want an error for an image without a tag", got)
 	}
 }

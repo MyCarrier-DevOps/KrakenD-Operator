@@ -48,7 +48,7 @@ const (
 // and has no flag to override it, and the e2e cluster is 1.32. The chart has no hooks,
 // so applying the render is equivalent to an install.
 func OperatorManifest(namespace, image string, crds bool) (string, error) {
-	args, err := operatorTemplateArgs(namespace, image, crds)
+	args, err := operatorTemplateArgs(namespace, image)
 	if err != nil {
 		return "", err
 	}
@@ -99,7 +99,7 @@ func withoutCRDs(manifest []byte) (string, error) {
 }
 
 // operatorTemplateArgs is the helm template command line for OperatorManifest.
-func operatorTemplateArgs(namespace, image string, crds bool) ([]string, error) {
+func operatorTemplateArgs(namespace, image string) ([]string, error) {
 	i := strings.LastIndex(image, ":")
 	if i < 0 || strings.Contains(image[i:], "/") {
 		return nil, fmt.Errorf("image %q has no tag", image)
@@ -109,9 +109,6 @@ func operatorTemplateArgs(namespace, image string, crds bool) ([]string, error) 
 		"--kube-version", chartKubeVersion,
 		"--set", "image.repository=" + image[:i], "--set", "image.tag=" + image[i+1:],
 		"--set", "replicaCount=1",
-	}
-	if crds {
-		args = append(args, "--include-crds")
 	}
 	return args, nil
 }
