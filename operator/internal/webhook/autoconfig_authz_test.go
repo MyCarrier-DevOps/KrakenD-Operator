@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,5 +86,29 @@ func TestAutoConfigAdmission_BasicAuthSecretNeedsGetOnThatSecret(t *testing.T) {
 	}
 	if len(reviews) != 1 {
 		t.Errorf("%d reviews, want 1", len(reviews))
+	}
+}
+
+// The review is of the requester, with their whole identity, to get the named
+// Secret in the AutoConfig's namespace.
+func TestAutoConfigAdmission_AuthReviewIsOfTheRequesterToGetThatSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &AutoConfigValidator{Client: reviewingClient(true, &reviews, testGateway())}
+
+	if _, err := v.ValidateCreate(requestAs(requesterWithGroupsAndExtra), autoConfigFetchingWithToken()); err != nil {
+		t.Fatalf("denied: %v", err)
+	}
+
+	if len(reviews) != 1 {
+		t.Fatalf("%d reviews, want 1", len(reviews))
+	}
+	spec, attrs := reviews[0].Spec, reviews[0].Spec.ResourceAttributes
+	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "get" ||
+		attrs.Resource != "secrets" || attrs.Group != "" || attrs.Name != "spec-token" {
+		t.Errorf("review = %+v, want alice to get Secret spec-token in namespace default", spec)
+	}
+	if !slices.Equal(spec.Groups, []string{"team-a"}) || spec.UID != "u1" ||
+		!slices.Equal(spec.Extra["scopes"], authorizationv1.ExtraValue{"x"}) {
+		t.Errorf("review identity = %+v, want groups, UID and extra forwarded", spec)
 	}
 }
