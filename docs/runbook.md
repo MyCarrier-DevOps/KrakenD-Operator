@@ -938,7 +938,9 @@ breaks gateway <ns>/<name>: ...`.
   `status.conflicts`), a write to a policy whose stored content fails on its
   own, or a gateway update whose endpoints use such a policy (every endpoint
   that uses it is judged first; fix the policy), or many distinct policies not
-  checked yet since a restart (a retry helps). For failing, not yet recorded
+  checked yet since a restart (a retry helps), or a policy that many gateways use:
+  each gateway costs two checks before any is judged, and a retry continues from
+  the verdicts the pod remembers. For failing, not yet recorded
   endpoints, each request scans the endpoints in a random order, so a retry
   also reaches others; but on a gateway of several hundred served endpoints it
   may not converge. It stops when the gateway controller records their
