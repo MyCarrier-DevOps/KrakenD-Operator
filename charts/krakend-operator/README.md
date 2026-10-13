@@ -137,14 +137,20 @@ when the reference is added or changed:
   the operator sends it as an `Authorization` header to `spec.openapi.url`.
 
 A write without the right is refused with `422` naming the field. So these
-roles reach no Secret their holder could not read, with two exceptions, each
-limited to one value:
+roles reach no Secret their holder could not read, with the exceptions below,
+each limited to one value. Every Secret an object names is reviewed, whether or
+not the CRD allows naming two, and so is the license source that takes over when
+an edit changes which one the gateway uses.
 
 - whoever may edit a gateway whose license or Dragonfly password is already set
   can read that value by changing `spec.image`, `spec.ceImage` or
   `spec.dragonfly.image`;
 - a holder of `create` on ExternalSecrets who may not `get` Secrets can read the
-  synced license through the gateway image.
+  synced license through the gateway image;
+- an existing Secret named `<gateway>-license` with a `LICENSE` key is mounted
+  while the ExternalSecret has not synced, indefinitely if its remote key does
+  not exist, so the same holder can name a gateway to match such a Secret and
+  read it.
 
 Keep AutoConfig to trusted operators or CI for the SSRF reasons in the
 [architecture document](../../architecture/README.md#ssrf-mitigation). The
