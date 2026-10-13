@@ -2700,6 +2700,13 @@ chart now refuses to render `replicaCount` > 1 with
 `leaderElection.enabled: false`. To keep one replica, set `replicaCount: 1`
 (no PodDisruptionBudget is created then).
 
+A terminating operator pod keeps serving admission requests while the
+endpoints stop routing to it: the manager container sleeps 5 seconds in a
+`preStop` hook, and the pod's termination grace period is now 30 seconds (it
+was 10), so a rollout or node drain no longer cuts an admission call that is
+still running. The `sleep` hook needs Kubernetes 1.30 or later, and the chart
+already requires 1.33.
+
 ---
 
 ## Unreleased — Per-object validation
@@ -3178,7 +3185,7 @@ The image now reports its version (`service.version`) from the `VERSION` build a
 
 ### Shutdown flushes telemetry for at most 5 seconds
 
-The manager waits at most 4 seconds for its controllers and servers to stop (its graceful shutdown timeout, which controller-runtime defaults to 30 seconds). After it stops, the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that both fit the pod's 10 second termination grace period. Stdout logs are written as they are logged; only OTLP data can be cut off. A failed flush is printed to stderr. A second signal exits at once, without the flush.
+The manager container sleeps 5 seconds in a `preStop` hook, then the manager waits at most 15 seconds for its controllers and servers to stop (its graceful shutdown timeout, which controller-runtime defaults to 30 seconds; 15 seconds lets an admission call in flight finish). After it stops, the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that all three fit the pod's 30 second termination grace period. Stdout logs are written as they are logged; only OTLP data can be cut off. A failed flush is printed to stderr. A second signal exits at once, without the flush.
 
 ### AutoConfig fetch errors no longer show URL credentials
 
