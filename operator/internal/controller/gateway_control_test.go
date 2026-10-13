@@ -672,7 +672,7 @@ func TestGatewayReconcile_AFailedWriteDoesNotClearResourcesControlled(t *testing
 // although nothing is refused any more, and a client holding it and its
 // settled Deployment, with fail applied to every request.
 func resolvedRefusalGateway(
-	t *testing.T, fail interceptor.Funcs,
+	t *testing.T, fail interceptor.Funcs, existing ...client.Object,
 ) (*KrakenDGatewayReconciler, client.Client, *v1alpha1.KrakenDGateway) {
 	t.Helper()
 	const config = `{"version":3}`
@@ -683,7 +683,7 @@ func resolvedRefusalGateway(
 		Type: v1alpha1.ConditionResourcesControlled, Status: metav1.ConditionFalse,
 		Reason: v1alpha1.ReasonResourceNotControlled, Message: "service default/test-gw is somebody else's",
 	})
-	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, checksum)).
+	c := fakeClientBuilder().WithObjects(append([]client.Object{gw, settledDeployment(gw, checksum)}, existing...)...).
 		WithStatusSubresource(gw).WithInterceptorFuncs(fail).Build()
 	return newTestGatewayReconciler(c, renderOf(config), &mockValidator{}), c, gw
 }
@@ -781,6 +781,31 @@ func TestGatewayReconcile_ARejectedWriteKeepsAResolvedRefusalOnlyWhenItsCheckCou
 			requireResourcesControlledTrue(t, c, gw)
 		})
 	}
+}
+
+// An Update the API server rejects for its own reason, after the take-over
+// check passed on an object the gateway controls, leaves the object judged: a
+// refusal that has been resolved does not outlive it.
+func TestGatewayReconcile_ARejectedUpdateOfAControlledObjectIsJudged(t *testing.T) {
+	owner := servingGateway("", convergedImage)
+	// Its labels differ from the ones the gateway writes, so the write is an Update.
+	owned := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: owner.Name, Namespace: owner.Namespace, OwnerReferences: ownedBy(owner),
+	}}
+	r, c, gw := resolvedRefusalGateway(t, interceptor.Funcs{
+		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*corev1.Service); ok {
+				return apierrors.NewInvalid(schema.GroupKind{Kind: "Service"}, obj.GetName(), nil)
+			}
+			return cl.Update(ctx, obj, opts...)
+		},
+	}, owned)
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatalf("expected the rejected Service update to be reported")
+	}
+
+	requireResourcesControlledTrue(t, c, gw)
 }
 
 // A cache that misses a foreign Service the API server holds lets the check
