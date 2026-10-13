@@ -469,6 +469,22 @@ func TestGatewayAdmission_UnchangedSecretReferencesAreNotReviewedAgain(t *testin
 				return gw
 			}(),
 		},
+		"Dragonfly password, image and replicas changed": {
+			old: gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds"),
+			edited: func() *v1alpha1.KrakenDGateway {
+				gw := gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds")
+				gw.Spec.Dragonfly.Image, gw.Spec.Dragonfly.Replicas = "registry.example/dragonfly:1.2", ptr.To[int32](2)
+				return gw
+			}(),
+		},
+		"Dragonfly disabled": {
+			old: gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds"),
+			edited: func() *v1alpha1.KrakenDGateway {
+				gw := gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds")
+				gw.Spec.Dragonfly.Enabled = false
+				return gw
+			}(),
+		},
 		"license removed": {
 			old: eeGatewayWithLicenseSecret("team-license"),
 			edited: func() *v1alpha1.KrakenDGateway {
@@ -507,7 +523,18 @@ func TestGatewayAdmission_UpdateThatChangesASecretReferenceIsReviewed(t *testing
 	}
 	noLicense := testGateway()
 	noLicense.Spec.Edition = v1alpha1.EditionEE
+	dragonflyOff := gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds")
+	dragonflyOff.Spec.Dragonfly.Enabled = false
 	cases := map[string]struct{ old, edited *v1alpha1.KrakenDGateway }{
+		"Dragonfly enabled with a stored password": {dragonflyOff, gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds")},
+		"another Dragonfly password Secret": {gatewayWithDragonfly(v1alpha1.EditionEE, "other-creds"),
+			gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds")},
+		"a password added to a stored Dragonfly": {gatewayWithDragonfly(v1alpha1.EditionCE, ""),
+			func() *v1alpha1.KrakenDGateway {
+				gw := gatewayWithDragonfly(v1alpha1.EditionCE, "db-creds")
+				gw.Spec.Dragonfly.Image = "evil:1"
+				return gw
+			}()},
 		"no license before": {noLicense, eeGatewayWithLicenseSecret("team-license")},
 		"another Secret": {eeGatewayWithLicenseSecret("other-license"),
 			eeGatewayWithLicenseSecret("team-license")},
@@ -609,5 +636,24 @@ func TestGatewayAdmission_DragonflyPasswordSecretNeedsGetOnThatSecret(t *testing
 	}
 	if len(reviews) != 1 {
 		t.Errorf("%d reviews, want 1", len(reviews))
+	}
+}
+
+func TestGatewayAdmission_DragonflyPasswordReviewIsOfTheRequesterToGetThatSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", gatewayWithDragonfly(v1alpha1.EditionEE, "db-creds"), nil)
+
+	if !resp.Allowed {
+		t.Fatalf("denied: %+v", resp.Result)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("%d reviews, want 1", len(reviews))
+	}
+	spec, attrs := reviews[0].Spec, reviews[0].Spec.ResourceAttributes
+	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "get" ||
+		attrs.Resource != "secrets" || attrs.Group != "" || attrs.Name != "db-creds" {
+		t.Errorf("review = %+v, want alice to get Secret db-creds in namespace default", spec)
 	}
 }
