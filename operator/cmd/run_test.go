@@ -23,17 +23,47 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// runChildEnv marks the process TestRun_ControllerRuntimeLogsReachTheStdoutExporter
-// starts to run the operator in.
+// runChildEnv marks the process runOperator starts to run the operator in.
 const runChildEnv = "OPERATOR_TEST_RUN_CHILD"
 
 // logRecord is the part of a stdout log record the test reads.
 type logRecord struct {
 	Body         struct{ Value string }
 	SeverityText string
+}
+
+// runOperator runs run() in a process of its own, the way main does, and
+// returns its exit status and what it wrote. test names the calling test, which
+// the child process runs and which then calls run(). The child has an empty
+// kubeconfig and an environment of its own, with no OTEL_* variable except
+// those in env, given as KEY=value.
+func runOperator(t *testing.T, test string, env ...string) (exit int, stdout, stderr *bytes.Buffer) {
+	t.Helper()
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^"+test+"$")
+	cmd.Env = append([]string{runChildEnv + "=1", "KUBECONFIG=" + kubeconfig, "HOME=" + t.TempDir(),
+		"GOCOVERDIR=" + os.Getenv("GOCOVERDIR")}, env...)
+	stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+
+	err := cmd.Run()
+
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return 0, stdout, stderr
+	case errors.As(err, &exitErr):
+		return exitErr.ExitCode(), stdout, stderr
+	}
+	t.Fatalf("starting the operator: %v", err)
+	return 0, nil, nil
 }
 
 // controller-runtime fulfils its root logger once per process, so only the
@@ -46,23 +76,10 @@ func TestRun_ControllerRuntimeLogsReachTheStdoutExporter(t *testing.T) {
 	if os.Getenv(runChildEnv) == "1" {
 		os.Exit(run())
 	}
-	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
-	if err := os.WriteFile(kubeconfig, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestRun_ControllerRuntimeLogsReachTheStdoutExporter$")
-	// An environment of its own: no OTEL_* variable and no real kubeconfig.
-	cmd.Env = []string{runChildEnv + "=1", "KUBECONFIG=" + kubeconfig, "HOME=" + t.TempDir(),
-		"GOCOVERDIR=" + os.Getenv("GOCOVERDIR")}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-
-	err := cmd.Run()
-
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-		t.Fatalf("exit = %v, want exit status 1 (no Kubernetes configuration)\nstdout:\n%s\nstderr:\n%s",
-			err, &stdout, &stderr)
+	exit, stdout, stderr := runOperator(t, "TestRun_ControllerRuntimeLogsReachTheStdoutExporter")
+	if exit != 1 {
+		t.Fatalf("exit status = %d, want 1 (no Kubernetes configuration)\nstdout:\n%s\nstderr:\n%s",
+			exit, stdout, stderr)
 	}
 	bodies := map[string]string{}
 	for _, line := range bytes.Split(stdout.Bytes(), []byte("\n")) {
@@ -76,12 +93,36 @@ func TestRun_ControllerRuntimeLogsReachTheStdoutExporter(t *testing.T) {
 		bodies[r.Body.Value] = r.SeverityText
 	}
 	if got, ok := bodies["starting the operator"]; !ok || got != "INFO" {
-		t.Errorf("no INFO record \"starting the operator\" on stdout\nstdout:\n%s\nstderr:\n%s", &stdout, &stderr)
+		t.Errorf("no INFO record \"starting the operator\" on stdout\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 	if got, ok := bodies["unable to load the Kubernetes client configuration"]; !ok || got != "ERROR" {
-		t.Errorf("no ERROR record for the kubeconfig on stdout\nstdout:\n%s\nstderr:\n%s", &stdout, &stderr)
+		t.Errorf("no ERROR record for the kubeconfig on stdout\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 	if stderr.Len() != 0 {
-		t.Errorf("stderr = %q, want nothing: every record goes through the pipeline", &stderr)
+		t.Errorf("stderr = %q, want nothing: every record goes through the pipeline", stderr)
+	}
+}
+
+// Setup fails before any exporter is built when a setting cannot be used, and
+// run() then exits with status 1 and says why on stderr, the only place left
+// to say it. The endpoint keeps the test independent of any default: nothing
+// dials it.
+func TestRun_AnUnusableTelemetrySettingExitsWithStatus1(t *testing.T) {
+	if os.Getenv(runChildEnv) == "1" {
+		os.Exit(run())
+	}
+
+	exit, stdout, stderr := runOperator(t, "TestRun_AnUnusableTelemetrySettingExitsWithStatus1",
+		"OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:1", "OTEL_TRACES_EXPORTER=jaeger")
+
+	if exit != 1 {
+		t.Errorf("exit status = %d, want 1\nstdout:\n%s\nstderr:\n%s", exit, stdout, stderr)
+	}
+	const want = `setting up telemetry: OTEL_TRACES_EXPORTER="jaeger" is not supported`
+	if !strings.HasPrefix(stderr.String(), want) {
+		t.Errorf("stderr = %q, want it to start with %q", stderr, want)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing: no log pipeline exists yet", stdout)
 	}
 }
