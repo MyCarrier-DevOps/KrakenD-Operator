@@ -62,8 +62,9 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	cp config/crd/bases/*.yaml ../charts/krakend-operator/files/crds/
 	# The chart's manager ClusterRole and its ValidatingWebhookConfiguration
 	# render their rules from these copies (templates/clusterrole.yaml and
-	# templates/validating-webhook-configuration.yaml), so they cannot drift
-	# from the markers; verify-manifests below gates the copies like the CRDs.
+	# templates/validating-webhook-configuration.yaml), so they follow the
+	# markers; verify-manifests below gates the copies like the CRDs. The webhook
+	# template fails the render on a field the copy sets and it does not render.
 	mkdir -p ../charts/krakend-operator/files
 	cp config/rbac/role.yaml ../charts/krakend-operator/files/manager-role.yaml
 	cp config/webhook/manifests.yaml ../charts/krakend-operator/files/webhook-manifests.yaml
@@ -84,8 +85,9 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 #     `manifests` target copies from the controller-gen output. The chart's
 #     templates/crds.yaml, templates/clusterrole.yaml and
 #     templates/validating-webhook-configuration.yaml render those copies, so
-#     the chart cannot drift from the Go types or from the +kubebuilder:rbac
-#     and +kubebuilder:webhook markers.
+#     the chart follows the Go types and the +kubebuilder:rbac and
+#     +kubebuilder:webhook markers. The webhook template fails the render on a
+#     field of the copy that it does not render.
 # It also catches NEW untracked files under those paths as a whole, not just
 # modifications to already-tracked files: `git diff --exit-code` alone is blind
 # to a newly-generated file that was never committed.
