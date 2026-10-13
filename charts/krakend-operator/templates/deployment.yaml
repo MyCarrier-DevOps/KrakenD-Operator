@@ -31,11 +31,15 @@ spec:
       serviceAccountName: {{ include "krakend-operator.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 30
       containers:
         - name: manager
           image: {{ include "krakend-operator.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           env:
             - name: POD_NAMESPACE
               valueFrom:
