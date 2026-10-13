@@ -783,6 +783,49 @@ func TestGatewayReconcile_ARejectedWriteKeepsAResolvedRefusalOnlyWhenItsCheckCou
 	}
 }
 
+// A cache that misses a foreign Service the API server holds lets the check
+// pass on an absent object. A Create the API server then rejects for its own
+// reason, before its existence check, proves nothing about the Service: the
+// condition keeps its refusal.
+func TestGatewayReconcile_ACreateRejectedAfterACacheMissKeepsTheRefusal(t *testing.T) {
+	const config = `{"version":3}`
+	checksum := hash.SHA256Hex([]byte(config))
+	gw := servingGateway(checksum, convergedImage)
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionResourcesControlled, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonResourceNotControlled, Message: "service default/test-gw is somebody else's",
+	})
+	foreign := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+	server := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, checksum), foreign).
+		WithStatusSubresource(gw).Build()
+	cache := interceptor.NewClient(server, interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Service); ok {
+				return apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, key.Name)
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*corev1.Service); ok {
+				return apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "", errors.New("quota"))
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	})
+	r := newTestGatewayReconciler(cache, renderOf(config), &mockValidator{})
+	r.APIReader = server
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatalf("expected the rejected Service create to be reported")
+	}
+
+	got := meta.FindStatusCondition(getGateway(t, server, gw).Status.Conditions, v1alpha1.ConditionResourcesControlled)
+	if got == nil || got.Status != metav1.ConditionFalse {
+		t.Errorf("ResourcesControlled = %+v, want it to stay False", got)
+	}
+}
+
 // bareWrapper is an error that has an Unwrap method but wraps nothing.
 type bareWrapper struct{}
 
