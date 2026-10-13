@@ -876,14 +876,17 @@ and one of these causes:
 - `spec.dragonfly.authentication.passwordFromSecret.name: Forbidden: "<user>" may not get Secret <name> in namespace <ns>; the Dragonfly operator puts it into the environment of the container that runs spec.dragonfly.image`
 - `spec.openapi.auth.bearerTokenSecret.name: Forbidden: "<user>" may not get Secret <name> in namespace <ns>; the operator sends it as the Authorization header to spec.openapi.url` (or `basicAuthSecret.name`)
 
-**Cause:** The reference is new or changed, and the user making the request, or
+**Cause:** The reference is new or changed (or the edit removed
+`spec.license.secretRef`, and the enabled `spec.license.externalSecret` now
+supplies the license), and the user making the request, or
 the ServiceAccount a GitOps controller impersonates, lacks `get` on the named
 Secret in that namespace, or `create` on `externalsecrets.external-secrets.io`.
 The operator reads these Secrets, and creates the ExternalSecret, with its own
 permissions, so the webhook asks the API server (SubjectAccessReview) whether
 the requester could do the same. For an AutoConfig, any change to
 `spec.openapi` counts, because the URL decides where the token goes. An edit
-that leaves the reference as stored is not reviewed.
+that leaves the reference as stored, and changes nothing it depends on, is
+not reviewed.
 
 **Resolution:** Have a user who may read the Secret make the change, or grant
 the requester the right. A Role scoped to the one Secret is enough:
@@ -897,7 +900,7 @@ kubectl create rolebinding license-reader -n <namespace> \
 
 For a license ExternalSecret, grant `create` on
 `externalsecrets.external-secrets.io` instead. Or leave the reference
-unchanged. A `500` with `reviewing the requester's access` instead means the
+unchanged, and keep the `secretRef` of a gateway that also names an ExternalSecret. A `500` with `reviewing the requester's access` instead means the
 review itself failed: check that the operator's role has `create` on
 `subjectaccessreviews`.
 
