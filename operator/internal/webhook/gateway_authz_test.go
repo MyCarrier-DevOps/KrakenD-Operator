@@ -42,6 +42,15 @@ import (
 func reviewingClient(
 	allowed bool, reviews *[]authorizationv1.SubjectAccessReview, objs ...client.Object,
 ) client.Client {
+	return reviewingClientBy(func(*authorizationv1.ResourceAttributes) bool { return allowed }, reviews, objs...)
+}
+
+// reviewingClientBy answers each SubjectAccessReview with allow's verdict on
+// its resource attributes and records the reviews it was asked for.
+func reviewingClientBy(
+	allow func(*authorizationv1.ResourceAttributes) bool,
+	reviews *[]authorizationv1.SubjectAccessReview, objs ...client.Object,
+) client.Client {
 	return fakeClientBuilderWith(interceptor.Funcs{
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			sar, ok := obj.(*authorizationv1.SubjectAccessReview)
@@ -49,7 +58,7 @@ func reviewingClient(
 				return c.Create(ctx, obj, opts...)
 			}
 			*reviews = append(*reviews, *sar.DeepCopy())
-			sar.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: allowed}
+			sar.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: allow(sar.Spec.ResourceAttributes)}
 			return nil
 		},
 	}, objs...)
