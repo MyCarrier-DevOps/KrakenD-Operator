@@ -388,3 +388,22 @@ func TestGatewayAdmission_LicenseSecretRefNeedsGetOnThatSecret(t *testing.T) {
 		t.Errorf("%d reviews, want 1", len(reviews))
 	}
 }
+
+func TestGatewayAdmission_LicenseSecretRefReviewIsOfTheRequesterToGetThatSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", eeGatewayWithLicenseSecret("team-license"), nil)
+
+	if !resp.Allowed {
+		t.Fatalf("denied: %+v", resp.Result)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("%d reviews, want 1", len(reviews))
+	}
+	spec, attrs := reviews[0].Spec, reviews[0].Spec.ResourceAttributes
+	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "get" ||
+		attrs.Resource != "secrets" || attrs.Group != "" || attrs.Name != "team-license" {
+		t.Errorf("review = %+v, want alice to get Secret team-license in namespace default", spec)
+	}
+}
