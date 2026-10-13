@@ -1395,9 +1395,10 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 //   - create on ExternalSecrets, because the operator creates the license
 //     ExternalSecret, which pulls a key of the writer's choice from a store.
 //
-// Without it a gateway writer would read, with the operator's grant, what they
-// could not read themselves. An update that leaves the reference as stored is
-// not reviewed.
+// Each is reviewed on its own, whatever the CRD says about naming both. Without
+// it a gateway writer would read, with the operator's grant, what they could
+// not read themselves. An update that leaves a reference as stored is not
+// reviewed.
 func (v *GatewayValidator) authorizeLicense(
 	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
@@ -1409,16 +1410,25 @@ func (v *GatewayValidator) authorizeLicense(
 	if old != nil && old.Spec.License != nil {
 		stored = *old.Spec.License
 	}
+	var errs field.ErrorList
 	if lic.SecretRef != nil && lic.SecretRef.Name != "" &&
 		(old == nil || !equality.Semantic.DeepEqual(stored.SecretRef, lic.SecretRef)) {
 		path := field.NewPath("spec", "license", "secretRef", "name")
-		return requireSecretRead(ctx, v.Client, path, gw.Namespace, lic.SecretRef.Name,
+		denied, err := requireSecretRead(ctx, v.Client, path, gw.Namespace, lic.SecretRef.Name,
 			"the gateway mounts it into the container that runs spec.image (or spec.ceImage)")
+		if err != nil {
+			return nil, err
+		}
+		errs = append(errs, denied...)
 	}
 	if lic.ExternalSecret.Enabled && (old == nil || stored.ExternalSecret != lic.ExternalSecret) {
-		return v.requireExternalSecretCreate(ctx, gw)
+		denied, err := v.requireExternalSecretCreate(ctx, gw)
+		if err != nil {
+			return nil, err
+		}
+		errs = append(errs, denied...)
 	}
-	return nil, nil
+	return errs, nil
 }
 
 // authorizeDragonflyPassword requires the requester to be able to read the
