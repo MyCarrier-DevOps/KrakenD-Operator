@@ -141,7 +141,7 @@ func (v *GatewayValidator) structural(
 	if old != nil {
 		errs = newErrors(errs, v.storedErrors(gw, old))
 	}
-	licenseErrs, err := v.authorizeLicense(ctx, gw)
+	licenseErrs, err := v.authorizeLicense(ctx, old, gw)
 	if err != nil {
 		return warnings, nil, unavailable(err)
 	}
@@ -1385,10 +1385,16 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 // spec.license.secretRef names. The gateway mounts it into the container that
 // runs spec.image (or spec.ceImage under CE fallback), so without this check a
 // gateway writer would read any Secret of the namespace with the operator's
-// grant.
-func (v *GatewayValidator) authorizeLicense(ctx context.Context, gw *v1alpha1.KrakenDGateway) (field.ErrorList, error) {
+// grant. An update that leaves the reference as stored is not reviewed.
+func (v *GatewayValidator) authorizeLicense(
+	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
+) (field.ErrorList, error) {
 	if gw.Spec.License == nil || gw.Spec.License.SecretRef == nil || gw.Spec.License.SecretRef.Name == "" {
 		return nil, nil
+	}
+	if old != nil && old.Spec.License != nil &&
+		equality.Semantic.DeepEqual(old.Spec.License.SecretRef, gw.Spec.License.SecretRef) {
+		return nil, nil // the requester did not touch it
 	}
 	name := gw.Spec.License.SecretRef.Name
 	user, allowed, err := reviewRequester(ctx, v.Client, authorizationv1.ResourceAttributes{
