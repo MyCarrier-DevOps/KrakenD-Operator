@@ -21,10 +21,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -126,5 +128,64 @@ func TestAutoConfigAdmission_URLChangeWithStoredAuthIsReviewed(t *testing.T) {
 
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity || len(reviews) != 1 {
 		t.Errorf("response = %+v after %d reviews, want a 422 denial after one review", resp.Result, len(reviews))
+	}
+}
+
+// A change to spec.openapi that moves where a stored Secret goes is reviewed:
+// widening the reachable hosts, or switching from a ConfigMap, which sends no
+// auth, to a URL, which does.
+func TestAutoConfigAdmission_SourceChangesThatSendAStoredSecretAreReviewed(t *testing.T) {
+	widened := autoConfigFetchingWithToken()
+	widened.Spec.OpenAPI.AllowClusterLocal = true
+	fromConfigMap := autoConfigFetchingWithToken()
+	fromConfigMap.Spec.OpenAPI.URL = ""
+	fromConfigMap.Spec.OpenAPI.ConfigMapRef = &v1alpha1.ConfigMapKeyRef{Name: "spec", Key: "api.json"}
+	cases := map[string]struct{ old, edited *v1alpha1.KrakenDAutoConfig }{
+		"cluster-local hosts allowed": {old: autoConfigFetchingWithToken(), edited: widened},
+		"ConfigMap source before":     {old: fromConfigMap, edited: autoConfigFetchingWithToken()},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &AutoConfigValidator{Client: reviewingClient(false, &reviews, testGateway())}
+
+			resp := review(t, v, "alice", tc.edited, tc.old)
+
+			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity || len(reviews) != 1 {
+				t.Errorf("response = %+v after %d reviews, want a 422 denial after one review", resp.Result, len(reviews))
+			}
+		})
+	}
+}
+
+// A source the requester did not touch is not reviewed again, and a ConfigMap
+// source, which never sends auth, is not reviewed at all.
+func TestAutoConfigAdmission_UnchangedOrConfigMapSourceIsNotReviewed(t *testing.T) {
+	periodic := autoConfigFetchingWithToken()
+	periodic.Spec.Trigger = v1alpha1.TriggerPeriodic
+	periodic.Spec.Periodic = &v1alpha1.PeriodicSpec{Interval: metav1.Duration{Duration: time.Minute}}
+	configMap := autoConfigFetchingWithToken()
+	configMap.Spec.OpenAPI.URL = ""
+	configMap.Spec.OpenAPI.ConfigMapRef = &v1alpha1.ConfigMapKeyRef{Name: "spec", Key: "api.json"}
+	cases := map[string]struct{ old, edited *v1alpha1.KrakenDAutoConfig }{
+		"only the trigger changed": {old: autoConfigFetchingWithToken(), edited: periodic},
+		"a new ConfigMap source":   {old: nil, edited: configMap},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &AutoConfigValidator{Client: reviewingClient(false, &reviews, testGateway())}
+
+			var old runtime.Object // nil on a create
+			if tc.old != nil {
+				old = tc.old
+			}
+
+			resp := review(t, v, "alice", tc.edited, old)
+
+			if !resp.Allowed || len(reviews) != 0 {
+				t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
+			}
+		})
 	}
 }
