@@ -655,6 +655,7 @@ const (
     ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
     ReasonUnmatchedOverride             = "UnmatchedOverride"
     ReasonAmbiguousOverride             = "AmbiguousOverride"
+    ReasonNoOperations                  = "NoOperations"
     ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
     ReasonOperationsFailed              = "OperationsFailed"
     ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
@@ -1495,7 +1496,9 @@ flowchart TD
     J3 --> J4
     J4 --> J5{Whole-evaluation<br/>CUE OK?}
     J5 -->|No| J6[Fail sync:<br/>CUEEvaluationFailed]
-    J5 -->|Yes| J8{Every override matched an<br/>operationId and backend index?}
+    J5 -->|Yes| J7{Any entry, Failed or<br/>Skipped operation?}
+    J7 -->|No| J7F[Fail sync:<br/>NoOperations]
+    J7 -->|Yes| J8{Every override matched an<br/>operationId and backend index?}
     J8 -->|No| J9[Fail sync:<br/>UnmatchedOverride]
     J8 -->|Yes| J10{Override operationId declared<br/>by more than one operation?}
     J10 -->|Yes| J11[Fail sync:<br/>AmbiguousOverride]
@@ -2854,7 +2857,7 @@ client := fake.NewClientBuilder().
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
 | Validator unavailable (binary missing, timeout, killed, temp-file I/O, validation copy not prepared) | Set `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emit one Warning event, leave `Ready` Unknown and the serving phase and applied config unchanged, return `error` — controller-runtime retries with backoff | `krakend check -t -n -c` hits its deadline or `/usr/local/bin/krakend` is missing |
-| AutoConfig spec/CUE/unmatched-override/ambiguous-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode or a fetch past the 2-minute deadline, which fail closed as `SpecFetchFailed` instead of falling back to the raw spec |
+| AutoConfig spec/CUE/no-operations/unmatched-override/ambiguous-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `NoOperations`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode or a fetch past the 2-minute deadline, which fail closed as `SpecFetchFailed` instead of falling back to the raw spec |
 | AutoConfig held operations (CUE evaluation of one entry, the gateway config check, an API rejection of the endpoint) | Set `Synced=False` with reason `OperationsFailed`, list them in `status.failedOperations`, emit one Warning event when `Synced` or `status.failedOperations` changes, return `nil` and requeue at the resync interval: deterministic, so no backoff | `CUEEvaluationFailed`, `ConfigValidationFailed`, `EndpointRejected` |
 | AutoConfig transient endpoint write, adoption or delete failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`); every endpoint is attempted and the failures are aggregated | `EndpointReconcileFailed` |
 | Validated render whose ConfigMap cannot be published (a ConfigMap at the name that holds the right bytes but is not the gateway's copy, quota, size, or a payload-mismatching copy that cannot be deleted) | Set `ConfigValid=Unknown` with reason `ConfigPublishFailed` (message carries the cause, bounded to 4 KiB), emit a Warning event on a change of reason, leave `Ready` Unknown and the serving phase and applied config unchanged, return `error` — controller-runtime retries with backoff | A ConfigMap the gateway does not control at `<gateway>-config-<hash>` |
