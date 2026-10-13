@@ -202,8 +202,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// succeeds. They would otherwise repeat on every resync, so they are
 	// collected only when this reconcile's combined checksum differs from the
 	// checksum the last successful sync recorded. Failure paths leave
-	// status.SpecChecksum unchanged, so each retry of a failing sync whose
-	// inputs changed emits them again.
+	// status.SpecChecksum unchanged, so a failing sync whose inputs changed
+	// collects them on every retry; recordSyncedFailure emits them only when
+	// the failure changes.
 	warnings := &inputWarnings{inputsChanged: combinedChecksum != origStatus.SpecChecksum}
 	for _, note := range capList(specWarnings(specNotes)) {
 		warnings.add(v1alpha1.ReasonSpecWarning, note)
@@ -490,8 +491,12 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 // condition False with the given reason and message (bounded by
 // truncateMessage), the endpoint readiness as of now (refreshReadiness), and
 // the Ready, phase and observedGeneration derived from them, then, once that
-// status write succeeds, the buffered input warnings followed by a Warning
-// event with the same message. It returns the status write's error, if any, other than a Conflict: a
+// status write succeeds and only when the failure differs from the one the
+// stored status already shows (failureChanged), the buffered input warnings
+// followed by a Warning event with the same message. A failure that repeats
+// emits nothing: the recorder's per-object budget would otherwise go to the
+// repeated warnings and drop the event of a later, different failure. It
+// returns the status write's error, if any, other than a Conflict: a
 // reconcile whose failure-status write conflicts read a stale copy of the
 // AutoConfig, but its sync failed all the same, so it records no events and
 // its caller returns the failure's own result. The quiet conflictRequeueDelay
@@ -507,6 +512,7 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 ) error {
 	// The span records a conflicting write, which the return value does not.
 	var spanErr error
+	before := ac.Status.DeepCopy()
 	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.status")
 	defer func() { tracing.End(span, spanErr) }()
 	// A failure can list every operation or write that failed, which would
@@ -531,8 +537,10 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 		spanErr = fmt.Errorf("updating %s status: %w", reason, err)
 		return spanErr
 	}
-	warnings.emit(r.Recorder, ac)
-	r.Recorder.Event(ac, "Warning", reason, message)
+	if failureChanged(before, &ac.Status) {
+		warnings.emit(r.Recorder, ac)
+		r.Recorder.Event(ac, "Warning", reason, message)
+	}
 	return nil
 }
 
