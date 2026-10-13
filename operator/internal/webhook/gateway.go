@@ -141,6 +141,11 @@ func (v *GatewayValidator) structural(
 	if old != nil {
 		errs = newErrors(errs, v.storedErrors(gw, old))
 	}
+	licenseErrs, err := v.authorizeLicense(ctx, gw)
+	if err != nil {
+		return warnings, nil, unavailable(err)
+	}
+	errs = append(errs, licenseErrs...)
 	eeErrs, err := v.eeNamespacesOnCE(ctx, old, gw)
 	if err != nil {
 		return warnings, nil, unavailable(err)
@@ -1374,6 +1379,29 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 			user, gw.Namespace))
 	}
 	return nil
+}
+
+// authorizeLicense requires the requester to be able to read the Secret that
+// spec.license.secretRef names. The gateway mounts it into the container that
+// runs spec.image (or spec.ceImage under CE fallback), so without this check a
+// gateway writer would read any Secret of the namespace with the operator's
+// grant.
+func (v *GatewayValidator) authorizeLicense(ctx context.Context, gw *v1alpha1.KrakenDGateway) (field.ErrorList, error) {
+	if gw.Spec.License == nil || gw.Spec.License.SecretRef == nil || gw.Spec.License.SecretRef.Name == "" {
+		return nil, nil
+	}
+	name := gw.Spec.License.SecretRef.Name
+	user, allowed, err := reviewRequester(ctx, v.Client, authorizationv1.ResourceAttributes{
+		Namespace: gw.Namespace, Verb: "get", Resource: "secrets", Name: name})
+	if err != nil {
+		return nil, err
+	}
+	if allowed {
+		return nil, nil
+	}
+	return field.ErrorList{field.Forbidden(field.NewPath("spec", "license", "secretRef", "name"), fmt.Sprintf(
+		"%q may not get Secret %s in namespace %s; the gateway mounts it into the container that runs "+
+			"spec.image (or spec.ceImage)", user, truncate(name, echoLimit), gw.Namespace))}, nil
 }
 
 // postRestartJobBorrowsRights reports whether the Job would run as a
