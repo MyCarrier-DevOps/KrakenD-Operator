@@ -6,7 +6,7 @@ Installs the [KrakenD Operator](https://github.com/MyCarrier-DevOps/KrakenD-Oper
 
 - Kubernetes 1.33+
 - Helm 3.18 or later (older releases default `helm template` and `helm lint` to Kubernetes capabilities below 1.33 and refuse the chart's `kubeVersion` unless given `--kube-version`)
-- A deployer that can create and update CustomResourceDefinitions: the chart renders the CRDs, so install and upgrade write them
+- A deployer that can read, create and patch CustomResourceDefinitions: the chart renders the CRDs, so install and upgrade write them
 
 ## Install
 
