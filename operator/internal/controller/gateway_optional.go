@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -312,13 +313,21 @@ func (r *KrakenDGatewayReconciler) applyOwned(
 	ctx, span := tracing.Start(ctx, r.Tracer, "apply "+kind,
 		trace.WithAttributes(tracing.KeyName.String(obj.GetName())))
 	defer func() { tracing.End(span, retErr) }()
+	checked := false
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
 		if err := refuseUncontrolled(gw, obj, kind, consent); err != nil {
 			return err
 		}
+		checked = true
 		build()
 		return controllerutil.SetControllerReference(gw, obj, r.Scheme)
 	}); err != nil {
+		// A write that fails after the check passed cannot hide a refusal,
+		// unless the check ran on a stale copy (Conflict) or an absent one
+		// (AlreadyExists).
+		if checked && !apierrors.IsConflict(err) && !apierrors.IsAlreadyExists(err) {
+			err = judged(err)
+		}
 		return fmt.Errorf("reconciling %s: %w", kind, err)
 	}
 	return nil
