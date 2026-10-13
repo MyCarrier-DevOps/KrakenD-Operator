@@ -774,3 +774,67 @@ func TestGatewayAdmission_NoAdmissionRequestFailsClosed(t *testing.T) {
 		t.Errorf("error = %v after %d reviews, want an internal error and no review", err, len(reviews))
 	}
 }
+
+// Removing a secretRef that names the ExternalSecret's own target Secret under
+// another key leaves the Deployment mounting that Secret's LICENSE key, which
+// the ExternalSecret syncs: the key changing counts as the source taking over.
+func TestGatewayAdmission_LicenseSourceTakesOverFromAnotherKeyOfTheSameSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	deny := func(*authorizationv1.ResourceAttributes) bool { return false }
+	v := &GatewayValidator{Client: reviewingClientBy(deny, &reviews), Checker: &scriptedChecker{}}
+	old := eeGatewayWithLicenseExternalSecret()
+	old.Spec.License.SecretRef = eeGatewayWithLicenseSecret("gw-license").Spec.License.SecretRef
+	old.Spec.License.SecretRef.Key = "OTHER"
+	edited := eeGatewayWithLicenseExternalSecret()
+
+	resp := review(t, v, "alice", edited, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.license.externalSecret" || len(reviews) != 1 {
+		t.Errorf("causes = %+v after %d reviews, want one cause on spec.license.externalSecret after one review",
+			causes, len(reviews))
+	}
+}
+
+// A write that names both license sources, with both reviews denied, is
+// refused on both fields.
+func TestGatewayAdmission_BothLicenseSourcesDeniedGiveTwoCauses(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+	gw := eeGatewayWithLicenseExternalSecret()
+	gw.Spec.License.SecretRef = eeGatewayWithLicenseSecret("public-license").Spec.License.SecretRef
+
+	resp := review(t, v, "alice", gw, nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	var fields []string
+	for _, cause := range resp.Result.Details.Causes {
+		fields = append(fields, cause.Field)
+	}
+	slices.Sort(fields)
+	if !slices.Equal(fields, []string{"spec.license.externalSecret", "spec.license.secretRef.name"}) {
+		t.Errorf("cause fields = %v, want both license sources", fields)
+	}
+}
+
+// Adding a secretRef to a gateway that names an ExternalSecret makes the
+// secretRef the license in use, so only it is reviewed: the unchanged
+// ExternalSecret is no longer mounted.
+func TestGatewayAdmission_AddingASecretRefOverAnExternalSecretReviewsOnlyTheSecret(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+	edited := eeGatewayWithLicenseExternalSecret()
+	edited.Spec.License.SecretRef = eeGatewayWithLicenseSecret("public-license").Spec.License.SecretRef
+
+	resp := review(t, v, "alice", edited, eeGatewayWithLicenseExternalSecret())
+
+	causes := resp.Result.Details.Causes
+	if resp.Allowed || len(causes) != 1 || causes[0].Field != "spec.license.secretRef.name" || len(reviews) != 1 {
+		t.Errorf("response = %+v after %d reviews, want one cause on spec.license.secretRef.name", resp.Result, len(reviews))
+	}
+}
