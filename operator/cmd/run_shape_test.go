@@ -383,3 +383,43 @@ func TestRun_BoundsTheManagersStop(t *testing.T) {
 		t.Errorf("ctrl.Options.GracefulShutdownTimeout = %T, want new(managerStopTimeout)", call)
 	}
 }
+
+// The batched spans, metrics and logs reach the collector only if every return
+// from run() flushes the pipeline, and within the time the grace period leaves
+// after the manager: the defer comes right after Setup succeeds, so no later
+// return skips it, and it passes telemetryFlushTimeout.
+func TestRun_FlushesTelemetryOnEveryReturnWithinItsBudget(t *testing.T) {
+	_, run := parseRun(t)
+
+	setup := -1
+	var tel string
+	for i, stmt := range run.Body.List {
+		assign, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(assign.Rhs) != 1 {
+			continue
+		}
+		if call, ok := assign.Rhs[0].(*ast.CallExpr); ok && callee(call) == "telemetry.Setup" {
+			setup, tel = i, expr(assign.Lhs[0])
+			break
+		}
+	}
+	if setup < 0 || setup+2 >= len(run.Body.List) {
+		t.Fatal("run() has no telemetry.Setup assignment followed by two statements")
+	}
+	check, ok := run.Body.List[setup+1].(*ast.IfStmt)
+	if !ok {
+		t.Fatalf("the statement after telemetry.Setup is a %T, want the check of its error", run.Body.List[setup+1])
+	}
+	if cond, ok := check.Cond.(*ast.BinaryExpr); !ok || expr(cond.X) != "err" {
+		t.Fatal("the statement after telemetry.Setup does not compare err")
+	}
+	deferred, ok := run.Body.List[setup+2].(*ast.DeferStmt)
+	if !ok {
+		t.Fatalf("the statement after the error check is a %T, want the deferred flush", run.Body.List[setup+2])
+	}
+	call := deferred.Call
+	if expr(call.Fun) != "flushTelemetry" || len(call.Args) < 2 ||
+		expr(call.Args[0]) != tel || expr(call.Args[1]) != "telemetryFlushTimeout" {
+		t.Errorf("run() defers a call that is not flushTelemetry(%s, telemetryFlushTimeout, ...)", tel)
+	}
+}
