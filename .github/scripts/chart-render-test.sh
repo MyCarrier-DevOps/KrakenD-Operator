@@ -149,6 +149,17 @@ expect_equal "the chart's policy webhook is not registered for DELETE" \
 expect_equal "the generated policy webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(manifest_operations vkrakendbackendpolicy.kb.io operator/config/webhook/manifests.yaml)"
 
+# --- the chart registers exactly the webhooks the markers generate ----------
+# webhook_paths: the sorted service paths of a webhook configuration on stdin.
+webhook_paths() { awk '$1 == "path:" { print $2 }' | sort; }
+expect_equal "the chart registers a webhook for every generated path, and no other" \
+	"$(webhook_paths <operator/config/webhook/manifests.yaml)" \
+	"$(render --show-only templates/validating-webhook-configuration.yaml | webhook_paths)"
+for webhook in $(awk '$1 == "name:" && $2 ~ /^v.*\.kb\.io$/ { print $2 }' operator/config/webhook/manifests.yaml); do
+	expect_equal "the chart registers $webhook for the generated operations" \
+		"$(manifest_operations "$webhook" operator/config/webhook/manifests.yaml)" "$(webhook_operations "$webhook")"
+done
+
 # --- three concurrent krakend validations fit in the operator's limit ------
 memory_limit() {
 	render --show-only templates/deployment.yaml "$@" |
