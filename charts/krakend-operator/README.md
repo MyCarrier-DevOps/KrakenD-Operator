@@ -186,10 +186,10 @@ The operator uses OpenTelemetry for its logs, traces and metrics.
 ## Uninstall
 
 The operator puts the finalizer `gateway.krakend.io/policy-protection` on every
-KrakenDBackendPolicy, and only the operator removes it. Once it is gone, deleting a
-policy, or a namespace that holds one, stays `Terminating`, and so does the
-`krakendbackendpolicies` CRD. Reinstalling the operator also releases policies
-that no endpoint references. To uninstall cleanly, in this order:
+KrakenDBackendPolicy, and only the operator removes it. Once the operator is
+gone, deleting a policy, or a namespace that holds one, stays `Terminating`.
+Reinstalling the operator also releases policies that no endpoint references.
+To uninstall, in this order:
 
 1. Uninstall the release:
 
@@ -197,9 +197,13 @@ that no endpoint references. To uninstall cleanly, in this order:
    helm uninstall krakend-operator -n krakend-operator-system
    ```
 
+   The gateways keep serving: KrakenD does not depend on the operator once its
+   Deployments are rendered.
+
 2. Wait for the operator pods to exit. A pod that is still running re-adds the
-   finalizer. If the command reports that no resources match, the pods are
-   already gone and you can carry on:
+   finalizer. If the command returns at once, or reports no matching
+   resources, the pods are already gone and you can carry on. On a timeout,
+   check `kubectl -n krakend-operator-system get pods`:
 
    ```bash
    kubectl -n krakend-operator-system wait --for=delete pod \
@@ -208,7 +212,9 @@ that no endpoint references. To uninstall cleanly, in this order:
    ```
 
 3. Strip the finalizer from every policy. The command is idempotent, and needs
-   `get`, `list` and `patch` on `krakendbackendpolicies` in every namespace:
+   `get`, `list` and `patch` on `krakendbackendpolicies` in every namespace.
+   Run it before you delete a policy or a namespace that holds one, and before
+   you delete the CRDs:
 
    ```bash
    kubectl get krakendbackendpolicies -A -o json \
@@ -228,10 +234,16 @@ that no endpoint references. To uninstall cleanly, in this order:
    is gone after step 1. A policy that is already `Terminating` is deleted as
    soon as its finalizer is gone.
 
-4. Delete the CRDs, which `helm uninstall` leaves in place. This also deletes
-   every KrakenD object, and it hangs on `krakendbackendpolicies` if step 3 was
-   skipped:
+### Remove the CRDs
 
-   ```bash
-   kubectl delete crd krakendgateways.gateway.krakend.io krakendendpoints.gateway.krakend.io krakendbackendpolicies.gateway.krakend.io krakendautoconfigs.gateway.krakend.io
-   ```
+This is not part of an uninstall. `helm uninstall` leaves the CRDs in place
+(the CRDs are planned to move into the chart templates with
+`helm.sh/resource-policy: keep`, which leaves them in place as well). Deleting
+them deletes every KrakenD object, and with each gateway its Deployment,
+Service and ConfigMaps, so every gateway stops serving. Do it only to remove
+KrakenD from the cluster entirely, after the steps above. It hangs on
+`krakendbackendpolicies` if the finalizer was not stripped:
+
+```bash
+kubectl delete crd krakendgateways.gateway.krakend.io krakendendpoints.gateway.krakend.io krakendbackendpolicies.gateway.krakend.io krakendautoconfigs.gateway.krakend.io
+```
