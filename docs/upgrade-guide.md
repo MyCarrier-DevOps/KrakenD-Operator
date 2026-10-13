@@ -3437,6 +3437,101 @@ to restore the roles.
 
 ---
 
+## Unreleased — The CRDs are part of the chart
+
+The four CRDs moved from the chart's `crds/` directory into its templates, so
+that `helm upgrade` carries schema changes with the operator. Each CRD carries
+`helm.sh/resource-policy: keep`, so Helm never deletes it.
+
+### What changes
+
+- `helm upgrade` and `helm rollback` move the CRD schemas together with the
+  operator. No upgrade path applies CRDs by hand any more.
+- `helm uninstall` leaves the CRDs and every KrakenD object in place.
+- `--skip-crds` no longer has an effect: teams that manage the CRDs out of
+  band lose that opt-out.
+- The CRDs carry the release's ownership metadata, so one cluster holds one
+  release. A reinstall under another release name or namespace needs
+  `--take-ownership`.
+- The account that runs Helm needs `create` and `update` on
+  `customresourcedefinitions`.
+
+### One-time migration of an existing release
+
+A release installed from a chart up to 0.14.x owns no CRDs, so its first
+upgrade to this release refuses. Run the block in bash or zsh, once per
+cluster; it uses brace expansion. Set `VERSION` to the release that moves the
+CRDs into the chart.
+
+```bash
+NS=krakend-operator-system
+VERSION=x.y.z   # the release that moves the CRDs into the chart
+CRDS=(krakend{gateways,endpoints,backendpolicies,autoconfigs}.gateway.krakend.io)
+
+# 1. Work through the Pre-Upgrade Checklist (the admission audit runs before the CRDs change).
+
+# 2. Mark the live CRDs keep first. Helm reads this annotation from the live object
+#    when an upgrade or rollback drops a resource, so from here on no failed upgrade,
+#    rollback or uninstall can delete the CRDs and every KrakenD object with them.
+kubectl annotate crd "${CRDS[@]}" helm.sh/resource-policy=keep --overwrite
+
+# 3. Upgrade, adopting the CRDs into the release. Use the line for your Helm.
+helm repo update
+#    Helm 3.18 or later:
+helm upgrade krakend-operator krakend-operator/krakend-operator -n "$NS" --version "$VERSION" \
+  --take-ownership
+#    Helm 4:
+helm upgrade krakend-operator krakend-operator/krakend-operator -n "$NS" --version "$VERSION" \
+  --take-ownership --server-side=true --force-conflicts
+
+# 4. Verify: each CRD names the release and carries keep, and the release holds four CRDs.
+kubectl get crd "${CRDS[@]}" -o custom-columns='NAME:.metadata.name,RELEASE:.metadata.annotations.meta\.helm\.sh/release-name,POLICY:.metadata.annotations.helm\.sh/resource-policy'
+helm get manifest krakend-operator -n "$NS" | grep -c '^kind: CustomResourceDefinition$'   # 4
+```
+
+Notes:
+
+- Do not apply the CRDs by hand for this release or any later one.
+- If step 3 fails, fix the cause and run step 3 again. Step 2 is what makes
+  `helm rollback` safe in the meantime: without it, a rollback after a failed
+  upgrade deletes the CRDs, every KrakenD object and, through garbage
+  collection, every gateway's Deployment, Service and ConfigMaps.
+- **Helm 4.** `--server-side=true --force-conflicts` is one command for both
+  kinds of release. A release installed client-side becomes server-side. The
+  flag hands `.spec.versions` to Helm: without it, a release installed
+  server-side fails with a conflict against `kubectl`, which every earlier CRD
+  upgrade left as an owner. `--force-conflicts` applies to the whole release
+  for that one upgrade, so a field someone edited by hand on the operator
+  Deployment or Services returns to the chart's value. cert-manager's injected
+  `caBundle` is not in Helm's applied configuration, so it stays.
+- **Helm 3.** There is no server-side apply, and the patch cannot conflict.
+- **Skipping the migration.** A plain `helm upgrade` fails with "... exists and
+  cannot be imported into the current release: invalid ownership metadata ..."
+  and changes nothing.
+- **Scope of `--take-ownership`.** It adopts every object the chart renders
+  that already exists outside the release, not only the CRDs. Coming from
+  0.14.x, the objects this release adds (the user ClusterRoles, the
+  PodDisruptionBudget, the metrics RBAC, the NetworkPolicy) would be adopted and
+  overwritten if someone created them by hand under the same names. To adopt
+  only the CRDs, label them `app.kubernetes.io/managed-by=Helm`, annotate them
+  `meta.helm.sh/release-name=krakend-operator` and
+  `meta.helm.sh/release-namespace=$NS` together with `helm.sh/resource-policy=keep`,
+  and upgrade without `--take-ownership`. Under Helm 4 a release installed
+  server-side still needs `--force-conflicts`.
+
+### A `make deploy` or OLM install
+
+Follow [Migrating a `make deploy` install](#migrating-a-make-deploy-install):
+it runs the same annotate step, then `helm install --take-ownership`.
+
+### Development clusters
+
+`make install` applies the CRDs for `make run` against a cluster without the
+chart. Where it created the CRDs, the first chart install needs
+`--take-ownership`, and under Helm 4 also `--force-conflicts`.
+
+---
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
