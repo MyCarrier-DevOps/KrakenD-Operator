@@ -143,8 +143,10 @@ const (
 	// nothing, writes the Deployment, and fails only where no refusal can hide:
 	// the post-restart Job, ConfigMap collection, or a write rejected after its
 	// take-over check passed (other than Conflict, AlreadyExists, or a Create
-	// whose object the API server may hold). Any other failure, or a held
-	// Deployment, leaves it as it was. Only the gateway controller writes it.
+	// whose object the API server may hold). Any other failure in the
+	// infrastructure stage, or a held Deployment, leaves it as it was; an
+	// unavailable validator or a failed endpoint status write does not touch
+	// it. Only the gateway controller writes it.
 	ConditionResourcesControlled = "ResourcesControlled"
 
 	// ConditionEndpointsExcluded is True while the gateway leaves out one or
