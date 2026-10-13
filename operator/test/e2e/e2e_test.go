@@ -624,6 +624,125 @@ spec:
 		})
 	})
 
+	// ── Admission: Secret references need the requester's own rights ───────
+
+	Context("Admission — a Secret reference needs the requester's own rights", func() {
+		const (
+			licenseSecret = "e2e-sar-license"
+			editorUser    = "e2e-sar-editor"
+			editorBinding = "e2e-sar-editor-binding"
+			readerRole    = "e2e-sar-license-reader"
+			createRole    = "e2e-sar-externalsecret-creator"
+		)
+		secretRefManifest := `
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-sar-secret
+spec:
+  version: "2.9"
+  edition: EE
+  config: {}
+  license:
+    secretRef:
+      name: ` + licenseSecret + `
+      key: LICENSE
+`
+		externalSecretManifest := `
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-sar-externalsecret
+spec:
+  version: "2.9"
+  edition: EE
+  config: {}
+  license:
+    externalSecret:
+      enabled: true
+      secretStoreRef:
+        name: vault
+        kind: ClusterSecretStore
+      remoteRef:
+        key: krakend/license
+`
+		// dryRunAs server-side dry-runs manifest as the editor: nothing is
+		// persisted, and the admission webhooks still run.
+		dryRunAs := func(manifest string) (string, error) {
+			cmd := exec.Command("kubectl", "apply", "--dry-run=server", "-n", testNamespace,
+				"--as="+editorUser, "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			return utils.Run(cmd)
+		}
+		// grant lets the editor do verb on resource (as kubectl names it), only
+		// on resourceNames when given.
+		grant := func(role, resource, verb string, resourceNames ...string) {
+			args := []string{"create", "role", role, "-n", testNamespace,
+				"--verb=" + verb, "--resource=" + resource}
+			for _, name := range resourceNames {
+				args = append(args, "--resource-name="+name)
+			}
+			_, err := utils.Run(exec.Command("kubectl", args...))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = utils.Run(exec.Command("kubectl", "create", "rolebinding", role, "-n", testNamespace,
+				"--role="+role, "--user="+editorUser))
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		It("refuses a license reference the requester may not use and admits it once they may", func() {
+			DeferCleanup(func() {
+				for _, name := range []string{editorBinding, readerRole, createRole} {
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "rolebinding", name,
+						"-n", testNamespace, "--ignore-not-found"))
+				}
+				for _, name := range []string{readerRole, createRole} {
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "role", name,
+						"-n", testNamespace, "--ignore-not-found"))
+				}
+			})
+
+			By("binding a user to the chart's krakendgateway editor role, which carries no get on secrets")
+			_, err := utils.Run(exec.Command("kubectl", "create", "rolebinding", editorBinding,
+				"-n", testNamespace, "--clusterrole=krakend-operator-krakendgateway-editor-role",
+				"--user="+editorUser))
+			Expect(err).NotTo(HaveOccurred())
+
+			By("refusing a license secretRef for that user, naming the field")
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(secretRefManifest)
+				g.Expect(err).To(HaveOccurred(),
+					"a gateway editor without get on the Secret was admitted its license reference: %s", output)
+				g.Expect(output).To(ContainSubstring("spec.license.secretRef.name"))
+				g.Expect(output).To(ContainSubstring("may not get Secret "+licenseSecret),
+					"the apply failed, but not with the Secret denial (a role binding that has "+
+						"not propagated yet, or a webhook error)")
+			}).Should(Succeed())
+
+			By("admitting it once a Role grants get on that one Secret; the Secret need not exist")
+			grant(readerRole, "secrets", "get", licenseSecret)
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(secretRefManifest)
+				g.Expect(err).NotTo(HaveOccurred(), "the reference was refused despite the grant: %s", output)
+			}).Should(Succeed())
+
+			By("refusing a license ExternalSecret for that user")
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(externalSecretManifest)
+				g.Expect(err).To(HaveOccurred(),
+					"a gateway editor without create on externalsecrets was admitted a license ExternalSecret: %s",
+					output)
+				g.Expect(output).To(ContainSubstring("may not create externalsecrets.external-secrets.io"))
+			}).Should(Succeed())
+
+			By("admitting it once a Role grants create on externalsecrets")
+			grant(createRole, "externalsecrets.external-secrets.io", "create")
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(externalSecretManifest)
+				g.Expect(err).NotTo(HaveOccurred(), "the ExternalSecret was refused despite the grant: %s", output)
+			}).Should(Succeed())
+		})
+	})
+
 	// ── CRD Lifecycle: Gateway with Istio ──────────────────────────────────
 
 	Context("CRD Lifecycle — Gateway with Istio", func() {
