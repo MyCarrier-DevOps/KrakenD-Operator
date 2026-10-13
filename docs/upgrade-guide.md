@@ -2643,8 +2643,10 @@ reports it.
   The condition is `True` once a pass refuses nothing, writes the Deployment
   and fails only in the post-restart Job, in ConfigMap collection, or in a write
   rejected after its take-over check passed (not a Conflict, an AlreadyExists,
-  or a Create whose object the API server may hold). Any other failure, or a
-  held Deployment, leaves it as it was (absent on a new gateway).
+  or a Create whose object the API server may hold). Any other failure in the
+  infrastructure stage, or a held Deployment, leaves it as it was (absent on a
+  new gateway). An unavailable validator or a failed endpoint status write does
+  not touch it.
 - A ServiceAccount the gateway does not control holds the Deployment and the
   post-restart Job, whether another controller owns it or nothing does. The
   operator logs `holding the Deployment and the post-restart Job:
