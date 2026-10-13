@@ -279,7 +279,7 @@ pod eviction) makes the Deployment report `Available=False`
 | Condition | Meaning |
 |---|---|
 | `SpecAvailable` | The OpenAPI spec was fetched (`SpecFetched`), or not (`SpecFetchFailed`) |
-| `Synced` | Generated endpoints are in sync with the spec (`True`, reason `Synced`). `False` with reason `OperationsFailed` while any operation is held, or with the failure's reason (`SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed`, `EndpointReconcileFailed`, `ValidatorUnavailable`) |
+| `Synced` | Generated endpoints are in sync with the spec (`True`, reason `Synced`). `False` with reason `OperationsFailed` while any operation is held, or with the failure's reason (`SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `NoOperations`, `AdditionalEndpointScopeFailed`, `EndpointReconcileFailed`, `ValidatorUnavailable`) |
 | `EndpointsReady` | Every generated endpoint's `Ready` is True for its current generation (`AllEndpointsReady`), or `False` (`EndpointsNotReady`) naming up to five endpoints and their reasons (`Pending` while the endpoint controller has not reported a new or changed endpoint) |
 | `Ready` | `SpecAvailable`, `Synced` and `EndpointsReady` are True (`Ready`); otherwise `False` with the reason of the first that is not, or `Unknown` (`Pending`) while one of them is still absent |
 
@@ -1045,6 +1045,7 @@ kubectl get events --field-selector involvedObject.name=<name>
   outside the endpoint entries fails the whole sync with `CUEEvaluationFailed`,
   and one inside an entry holds that operation (see `OperationsFailed` below)
 - Filter excludes all operations
+- The spec has no operations at all (an empty 200 body, `{}`, or an OpenAPI document without `paths`): the sync fails with `NoOperations` and keeps the last good endpoints — see *AutoConfig sync fails with `NoOperations`* below
 - A `policyRef` in `defaults`, `overrides` or `additionalEndpoints` names a policy that doesn't exist: the AutoConfig's `kubectl apply` printed a `Warning:` naming the field (for example `spec.defaults.policyRef: KrakenDBackendPolicy ns/name not found`), and each generated endpoint that uses it is rejected at admission (`Not found` on `...policyRef.name`). The AutoConfig holds each as `EndpointRejected` in `status.failedOperations`, with `Synced=False` and reason `OperationsFailed`; it is not retried with backoff, and the other operations are still written. Create the policy or fix the reference; `kubectl get krakendbackendpolicies -n <namespace>` lists what exists
 - An override's `operationId` doesn't match any operation in the spec — see *AutoConfig sync fails with `UnmatchedOverride`* below; one that several operations declare — see *AutoConfig sync fails with `AmbiguousOverride`*
 - `Synced=False` with reason `OperationsFailed`: some operations are held, and the rest of the AutoConfig is converging. List them with `kubectl get kac <name> -n <namespace> -o jsonpath='{.status.failedOperations}'`. Each entry names the operation (`method`, `path`, `operationId`), a `reason` and a `message` cut at 256 bytes. An entry held at its endpoint (`ConfigValidationFailed`, `EndpointRejected`) also names the generated `endpoint`; a `CUEEvaluationFailed` entry has no `endpoint`. The operator log has the full cause of every held operation, a CUE failure or a rejection, at Info (message `operation held`, with `operation` and `error` fields), once per change of the causes for each operator process, so a restart logs them again; the status cuts each message at 256 bytes. An `OperationsFailed` Warning event is emitted only when the `Synced` condition or `status.failedOperations` changes, not when endpoints turn Ready. A held operation keeps its last endpoint, and no stale endpoint is deleted until none is held. It is not retried with backoff: the AutoConfig retries at its resync interval, or at once when an input changes (see *Forcing an immediate AutoConfig reconcile*). By reason:
@@ -1156,6 +1157,40 @@ duplicates, fetch the spec (convert YAML with `yq -o=json`) and run:
 ```bash
 curl -s <spec-url> | jq -r '[.paths[][]? | objects | .operationId? // empty] | group_by(.) | map(select(length > 1) | .[0])[]'
 ```
+
+### AutoConfig sync fails with `NoOperations`
+
+**Diagnosis:**
+```bash
+kubectl describe krakendautoconfig <name>
+```
+The `Synced` condition is `False` with reason `NoOperations` and message `the
+OpenAPI spec has no operations; the endpoints this AutoConfig generated are kept
+(delete the AutoConfig to remove them)`. `status.phase` is `Error`, the
+`krakend_operator_autoconfig_synced` gauge is `0` (so `KrakenDAutoConfigNotSynced`
+fires after 15 minutes), and a matching `Warning` event is emitted. An
+`OnChange` AutoConfig retries with backoff, a `Periodic` one at its interval.
+
+**Cause:** the fetched spec yielded no operation at all: not one that
+generates an endpoint, and not one that is held (`status.failedOperations`) or
+skipped (`status.skipped`, for example a spec that has only `HEAD` or `OPTIONS`
+operations). The usual source is a broken upstream, such as a `200` with an
+empty body or a JSON error body, a service that serves a skeleton document
+before its routes register, or an OpenAPI generation change that dropped
+`paths`. The check runs before the overrides, so an empty spec that also has
+overrides reports `NoOperations`, not `UnmatchedOverride`. It applies even when
+`additionalEndpoints` would keep the generated set non-empty, and on the first
+sync. A spec whose operations are all excluded by `spec.filter` is not this
+failure: that AutoConfig syncs with 0 endpoints, and its stale endpoints are
+deleted.
+
+**Resolution:** fix the spec at its source: fetch it
+(`curl -s <spec-url> | jq '.paths | length'`) and check that the service
+serves its operations. The AutoConfig recovers on its next sync. Existing
+`KrakenDEndpoints` keep their last-good state meanwhile. If the service
+intentionally has no operations, delete the `KrakenDAutoConfig`: its endpoints
+are removed through their owner reference. A service with no spec is served by
+plain `KrakenDEndpoint` objects.
 
 ### `kubectl apply` rejected: `audience` must be a list of strings
 
