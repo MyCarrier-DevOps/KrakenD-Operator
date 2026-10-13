@@ -188,7 +188,8 @@ func runWithStdin(stdin, name string, args ...string) (string, error) {
 }
 
 // isolatedEnv is the process environment without anything that selects a
-// cluster or helm's state, plus the suite's own kubeconfig and helm directories.
+// cluster or helm's state, plus the suite's own kubeconfig, kubectl cache and
+// helm directories, and no kuberc defaults.
 func isolatedEnv() []string {
 	var env []string
 	for _, kv := range os.Environ() {
@@ -200,6 +201,8 @@ func isolatedEnv() []string {
 	}
 	return append(env,
 		"KUBECONFIG="+kubeconfigFile,
+		"KUBECACHEDIR="+filepath.Join(workDir, "kube-cache"),
+		"KUBERC=off",
 		"HELM_CACHE_HOME="+filepath.Join(workDir, "helm", "cache"),
 		"HELM_CONFIG_HOME="+filepath.Join(workDir, "helm", "config"),
 		"HELM_DATA_HOME="+filepath.Join(workDir, "helm", "data"),
@@ -229,12 +232,14 @@ func pullPublishedChart() string {
 // and lowers its kubeVersion floor to the K3s version the suite runs.
 //
 // The chart requires Kubernetes 1.33 and K3s runs 1.32, because 1.33 removed the
-// feature gate rootless podman needs. The version constraint is the only part
-// of Helm's adoption, ownership, resource-policy and rollback handling that
-// reads the cluster version, and none of it does.
+// feature gate rootless podman needs. Only the chart's kubeVersion constraint
+// reads the cluster version; Helm's adoption, ownership, resource-policy and
+// rollback code never does.
 func copyRepositoryChart(name string) string {
 	GinkgoHelper()
 	dst := filepath.Join(workDir, name)
+	// A spec may copy the same fixture again, and CopyFS refuses to overwrite.
+	Expect(os.RemoveAll(dst)).To(Succeed())
 	Expect(os.CopyFS(dst, os.DirFS(filepath.Join(operatorDir, "..", "charts", "krakend-operator")))).To(Succeed())
 	chartYAML := filepath.Join(dst, "Chart.yaml")
 	data, err := os.ReadFile(chartYAML)
