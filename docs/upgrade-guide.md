@@ -2094,18 +2094,19 @@ example when the operator lacks `create` on `subjectaccessreviews`, is a
 keeps its `403`.
 
 The review runs when the reference is new or changed, so stored objects keep
-reconciling, and an edit that leaves the reference as stored is admitted without
-a review, by anyone:
+reconciling, and an edit that leaves the reference as stored, and changes
+nothing it depends on, is admitted without a review, by anyone:
 
 - a gateway is reviewed when it is created, when `spec.license.secretRef`
   (the name, key or `optional`) or `spec.license.externalSecret` changes, when
-  `spec.dragonfly.authentication` changes, or when Dragonfly is turned on while
-  a password is set;
+  `spec.dragonfly.authentication` changes, when Dragonfly is turned on while
+  a password is set, or when an edit changes which Secret the license is read
+  from (the enabled `spec.license.externalSecret` is then reviewed);
 - an AutoConfig is reviewed when it is created or when anything in
   `spec.openapi` changes, the URL included, because the URL decides where the
   token goes.
 
-Removing a reference is never reviewed. A change to `spec.image`, `spec.ceImage`
+Removing a reference is not reviewed, unless the removal makes the gateway read its license from the other source, which is then reviewed. A change to `spec.image`, `spec.ceImage`
 or `spec.dragonfly.image` is not reviewed either, so whoever may edit a gateway
 whose license or Dragonfly password is already set can read that one value
 through a new image. A holder of `create` on ExternalSecrets who may not `get`
