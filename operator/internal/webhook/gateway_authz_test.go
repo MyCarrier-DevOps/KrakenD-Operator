@@ -135,6 +135,35 @@ func TestGatewayAdmission_UnchangedPostRestartJobIsNotReviewedAgain(t *testing.T
 	}
 }
 
+// An update that turns an existing gateway's Job into one that borrows rights,
+// or switches it to another borrowed account, is reviewed like a create: the
+// requester must be able to create pods.
+func TestGatewayAdmission_UpdateThatIntroducesABorrowingJobNeedsPodCreateRights(t *testing.T) {
+	cases := map[string]*v1alpha1.KrakenDGateway{
+		"no Job before":        testGateway(),
+		"a default Job before": gatewayWithJob(func(*v1alpha1.PostRestartJobSpec) {}),
+		"a disabled borrowing Job before": gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) {
+			p.Enabled, p.ServiceAccountName = false, "namespace-admin"
+		}),
+		"another borrowed ServiceAccount before": gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) {
+			p.ServiceAccountName = "a"
+		}),
+	}
+	for name, old := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+			edited := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) { p.ServiceAccountName = "namespace-admin" })
+
+			resp := review(t, v, "alice", edited, old)
+
+			if resp.Allowed || resp.Result.Code != http.StatusForbidden || len(reviews) != 1 {
+				t.Errorf("response = %+v after %d reviews, want a 403 denial after one review", resp.Result, len(reviews))
+			}
+		})
+	}
+}
+
 // A Job that gets nothing the gateway Deployment does not already have needs no
 // review, even from a requester who may not create pods.
 func TestGatewayAdmission_DefaultPostRestartJobNeedsNoReview(t *testing.T) {
