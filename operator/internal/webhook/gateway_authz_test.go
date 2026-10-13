@@ -712,3 +712,27 @@ func TestGatewayAdmission_SecretReferenceReviewFailureIs500(t *testing.T) {
 		})
 	}
 }
+
+// Both license sources are reviewed, whether or not the CRD allows naming
+// both: the operator creates the ExternalSecret whenever it is enabled, so a
+// requester who may read only the secretRef Secret is refused on the other.
+func TestGatewayAdmission_BothLicenseSourcesAreReviewed(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	onlySecret := func(a *authorizationv1.ResourceAttributes) bool { return a.Resource == "secrets" }
+	v := &GatewayValidator{Client: reviewingClientBy(onlySecret, &reviews), Checker: &scriptedChecker{}}
+	gw := eeGatewayWithLicenseExternalSecret()
+	gw.Spec.License.SecretRef = eeGatewayWithLicenseSecret("public-license").Spec.License.SecretRef
+
+	resp := review(t, v, "alice", gw, nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.license.externalSecret" {
+		t.Errorf("causes = %+v, want one cause on spec.license.externalSecret", causes)
+	}
+	if len(reviews) != 2 {
+		t.Errorf("%d reviews, want 2", len(reviews))
+	}
+}
