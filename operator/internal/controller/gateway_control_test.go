@@ -743,6 +743,46 @@ func TestGatewayReconcile_AFailingConfigMapCollectionDoesNotKeepAResolvedRefusal
 	requireResourcesControlledTrue(t, c, gw)
 }
 
+// A write rejected after its take-over check passed, for a reason of its own,
+// leaves the object judged. A Conflict or an AlreadyExists leaves it unjudged:
+// the check saw a stale copy, or none.
+func TestGatewayReconcile_ARejectedWriteKeepsAResolvedRefusalOnlyWhenItsCheckCouldBeStale(t *testing.T) {
+	svc := schema.GroupResource{Resource: "services"}
+	cases := map[string]struct {
+		err      error
+		wantKept bool
+	}{
+		"invalid":        {err: apierrors.NewInvalid(schema.GroupKind{Kind: "Service"}, "test-gw", nil)},
+		"conflict":       {err: apierrors.NewConflict(svc, "test-gw", errors.New("stale")), wantKept: true},
+		"already exists": {err: apierrors.NewAlreadyExists(svc, "test-gw"), wantKept: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r, c, gw := resolvedRefusalGateway(t, interceptor.Funcs{
+				Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*corev1.Service); ok {
+						return tc.err
+					}
+					return cl.Create(ctx, obj, opts...)
+				},
+			})
+
+			if err := reconcileGateway(t, r, gw); err == nil {
+				t.Fatalf("expected the rejected Service write to be reported")
+			}
+
+			if tc.wantKept {
+				cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionResourcesControlled)
+				if cond == nil || cond.Status != metav1.ConditionFalse {
+					t.Errorf("ResourcesControlled = %+v, want it to stay False", cond)
+				}
+				return
+			}
+			requireResourcesControlledTrue(t, c, gw)
+		})
+	}
+}
+
 // A Deployment the pass never wrote, because a hold applies, is not one the
 // gateway is known to control: the condition does not turn True on it.
 func TestGatewayReconcile_AHeldDeploymentDoesNotSetResourcesControlled(t *testing.T) {
