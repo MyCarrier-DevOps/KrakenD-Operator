@@ -946,12 +946,7 @@ func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecks
 			return c.Create(ctx, obj, opts...)
 		},
 	}
-	c := fakeClientBuilder().
-		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
-		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
-		WithInterceptorFuncs(failingCreate).
-		Build()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	r, c := reconcilerForRecreate(gw, existing, failingCreate)
 
 	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err == nil {
 		t.Fatal("expected the simulated transient Create error to propagate")
@@ -1018,12 +1013,7 @@ func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *
 			return c.Create(ctx, obj, opts...)
 		},
 	}
-	c := fakeClientBuilder().
-		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
-		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
-		WithInterceptorFuncs(alreadyExistsCreate).
-		Build()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	r, _ := reconcilerForRecreate(gw, existing, alreadyExistsCreate)
 
 	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("expected AlreadyExists on re-create to be tolerated, got error: %v", err)
@@ -1056,6 +1046,20 @@ func gatewayWithAFailedJobToRecreate(t *testing.T) (*v1alpha1.KrakenDGateway, *b
 	return gw, existing
 }
 
+// reconcilerForRecreate is a reconciler over a fake client that holds gw, its
+// converged Deployment and the failed Job existing, with fail's interceptors,
+// and that client.
+func reconcilerForRecreate(
+	gw *v1alpha1.KrakenDGateway, existing *batchv1.Job, fail interceptor.Funcs,
+) (*KrakenDGatewayReconciler, client.Client) {
+	c := fakeClientBuilder().
+		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
+		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
+		WithInterceptorFuncs(fail).
+		Build()
+	return &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}, c
+}
+
 // The persisted checksum is cleared before the failed Job is deleted: a crash
 // between the Delete and the Create then cannot leave a checksum that claims
 // the revision ran with no Job left to show for it.
@@ -1085,12 +1089,7 @@ func TestReconcileExistingPostRestartRevision_ClearsTheChecksumBeforeDeletingThe
 			return c.Create(ctx, obj, opts...)
 		},
 	}
-	c := fakeClientBuilder().
-		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
-		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
-		WithInterceptorFuncs(recording).
-		Build()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	r, _ := reconcilerForRecreate(gw, existing, recording)
 
 	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -1114,12 +1113,7 @@ func TestReconcileExistingPostRestartRevision_AFailedChecksumClearKeepsTheFailed
 			return errors.New("etcd timeout")
 		},
 	}
-	c := fakeClientBuilder().
-		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
-		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
-		WithInterceptorFuncs(failingClear).
-		Build()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	r, c := reconcilerForRecreate(gw, existing, failingClear)
 
 	err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123"))
 
