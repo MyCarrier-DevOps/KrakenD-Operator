@@ -2479,11 +2479,11 @@ reports it.
   message names each refused object's kind and `<namespace>/<name>` and its
   controller if it has one, then the remedy: rename the gateway, or label the
   object to hand it over. `Ready` carries the same reason, with phase `Error`.
-  The condition is `True` once a pass refuses nothing and writes the
-  Deployment, and each failure it had left every object it would write judged:
-  a post-restart Job or ConfigMap collection failure, or a write rejected after
-  its take-over check passed. A pass that holds the Deployment, or could not
-  read an object, leaves it as it was (absent on a new gateway).
+  The condition is `True` once a pass refuses nothing, writes the Deployment
+  and fails only in the post-restart Job, in ConfigMap collection, or in a write
+  rejected after its take-over check passed (not a Conflict, an AlreadyExists,
+  or a Create whose object the API server may hold). Any other failure, or a
+  held Deployment, leaves it as it was (absent on a new gateway).
 - A ServiceAccount the gateway does not control holds the Deployment and the
   post-restart Job, whether another controller owns it or nothing does. The
   operator logs `holding the Deployment and the post-restart Job:
