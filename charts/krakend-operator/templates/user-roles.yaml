@@ -5,7 +5,8 @@ They carry no aggregation labels, so nothing is granted until they are bound.
 Admission requires whoever adds or changes a Secret reference in a gateway or AutoConfig
 to hold `get` on that Secret (and `create` on externalsecrets for a license ExternalSecret).
 An editor can still read a license or Dragonfly password already set on a gateway by
-changing its image.
+changing its image, and a holder of `create` on externalsecrets can read an existing
+`<gateway>-license` Secret that the gateway mounts before the ExternalSecret syncs.
 */ -}}
 {{- $fullname := include "krakend-operator.fullname" . }}
 {{- range $kind, $resource := dict "krakendgateway" "krakendgateways" "krakendendpoint" "krakendendpoints" "krakendbackendpolicy" "krakendbackendpolicies" "krakendautoconfig" "krakendautoconfigs" }}
