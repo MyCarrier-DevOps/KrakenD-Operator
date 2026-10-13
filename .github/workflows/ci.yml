@@ -91,6 +91,26 @@ jobs:
         working-directory: operator
         run: go test -tags=integration -v -timeout 15m ./test/integration/
 
+  test-upgrade:
+    name: Helm Upgrade Tests (Helm ${{ matrix.helm }})
+    runs-on: ubuntu-latest
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        helm: [v3.18.5, v4.3.0]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "^1.26"
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ matrix.helm }}
+      - name: Run the Helm upgrade tests
+        working-directory: operator
+        run: make test-upgrade
+
   test-e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
