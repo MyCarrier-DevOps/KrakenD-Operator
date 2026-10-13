@@ -222,8 +222,9 @@ func judged(err error) error {
 }
 
 // errorLeaves returns the errors at the ends of err's tree: those that wrap
-// nothing (or nothing the walk can reach), and every notControlledError and judgedError, which are not looked
-// into. errors.As finds only the first match, so it walks the tree by hand.
+// nothing (or nothing the walk can reach), and every notControlledError and
+// judgedError, which are not looked into. errors.As finds only the first
+// match, so it walks the tree by hand.
 func errorLeaves(err error) []error {
 	switch e := err.(type) { //nolint:errorlint // walks the tree; errors.As returns one match
 	case nil:
@@ -337,9 +338,10 @@ func (r *KrakenDGatewayReconciler) applyOwned(
 
 // cannotHideRefusal reports whether err, from writing obj after its take-over
 // check passed, leaves no refusal hidden. A Conflict does not: the check ran on
-// a stale copy. Nor does AlreadyExists, or any error of a Create (absent) that
-// the API server may have rejected before its existence check, unless a read
-// through the API reader finds nothing there: the check ran on a cache miss.
+// a stale copy. Nor does AlreadyExists. A Create's other errors (absent) are
+// judged only when a read through the API reader finds nothing there: the
+// check may have run on a cache miss, and the API server may have rejected the
+// Create before its existence check.
 func (r *KrakenDGatewayReconciler) cannotHideRefusal(
 	ctx context.Context, obj client.Object, absent bool, err error,
 ) bool {
