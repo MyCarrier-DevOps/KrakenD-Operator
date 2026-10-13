@@ -224,7 +224,7 @@ pod eviction) makes the Deployment report `Available=False`
 | `ConfigValid` | `True` (`ConfigApplied`): the rendered config passed validation and is the applied config. `False` (`GatewayRootInvalid`): the gateway root fails on its own, so nothing is judged; `False` (`CombinedConfigInvalid`): the endpoints that pass krakend check on their own fail it together (any endpoint that fails on its own is excluded first). In both, the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff. `Unknown` (`ConfigPublishFailed`): the newest render passed validation but its ConfigMap could not be published, or the applied config's ConfigMap does not hold the config; retried with backoff |
 | `EndpointsExcluded` | `True` (`InvalidEndpointsExcluded`) while the gateway leaves out endpoints that fail validation on their own; the message counts them and names the first 10. It reads `… fail validation and are not served: …` while the gateway serves its newest config, and `… fail validation and will not be served when the gateway next applies its config: …` while `ConfigValid` is not `True` (the last applied config, which may still hold them, keeps serving). The wording switch is a message change, so a rejected root or a validator outage emits one extra `InvalidEndpointsExcluded` Warning, and another when the gateway applies again. Absent otherwise. `ConfigValid` and `Ready` are not affected by the exclusions themselves |
 | `PluginsResolved` | `True` (`ConfigMapsFound`) when every plugin ConfigMap exists; `False` (`ConfigMapNotFound`) naming the missing ones while the Deployment is held. Absent without ConfigMap plugin sources |
-| `ResourcesControlled` | `True` (`ResourcesControlled`) when no object the gateway wrote this pass was refused and every failure the pass had left the objects it writes judged (a post-restart Job or ConfigMap collection failure, or a write rejected after its take-over check passed); it keeps its last value while the pass held the Deployment or could not read an object; `False` (`ResourceNotControlled`) naming each existing object it leaves alone and what to do (see *Gateway reports `ResourceNotControlled`*) |
+| `ResourcesControlled` | `True` (`ResourcesControlled`) when a pass refuses nothing, writes the Deployment and fails only in the post-restart Job, in ConfigMap collection, or in a write rejected after its take-over check passed (not a Conflict, an AlreadyExists, or a Create whose object the API server may hold); any other failure, or a held Deployment, keeps its last value; `False` (`ResourceNotControlled`) naming each existing object it leaves alone and what to do (see *Gateway reports `ResourceNotControlled`*) |
 | `Available` | The Deployment is available; `False` when it loses its minimum replicas (for example all pods crash-looping) or its rollout fails |
 | `Progressing` | A rollout is in progress: the Deployment was created, its pod template was written (a config, image, plugin or license change, but also resources, probes or drift the operator reverted), or old pods remain beside updated ones. It stays `True` until the Deployment has observed the change and every replica is updated and available. A replica change alone (an HPA scale) does not raise it, though the brief `Available=False` a scale-up can cause is still mirrored |
 | `CEFallbackApplied` | `True` (`EEFeaturesStripped`) while the applied config is the CE-fallback render; the message lists the Enterprise-only features it removed. Absent otherwise |
@@ -613,10 +613,11 @@ The condition turning `False` raises a Warning event with the same reason, and
 turning `True` again a Normal one. Once the conflict is resolved, the rollout of
 the config applied meanwhile shows only as `Progressing` (`DeploymentUpdated`).
 If the message still names an object the gateway now controls, the Deployment is
-held or the pass could not read an object or hit a conflict: the operator log
-names it, and the condition clears on the first pass that writes the Deployment.
-A failure of the post-restart Job, of collecting old config ConfigMaps or of a
-write rejected after its take-over check passed does not hold it back.
+held or the pass has another failure: the operator log names it. The condition
+clears on the first pass that writes the Deployment and fails only in the
+post-restart Job, in collecting old config ConfigMaps, or in a write rejected
+after its take-over check passed (not a Conflict, an AlreadyExists, or a Create
+whose object the API server may hold).
 
 ### Endpoint shows `Invalid`
 
