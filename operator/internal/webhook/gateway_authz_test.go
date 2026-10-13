@@ -20,13 +20,17 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 
+	admissionv1 "k8s.io/api/admission/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -93,6 +97,39 @@ func TestGatewayAdmission_PostRestartJobReviewIsOfTheRequesterToCreatePods(t *te
 	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "create" ||
 		attrs.Resource != "pods" || attrs.Group != "" {
 		t.Errorf("review = %+v, want alice to create pods in namespace default", spec)
+	}
+}
+
+// A requester whose access comes through a group (cluster admins through
+// system:masters) or through extra attributes is reviewed with them: the
+// review forwards the whole identity, not just the user name.
+func TestGatewayAdmission_PostRestartJobReviewCarriesTheRequestersGroupsAndExtra(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+	gw := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) { p.ServiceAccountName = "namespace-admin" })
+	ctx := admission.NewContextWithRequest(context.Background(), admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{UserInfo: authenticationv1.UserInfo{
+			Username: "alice", UID: "u1", Groups: []string{"team-a"},
+			Extra: map[string]authenticationv1.ExtraValue{"scopes": {"x"}},
+		}},
+	})
+
+	if _, err := v.ValidateCreate(ctx, gw); err != nil {
+		t.Fatalf("denied: %v", err)
+	}
+
+	if len(reviews) != 1 {
+		t.Fatalf("%d reviews, want 1", len(reviews))
+	}
+	spec := reviews[0].Spec
+	if !slices.Equal(spec.Groups, []string{"team-a"}) {
+		t.Errorf("review groups = %v, want [team-a]", spec.Groups)
+	}
+	if spec.UID != "u1" {
+		t.Errorf("review UID = %q, want u1", spec.UID)
+	}
+	if !slices.Equal(spec.Extra["scopes"], authorizationv1.ExtraValue{"x"}) {
+		t.Errorf("review extra = %v, want scopes=[x]", spec.Extra)
 	}
 }
 
