@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -52,4 +53,19 @@ func reviewRequester(
 		return "", false, fmt.Errorf("reviewing the requester's access: %w", err)
 	}
 	return req.UserInfo.Username, sar.Status.Allowed, nil
+}
+
+// requireSecretRead is a Forbidden error on path unless the requester may get
+// Secret name in namespace ns; use says what the operator does with it. An
+// error means there is no verdict.
+func requireSecretRead(
+	ctx context.Context, c client.Client, path *field.Path, ns, name, use string,
+) (field.ErrorList, error) {
+	user, allowed, err := reviewRequester(ctx, c, authorizationv1.ResourceAttributes{
+		Namespace: ns, Verb: "get", Resource: "secrets", Name: name})
+	if err != nil || allowed {
+		return nil, err
+	}
+	return field.ErrorList{field.Forbidden(path, fmt.Sprintf(
+		"%q may not get Secret %s in namespace %s; %s", user, truncate(name, echoLimit), ns, use))}, nil
 }
