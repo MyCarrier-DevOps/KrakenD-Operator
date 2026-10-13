@@ -1202,9 +1202,10 @@ curl -s <spec-url> | jq -r '[.paths[][]? | objects | .operationId? // empty] | g
 ```bash
 kubectl describe krakendautoconfig <name>
 ```
-The `Synced` condition is `False` with reason `NoOperations` and message `the
-OpenAPI spec has no operations; the endpoints this AutoConfig generated are kept
-(delete the AutoConfig to remove them)`. `status.phase` is `Error`, the
+The `Synced` condition is `False` with reason `NoOperations` and message
+`evaluating the OpenAPI spec produced no operations (the spec has none, or the
+CUE definitions emit no endpoint entry for them); the endpoints this AutoConfig
+generated are kept (delete the AutoConfig to remove them)`. `status.phase` is `Error`, the
 `krakend_operator_autoconfig_synced` gauge is `0` (so `KrakenDAutoConfigNotSynced`
 fires after 15 minutes), and a matching `Warning` event is emitted. An
 `OnChange` AutoConfig retries with backoff, a `Periodic` one at its interval.
@@ -1215,7 +1216,11 @@ skipped (`status.skipped`, for example a spec that has only `HEAD` or `OPTIONS`
 operations). The usual source is a broken upstream, such as a `200` with an
 empty body or a JSON error body, a service that serves a skeleton document
 before its routes register, or an OpenAPI generation change that dropped
-`paths`. The check runs before the overrides, so an empty spec that also has
+`paths`. The other source is custom CUE definitions: a namespace
+`krakend-cue-definitions` ConfigMap that replaces the defaults and emits no
+endpoint entry for a spec that does have operations (for example one that
+selects only operations carrying a marker the spec lacks). The check runs before
+the overrides, so an empty spec that also has
 overrides reports `NoOperations`, not `UnmatchedOverride`. It applies even when
 `additionalEndpoints` would keep the generated set non-empty, and on the first
 sync. A spec whose operations are all excluded by `spec.filter` is not this
@@ -1224,7 +1229,9 @@ deleted.
 
 **Resolution:** fix the spec at its source: fetch it
 (`curl -s <spec-url> | jq '.paths | length'`) and check that the service
-serves its operations. The AutoConfig recovers on its next sync. Existing
+serves its operations. If the spec does have operations, check the CUE
+definitions the AutoConfig uses (`spec.cue.definitionsConfigMapRef`, or the
+namespace's `krakend-cue-definitions`). The AutoConfig recovers on its next sync. Existing
 `KrakenDEndpoints` keep their last-good state meanwhile. If the service
 intentionally has no operations, delete the `KrakenDAutoConfig`: its endpoints
 are removed through their owner reference. A service with no spec is served by
