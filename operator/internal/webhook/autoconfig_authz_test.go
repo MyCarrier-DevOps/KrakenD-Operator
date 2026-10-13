@@ -27,10 +27,12 @@ import (
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -194,42 +196,71 @@ func TestAutoConfigAdmission_UnchangedOrConfigMapSourceIsNotReviewed(t *testing.
 	}
 }
 
-// A review that cannot be made is not a verdict: a transient 500.
+// autoConfigWrites are the two writes that review the auth Secret: a create,
+// and an update that moves the URL.
+func autoConfigWrites() map[string]struct{ old, edited *v1alpha1.KrakenDAutoConfig } {
+	moved := autoConfigFetchingWithToken()
+	moved.Spec.OpenAPI.URL = "https://other.example/api.json"
+	return map[string]struct{ old, edited *v1alpha1.KrakenDAutoConfig }{
+		"create": {old: nil, edited: autoConfigFetchingWithToken()},
+		"update": {old: autoConfigFetchingWithToken(), edited: moved},
+	}
+}
+
+// reviewAutoConfig is review() with old nil on a create.
+func reviewAutoConfig(t *testing.T, v *AutoConfigValidator, old, edited *v1alpha1.KrakenDAutoConfig) admission.Response {
+	t.Helper()
+	if old == nil {
+		return review(t, v, "alice", edited, nil)
+	}
+	return review(t, v, "alice", edited, old)
+}
+
+// A review that cannot be made is not a verdict: a transient 500, on a create
+// as on an update.
 func TestAutoConfigAdmission_AuthReviewFailureIs500(t *testing.T) {
-	c := fakeClientBuilderWith(interceptor.Funcs{
-		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
-			return errors.New("the server could not process the review")
-		},
-	}, testGateway())
+	for name, write := range autoConfigWrites() {
+		t.Run(name, func(t *testing.T) {
+			c := fakeClientBuilderWith(interceptor.Funcs{
+				Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+					return errors.New("the server could not process the review")
+				},
+			}, testGateway())
 
-	resp := review(t, &AutoConfigValidator{Client: c}, "alice", autoConfigFetchingWithToken(), nil)
+			resp := reviewAutoConfig(t, &AutoConfigValidator{Client: c}, write.old, write.edited)
 
-	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
-		t.Errorf("response = %+v, want 500", resp.Result)
+			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+				t.Errorf("response = %+v, want 500", resp.Result)
+			}
+		})
 	}
 }
 
 // The review is the validator's first network call, so it runs within the
-// admission budget: a hung review ends with a clear 500, not the API server's
-// generic timeout.
+// admission budget, on a create as on an update: a hung review ends with a
+// clear 500, not the API server's generic timeout.
 func TestAutoConfigAdmission_ReviewRunsWithinTheAdmissionBudget(t *testing.T) {
-	var deadline time.Time
-	var hasDeadline bool
-	c := fakeClientBuilderWith(interceptor.Funcs{
-		Create: func(ctx context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
-			deadline, hasDeadline = ctx.Deadline()
-			obj.(*authorizationv1.SubjectAccessReview).Status.Allowed = true
-			return nil
-		},
-	}, testGateway())
+	for name, write := range autoConfigWrites() {
+		t.Run(name, func(t *testing.T) {
+			var deadline time.Time
+			var hasDeadline bool
+			c := fakeClientBuilderWith(interceptor.Funcs{
+				Create: func(ctx context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
+					deadline, hasDeadline = ctx.Deadline()
+					obj.(*authorizationv1.SubjectAccessReview).Status.Allowed = true
+					return nil
+				},
+			}, testGateway())
 
-	resp := review(t, &AutoConfigValidator{Client: c}, "alice", autoConfigFetchingWithToken(), nil)
+			resp := reviewAutoConfig(t, &AutoConfigValidator{Client: c}, write.old, write.edited)
 
-	if !resp.Allowed {
-		t.Fatalf("denied: %+v", resp.Result)
-	}
-	if !hasDeadline || time.Until(deadline) > AdmissionBudget {
-		t.Errorf("review deadline = %v (set: %v), want one within %v", deadline, hasDeadline, AdmissionBudget)
+			if !resp.Allowed {
+				t.Fatalf("denied: %+v", resp.Result)
+			}
+			if !hasDeadline || time.Until(deadline) > AdmissionBudget {
+				t.Errorf("review deadline = %v (set: %v), want one within %v", deadline, hasDeadline, AdmissionBudget)
+			}
+		})
 	}
 }
 
@@ -256,5 +287,18 @@ func TestAutoConfigAdmission_EveryNamedAuthSecretIsReviewed(t *testing.T) {
 	}
 	if len(reviews) != 2 {
 		t.Errorf("%d reviews, want 2", len(reviews))
+	}
+}
+
+// With no admission request in the context the requester is unknown, so the
+// review cannot be made: the write fails closed with a 500.
+func TestAutoConfigAdmission_NoAdmissionRequestFailsClosed(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &AutoConfigValidator{Client: reviewingClient(true, &reviews, testGateway())}
+
+	_, err := v.ValidateCreate(context.Background(), autoConfigFetchingWithToken())
+
+	if !apierrors.IsInternalError(err) || len(reviews) != 0 {
+		t.Errorf("error = %v after %d reviews, want an internal error and no review", err, len(reviews))
 	}
 }
