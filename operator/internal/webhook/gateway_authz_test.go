@@ -439,6 +439,22 @@ func TestGatewayAdmission_UnchangedSecretReferencesAreNotReviewedAgain(t *testin
 		"license secretRef, fallback and expiry settings changed": edit(func(gw *v1alpha1.KrakenDGateway) {
 			gw.Spec.License.FallbackToCE, gw.Spec.License.ExpiryWarningDays = true, 14
 		}),
+		"license ExternalSecret, replicas changed": {
+			old: eeGatewayWithLicenseExternalSecret(),
+			edited: func() *v1alpha1.KrakenDGateway {
+				gw := eeGatewayWithLicenseExternalSecret()
+				gw.Spec.Replicas = ptr.To[int32](3)
+				return gw
+			}(),
+		},
+		"license ExternalSecret disabled": {
+			old: eeGatewayWithLicenseExternalSecret(),
+			edited: func() *v1alpha1.KrakenDGateway {
+				gw := eeGatewayWithLicenseExternalSecret()
+				gw.Spec.License.ExternalSecret.Enabled = false
+				return gw
+			}(),
+		},
 		"license removed": {
 			old: eeGatewayWithLicenseSecret("team-license"),
 			edited: func() *v1alpha1.KrakenDGateway {
@@ -463,28 +479,52 @@ func TestGatewayAdmission_UnchangedSecretReferencesAreNotReviewedAgain(t *testin
 }
 
 // An update that adds or changes a Secret reference is reviewed like a create:
-// the requester must be able to read what the reference now names.
+// the requester must have the right the reference now needs.
 func TestGatewayAdmission_UpdateThatChangesASecretReferenceIsReviewed(t *testing.T) {
-	keyChanged := eeGatewayWithLicenseSecret("team-license")
-	keyChanged.Spec.License.SecretRef.Key = "license.jwt"
+	withLicense := func(mutate func(*v1alpha1.KrakenDGateway)) *v1alpha1.KrakenDGateway {
+		gw := eeGatewayWithLicenseSecret("team-license")
+		mutate(gw)
+		return gw
+	}
+	withStore := func(mutate func(*v1alpha1.ExternalSecretLicenseConfig)) *v1alpha1.KrakenDGateway {
+		gw := eeGatewayWithLicenseExternalSecret()
+		mutate(&gw.Spec.License.ExternalSecret)
+		return gw
+	}
 	noLicense := testGateway()
 	noLicense.Spec.Edition = v1alpha1.EditionEE
-	cases := map[string]*v1alpha1.KrakenDGateway{
-		"no license before": noLicense,
-		"another Secret":    eeGatewayWithLicenseSecret("other-license"),
-		"another key":       keyChanged,
-		"an empty license": func() *v1alpha1.KrakenDGateway {
-			gw := noLicense.DeepCopy()
-			gw.Spec.License = &v1alpha1.LicenseConfig{}
-			return gw
-		}(),
+	cases := map[string]struct{ old, edited *v1alpha1.KrakenDGateway }{
+		"no license before": {noLicense, eeGatewayWithLicenseSecret("team-license")},
+		"another Secret": {eeGatewayWithLicenseSecret("other-license"),
+			eeGatewayWithLicenseSecret("team-license")},
+		"another key": {withLicense(func(gw *v1alpha1.KrakenDGateway) { gw.Spec.License.SecretRef.Key = "license.jwt" }),
+			eeGatewayWithLicenseSecret("team-license")},
+		"an empty license": {withLicense(func(gw *v1alpha1.KrakenDGateway) { gw.Spec.License = &v1alpha1.LicenseConfig{} }),
+			eeGatewayWithLicenseSecret("team-license")},
+		"an ExternalSecret before": {eeGatewayWithLicenseExternalSecret(), eeGatewayWithLicenseSecret("team-license")},
+		"a secretRef before":       {eeGatewayWithLicenseSecret("team-license"), eeGatewayWithLicenseExternalSecret()},
+		"ExternalSecret enabled": {
+			withStore(func(es *v1alpha1.ExternalSecretLicenseConfig) { es.Enabled = false }),
+			eeGatewayWithLicenseExternalSecret()},
+		"another store": {
+			withStore(func(es *v1alpha1.ExternalSecretLicenseConfig) { es.SecretStoreRef.Name = "other" }),
+			eeGatewayWithLicenseExternalSecret()},
+		"another store kind": {
+			withStore(func(es *v1alpha1.ExternalSecretLicenseConfig) { es.SecretStoreRef.Kind = "SecretStore" }),
+			eeGatewayWithLicenseExternalSecret()},
+		"another remote key": {
+			withStore(func(es *v1alpha1.ExternalSecretLicenseConfig) { es.RemoteRef.Key = "other/license" }),
+			eeGatewayWithLicenseExternalSecret()},
+		"another remote property": {
+			withStore(func(es *v1alpha1.ExternalSecretLicenseConfig) { es.RemoteRef.Property = "license" }),
+			eeGatewayWithLicenseExternalSecret()},
 	}
-	for name, old := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			var reviews []authorizationv1.SubjectAccessReview
 			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
 
-			resp := review(t, v, "alice", eeGatewayWithLicenseSecret("team-license"), old)
+			resp := review(t, v, "alice", tc.edited, tc.old)
 
 			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity || len(reviews) != 1 {
 				t.Errorf("response = %+v after %d reviews, want a 422 denial after one review", resp.Result, len(reviews))
@@ -513,5 +553,24 @@ func TestGatewayAdmission_ExternalSecretLicenseNeedsCreateExternalSecrets(t *tes
 	}
 	if len(reviews) != 1 {
 		t.Errorf("%d reviews, want 1", len(reviews))
+	}
+}
+
+func TestGatewayAdmission_ExternalSecretLicenseReviewIsOfTheRequesterToCreateExternalSecrets(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", eeGatewayWithLicenseExternalSecret(), nil)
+
+	if !resp.Allowed {
+		t.Fatalf("denied: %+v", resp.Result)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("%d reviews, want 1", len(reviews))
+	}
+	spec, attrs := reviews[0].Spec, reviews[0].Spec.ResourceAttributes
+	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "create" ||
+		attrs.Group != "external-secrets.io" || attrs.Resource != "externalsecrets" || attrs.Name != "" {
+		t.Errorf("review = %+v, want alice to create externalsecrets.external-secrets.io in namespace default", spec)
 	}
 }
