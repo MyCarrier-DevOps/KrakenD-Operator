@@ -147,18 +147,18 @@ A cluster installed from the old manifests moves to the chart once; see
    - Metrics scrapes start succeeding once the scraper's ServiceAccount is
      bound to the `<fullname>-metrics-reader` ClusterRole.
 
-8. **First upgrade to the release that moved the CRDs into the chart only: run
-   the one-time CRD migration** once the audit in item 5 is clean, as
-   [The CRDs are part of the chart](#unreleased--the-crds-are-part-of-the-chart)
-   describes. Every later upgrade is a plain `helm upgrade`.
-
-9. **Check who writes Secret references** (read-only). Writers of gateways with
+8. **Check who writes Secret references** (read-only). Writers of gateways with
    a `spec.license.secretRef`, a license `externalSecret` or a Dragonfly
    `passwordFromSecret`, and of AutoConfigs with URL auth, need `get` on those
    Secrets, and `create` on `externalsecrets.external-secrets.io` for a license
    ExternalSecret, or their next change to the reference is refused. Run the
    two `jq` listings under *Complete admission*, and grant the rights to those
    writers, GitOps ServiceAccounts included.
+
+9. **First upgrade to the release that moved the CRDs into the chart only: run
+   the one-time CRD migration** once the audit in item 5 is clean, as
+   [The CRDs are part of the chart](#unreleased--the-crds-are-part-of-the-chart)
+   describes. Every later upgrade is a plain `helm upgrade`.
 
 ---
 
