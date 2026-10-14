@@ -1230,7 +1230,11 @@ overrides reports `NoOperations`, not `UnmatchedOverride`. It applies even when
 `additionalEndpoints` would keep the generated set non-empty, and on the first
 sync. A spec whose operations are all excluded by `spec.filter` is not this
 failure: that AutoConfig syncs with 0 endpoints, and its stale endpoints are
-deleted.
+deleted, unless it has `additionalEndpoints` whose base path is derived
+(neither `additionalEndpointsBasePath` nor `urlTransform.addPathPrefix` is
+set). With no operation left to derive the base from, that sync fails with
+`AdditionalEndpointScopeFailed` and keeps its endpoints; the same holds for a
+spec whose operations are all skipped. Set the base path to let it sync.
 
 **Resolution:** fix the spec at its source: fetch it
 (`curl -s <spec-url> | jq '.paths | length'`) and check that the service
