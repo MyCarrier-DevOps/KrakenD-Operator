@@ -4459,12 +4459,28 @@ func TestAutoConfigReconcile_AFailingSyncWarnsOnceUntilItsFailureChanges(t *test
 	}
 }
 
+// listUsersSpec is a one-operation OpenAPI document under /api/users.
+const listUsersSpec = `{"paths": {"/api/users": {"get": {"operationId": "listUsers",
+	"responses": {"200": {"description": "OK"}}}}}}`
+
+// realPipelineReconciler wires the real CUE evaluator, filter and generator
+// around the given client and fetcher, with no CUE definitions ConfigMap so the
+// embedded ones are used.
+func realPipelineReconciler(c client.Client, f autoconfig.Fetcher) *KrakenDAutoConfigReconciler {
+	return &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Fetcher:      f,
+		CUEEvaluator: autoconfig.NewCUEEvaluator(),
+		Filter:       autoconfig.NewFilter(),
+		Generator:    autoconfig.NewGenerator(),
+		Checker:      &fakeChecker{},
+	}
+}
+
 func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoints(t *testing.T) {
 	// Real evaluator, filter and generator, and no CUE definitions ConfigMap,
 	// so the embedded ones are used: each body goes through the spec
 	// post-processing and the CUE evaluation before it reaches the guard.
-	const goodSpec = `{"paths": {"/api/users": {"get": {"operationId": "listUsers",
-		"responses": {"200": {"description": "OK"}}}}}}`
 	bodies := map[string]string{
 		"an empty 200 body":                 ``,
 		"an empty JSON object":              `{}`,
@@ -4475,15 +4491,8 @@ func TestAutoConfigReconcile_ASpecWithNoOperationsFailsClosedAndKeepsItsEndpoint
 		t.Run(name, func(t *testing.T) {
 			ac := testAutoConfig()
 			c := fakeClientBuilder().WithObjects(ac).WithStatusSubresource(ac).Build()
-			f := &mockFetcher{result: &autoconfig.FetchResult{Data: []byte(goodSpec)}}
-			r := &KrakenDAutoConfigReconciler{
-				Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
-				Fetcher:      f,
-				CUEEvaluator: autoconfig.NewCUEEvaluator(),
-				Filter:       autoconfig.NewFilter(),
-				Generator:    autoconfig.NewGenerator(),
-				Checker:      &fakeChecker{},
-			}
+			f := &mockFetcher{result: &autoconfig.FetchResult{Data: []byte(listUsersSpec)}}
+			r := realPipelineReconciler(c, f)
 			m, reg := testMetrics(t)
 			r.Metrics = m
 
@@ -4532,16 +4541,7 @@ func TestAutoConfigReconcile_AFilterThatExcludesEveryOperationDeletesTheEndpoint
 	// narrowing: the sync succeeds with 0 endpoints and deletes the owned ones.
 	ac := testAutoConfig()
 	c := fakeClientBuilder().WithObjects(ac).WithStatusSubresource(ac).Build()
-	spec := []byte(`{"paths": {"/api/users": {"get": {"operationId": "listUsers",
-		"responses": {"200": {"description": "OK"}}}}}}`)
-	r := &KrakenDAutoConfigReconciler{
-		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
-		Fetcher:      &mockFetcher{result: &autoconfig.FetchResult{Data: spec}},
-		CUEEvaluator: autoconfig.NewCUEEvaluator(),
-		Filter:       autoconfig.NewFilter(),
-		Generator:    autoconfig.NewGenerator(),
-		Checker:      &fakeChecker{},
-	}
+	r := realPipelineReconciler(c, &mockFetcher{result: &autoconfig.FetchResult{Data: []byte(listUsersSpec)}})
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
