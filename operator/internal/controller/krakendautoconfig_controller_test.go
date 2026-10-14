@@ -4574,6 +4574,74 @@ func TestAutoConfigReconcile_AFilterThatExcludesEveryOperationDeletesTheEndpoint
 	}
 }
 
+func TestAutoConfigReconcile_NothingToDeriveABasePathFromFailsClosedAndKeepsItsEndpoints(t *testing.T) {
+	// With additionalEndpoints and a derived base path, a sync that leaves no
+	// generated endpoint and no held operation has nothing to derive the base
+	// from, so it fails closed instead of syncing 0 endpoints.
+	const headOnlySpec = `{"paths": {"/api/users": {"head": {"operationId": "headUsers",
+		"responses": {"200": {"description": "OK"}}}}}}`
+	cases := map[string]struct {
+		narrow func(ac *v1alpha1.KrakenDAutoConfig, f *mockFetcher)
+	}{
+		"a filter that excludes every operation": {
+			narrow: func(ac *v1alpha1.KrakenDAutoConfig, _ *mockFetcher) {
+				ac.Spec.Filter = &v1alpha1.FilterSpec{ExcludeOperationIds: []string{"listUsers"}}
+			},
+		},
+		"a spec whose operations are all skipped": {
+			narrow: func(_ *v1alpha1.KrakenDAutoConfig, f *mockFetcher) {
+				f.result = &autoconfig.FetchResult{Data: []byte(headOnlySpec)}
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ac := testAutoConfig()
+			ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}}
+			c := fakeClientBuilder().WithObjects(ac).WithStatusSubresource(ac).Build()
+			f := &mockFetcher{result: &autoconfig.FetchResult{Data: []byte(listUsersSpec)}}
+			r := realPipelineReconciler(c, f)
+			endpointCount := func() int {
+				t.Helper()
+				var list v1alpha1.KrakenDEndpointList
+				if err := c.List(context.Background(), &list, client.InNamespace(ac.Namespace)); err != nil {
+					t.Fatalf("listing endpoints: %v", err)
+				}
+				return len(list.Items)
+			}
+			if _, err := reconcileAC(r, ac); err != nil {
+				t.Fatalf("first reconcile: %v", err)
+			}
+			if got := endpointCount(); got != 2 {
+				t.Fatalf("the first sync created %d endpoints, want 2", got)
+			}
+
+			cur := getAC(t, c, ac)
+			tc.narrow(cur, f)
+			if err := c.Update(context.Background(), cur); err != nil {
+				t.Fatalf("narrowing the AutoConfig: %v", err)
+			}
+			if _, err := reconcileAC(r, ac); err == nil {
+				t.Fatal("expected error for OnChange trigger, got nil")
+			}
+
+			if got := endpointCount(); got != 2 {
+				t.Errorf("%d endpoints left, want both kept", got)
+			}
+			synced := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+			if synced == nil || synced.Status != metav1.ConditionFalse ||
+				synced.Reason != v1alpha1.ReasonAdditionalEndpointScopeFailed {
+				t.Fatalf("Synced = %+v, want False with reason %s", synced,
+					v1alpha1.ReasonAdditionalEndpointScopeFailed)
+			}
+			const want = "no generated endpoint or held operation is left to derive a base path from"
+			if !strings.Contains(synced.Message, want) {
+				t.Errorf("message %q should say %q", synced.Message, want)
+			}
+		})
+	}
+}
+
 func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
