@@ -2105,7 +2105,7 @@ Every validator follows the same rules (`admission.go`, `webhook.go`):
 
 - **Ratchet.** `ValidateUpdate` first admits an update to a terminating object that leaves the spec alone (`terminatingWithUnchangedSpec`, so a finalizer can be removed), then admits an update whose spec is unchanged without running a rule. A field rule rejects an update only for errors the stored object did not already have (`newErrors`, matched on the error's field, type, value and detail). References are checked only when added or changed, and endpoint entries are matched on (`endpoint`, `method`), so a reorder is not a change.
 - **Responses.** A rejected field is a `422 Invalid` with one cause per field error (`invalid`). A failed lookup, or a config check that cannot run or cannot get a validation slot, is a `500` (`unavailable`, `checkErr`): the request was not judged and is retried.
-- **Budget.** The three validators that run a render check (endpoint, gateway and policy) stop their work after `AdmissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
+- **Budget.** All four validators (endpoint, gateway, policy and AutoConfig) stop their work after `AdmissionBudget` (12 s), the AutoConfig validator because its SubjectAccessReview is its first network call, inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
 - **Render checks.** The validators depend on one port, `ConfigChecker`, implemented by the `configcheck.Checker` the gateway controller also uses. Every check also takes the shared `lruMemo` (the 256 most recent verdicts of the pod, keyed by content, each keeping at most 16 KiB of output, untrusted: an inconsistent entry is a miss):
 
 ```go
@@ -2233,6 +2233,8 @@ func (v *AutoConfigValidator) ValidateUpdate(
     ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
     // ... terminatingWithUnchangedSpec, type assertions, unchanged-spec skip
+    ctx, cancel := context.WithTimeout(ctx, AdmissionBudget)
+    defer cancel()
     var errs field.ErrorList
     if old.Spec.GatewayRef != ac.Spec.GatewayRef {
         refErrs, err := v.validateGatewayRef(ctx, ac)
@@ -2242,6 +2244,11 @@ func (v *AutoConfigValidator) ValidateUpdate(
         errs = refErrs
     }
     errs = append(errs, newErrors(validateFields(ac), validateFields(old))...)
+    authErrs, err := v.authorizeSourceAuth(ctx, old, ac)
+    if err != nil {
+        return nil, unavailable(err)
+    }
+    errs = append(errs, authErrs...)
     warnings, err := v.policyRefWarnings(ctx, ac)
     if err != nil {
         return nil, unavailable(err)
