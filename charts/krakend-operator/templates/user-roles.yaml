@@ -1,0 +1,37 @@
+{{- /*
+The operator does not use these roles. They exist for cluster admins to bind
+(with a RoleBinding or ClusterRoleBinding) to the people who manage each kind.
+They carry no aggregation labels, so nothing is granted until they are bound.
+Admission requires whoever adds or changes a Secret reference in a gateway or AutoConfig
+to hold `get` on that Secret (and `create` on externalsecrets for a license ExternalSecret).
+An editor can still read a license or Dragonfly password already set on a gateway by
+changing its image, and a holder of `create` on externalsecrets can read an existing
+`<gateway>-license` Secret that the gateway mounts before the ExternalSecret syncs.
+*/ -}}
+{{- $fullname := include "krakend-operator.fullname" . }}
+{{- range $kind, $resource := dict "krakendgateway" "krakendgateways" "krakendendpoint" "krakendendpoints" "krakendbackendpolicy" "krakendbackendpolicies" "krakendautoconfig" "krakendautoconfigs" }}
+{{- range $role, $verbs := dict "admin" (list "*") "editor" (list "create" "delete" "get" "list" "patch" "update" "watch") "viewer" (list "get" "list" "watch") }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-{{ $kind }}-{{ $role }}-role
+  labels:
+    {{- include "krakend-operator.labels" $ | nindent 4 }}
+rules:
+- apiGroups:
+  - gateway.krakend.io
+  resources:
+  - {{ $resource }}
+  verbs:
+  {{- range $verbs }}
+  - {{ if eq . "*" }}'*'{{ else }}{{ . }}{{ end }}
+  {{- end }}
+- apiGroups:
+  - gateway.krakend.io
+  resources:
+  - {{ $resource }}/status
+  verbs:
+  - get
+---
+{{ end }}
+{{- end }}

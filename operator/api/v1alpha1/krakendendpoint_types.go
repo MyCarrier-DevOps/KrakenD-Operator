@@ -37,7 +37,13 @@ type KrakenDEndpointSpec struct {
 	// GatewayRef references the KrakenDGateway this endpoint belongs to.
 	GatewayRef GatewayRef `json:"gatewayRef"`
 
-	// Endpoints is the list of endpoint definitions.
+	// Endpoints is the list of endpoint definitions, one to 1024. Each
+	// (endpoint, method) pair appears at most once.
+	// +listType=map
+	// +listMapKey=endpoint
+	// +listMapKey=method
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=1024
 	Endpoints []EndpointEntry `json:"endpoints"`
 
 	// ComponentSchemas holds OpenAPI component schemas referenced by endpoint
@@ -52,19 +58,32 @@ type KrakenDEndpointSpec struct {
 // EndpointEntry defines a single KrakenD endpoint.
 type EndpointEntry struct {
 	// Endpoint is the public path exposed by KrakenD (e.g. "/api/v1/users").
+	// It starts with "/" and contains no "*", "?", "&", "%", whitespace or
+	// control character, except a trailing "/*" wildcard (an Enterprise
+	// feature). krakend check prints the path verbatim in its errors.
+	// +kubebuilder:validation:Pattern=`^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$`
 	Endpoint string `json:"endpoint"`
 
 	// Method is the HTTP method for this endpoint.
 	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
 	Method string `json:"method"`
 
-	// Backends is the list of backend services for this endpoint.
+	// Backends is the list of backend services for this endpoint, at least one.
+	// +kubebuilder:validation:MinItems=1
 	Backends []BackendSpec `json:"backends"`
 
-	// Timeout overrides the global endpoint timeout.
+	// Timeout overrides the global endpoint timeout (a Go duration).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
-	// CacheTTL overrides the global cache TTL.
+	// CacheTTL overrides the global cache TTL (a Go duration).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// InputHeaders is the list of headers forwarded to backends.
@@ -74,6 +93,7 @@ type EndpointEntry struct {
 	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
 
 	// OutputEncoding overrides the default response encoding.
+	// +kubebuilder:validation:Enum=json;json-collection;yaml;fast-json;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls sets the number of concurrent backend calls for this endpoint.
@@ -87,19 +107,24 @@ type EndpointEntry struct {
 
 // BackendSpec defines a backend service target.
 type BackendSpec struct {
-	// Host is the list of backend host URLs.
+	// Host is the list of backend host URLs. A host holds no whitespace or
+	// control character: krakend check prints it verbatim in its errors.
+	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x20\x7F]+$`
 	Host []string `json:"host"`
 
 	// URLPattern is the backend URL path pattern.
 	URLPattern string `json:"urlPattern"`
 
 	// Method overrides the endpoint method for this backend.
+	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE;OPTIONS;HEAD;CONNECT;TRACE
 	Method string `json:"method,omitempty"`
 
 	// Encoding selects the backend response encoding.
+	// +kubebuilder:validation:Enum=json;safejson;fast-json;xml;rss;string;no-op;yaml
 	Encoding string `json:"encoding,omitempty"`
 
 	// SD selects the service discovery provider (e.g. "static", "dns").
+	// +kubebuilder:validation:Enum=static;dns;dns-shared
 	SD string `json:"sd,omitempty"`
 
 	// SDScheme sets the service discovery scheme (e.g. "http", "https").
@@ -140,24 +165,59 @@ type BackendSpec struct {
 	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
 }
 
+// EndpointConflict is one entry of a KrakenDEndpoint that its gateway leaves
+// out, because an older entry has the same route shape (endpoint paths that
+// differ only in parameter names) and method, or its route clashes with an
+// older entry's route in the router. An entry is recorded once for each
+// KrakenDEndpoint it loses to.
+type EndpointConflict struct {
+	// Endpoint is the entry's path.
+	Endpoint string `json:"endpoint"`
+	// Method is the entry's HTTP method.
+	Method string `json:"method"`
+	// Winner is the namespace/name of the KrakenDEndpoint whose entry this one
+	// loses to. That is an older KrakenDEndpoint, or this one when an earlier
+	// entry of it has the same route shape and method. The winner's entry may
+	// itself be left out.
+	Winner string `json:"winner"`
+}
+
 // KrakenDEndpointStatus defines the observed state of KrakenDEndpoint.
 type KrakenDEndpointStatus struct {
-	Phase              EndpointPhase      `json:"phase,omitempty"`
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	EndpointCount      int32              `json:"endpointCount,omitempty"`
-	Methods            string             `json:"methods,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	// Phase is derived from the Ready condition and kept for compatibility;
+	// read the Ready condition instead.
+	Phase              EndpointPhase `json:"phase,omitempty"`
+	ObservedGeneration int64         `json:"observedGeneration,omitempty"`
+	EndpointCount      int32         `json:"endpointCount,omitempty"`
+	Methods            string        `json:"methods,omitempty"`
+	// Conditions are keyed by type. The endpoint controller writes
+	// ResolvedRefs and Ready; the gateway controller writes Accepted.
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Conflicts lists this endpoint's entries that its gateway leaves out,
+	// because an older entry has the same route shape (endpoint paths that
+	// differ only in parameter names) and method, or its route clashes with
+	// an older entry's route in the router. An entry is listed once for each
+	// KrakenDEndpoint it loses to, which may be this one.
+	// The gateway controller writes it together with the Accepted condition.
+	// +listType=atomic
+	// +optional
+	Conflicts []EndpointConflict `json:"conflicts,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.spec.gatewayRef.name`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Endpoints",type=integer,JSONPath=`.status.endpointCount`
 // +kubebuilder:printcolumn:name="Methods",type=string,JSONPath=`.status.methods`,priority=0
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDEndpoint is the Schema for the krakendendpoints API.
+// KrakenDEndpoint declares one or more KrakenD endpoints (path, method and
+// backends) for a gateway. The operator renders it into the gateway's krakend.json.
 type KrakenDEndpoint struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

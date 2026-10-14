@@ -1,0 +1,17 @@
+{{- /*
+The CRDs are generated: `make manifests` copies files/crds/ from
+operator/config/crd/bases. Change the Go types under operator/api, not these
+files. Each file is emitted byte for byte. The template only adds the chart
+labels and helm.sh/resource-policy: keep to the metadata header, so that
+helm uninstall and helm rollback never delete the CRDs, and with them every
+KrakenD object. .Files.Get is not template-parsed, so template delimiters in a
+description are emitted as text.
+*/}}
+{{- $header := "\nmetadata:\n  annotations:\n" }}
+{{- range $path, $_ := .Files.Glob "files/crds/*.yaml" }}
+{{- $crd := $.Files.Get $path }}
+{{- if ne (len (splitList $header $crd)) 2 }}
+{{- fail (printf "%s: the CRD header is not the one controller-gen writes" $path) }}
+{{- end }}
+{{ $crd | replace $header (printf "\nmetadata:\n  labels:\n%s\n  annotations:\n    helm.sh/resource-policy: keep\n" (include "krakend-operator.labels" $ | indent 4)) }}
+{{- end }}

@@ -1,0 +1,421 @@
+/*
+Copyright 2026 The KrakenD Operator Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+func TestAutoConfigReconcile_PrecheckHoldsTheCandidatesThatFailOnTheirOwn(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "together"} },
+		endpoint: func(ep *v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+			if ep.Name == "test-ac-getb" {
+				return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "'timeout' time: unknown unit"}
+			}
+			return configcheck.EndpointVerdict{OK: true}
+		},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if endpointExists(t, c, "test-ac-getb") || !endpointExists(t, c, "test-ac-listusers") ||
+		!endpointExists(t, c, "test-ac-old") {
+		t.Error("want listusers written, getb held and old kept")
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getb" ||
+		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed ||
+		failed[0].Message != "fails krakend check on its own: 'timeout' time: unknown unit" {
+		t.Errorf("failedOperations = %+v, want getb held with its own output", failed)
+	}
+}
+
+func TestAutoConfigReconcile_ARootThatFailsAloneHoldsNoCandidate(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{rootFails: true, endpoint: func(*v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+		return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "fails only with the root"}
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(checker.checks, []string{"root"}) || !endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("checks = %v; want only the root checked and listusers written", checker.checks)
+	}
+}
+
+func TestAutoConfigReconcile_AGroupThatPassesRunsNoEndpointCheck(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []string{"root", "group:test-ac-listusers"}; !slices.Equal(checker.checks, want) {
+		t.Errorf("checks = %v, want %v: candidates that pass together are not checked one by one", checker.checks, want)
+	}
+}
+
+// A group verdict says nothing about the entries its render left out: a
+// candidate that lost an entry in the group's render is judged on its own
+// even though the group passes, as the gateway controller judges it.
+func TestAutoConfigReconcile_AMaskedCandidateThatFailsOnItsOwnIsHeld(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict {
+			return configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "test-ac-getb"}}}
+		},
+		endpoint: func(ep *v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+			if ep.Name == "test-ac-getb" {
+				return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "its left-out entry is bad"}
+			}
+			return configcheck.EndpointVerdict{OK: true}
+		},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"root", "group:test-ac-listusers,test-ac-getb", "endpoint:test-ac-getb"}
+	if !slices.Equal(checker.checks, want) {
+		t.Errorf("checks = %v, want %v: only the masked candidate is judged on its own", checker.checks, want)
+	}
+	if endpointExists(t, c, "test-ac-getb") || !endpointExists(t, c, "test-ac-listusers") {
+		t.Error("want listusers written and getb held")
+	}
+}
+
+// While the gateway's render stops resolving router clashes at its cap, a new
+// clash cannot be told apart, so every write is held before any krakend check.
+func TestAutoConfigReconcile_ACappedRenderHoldsEveryWriteBeforeAnyCheck(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{conflicts: func([]v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Capped: true}
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(checker.checks) != 0 || endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("checks = %v; want listusers held before any check", checker.checks)
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Message != routerClashesCappedMessage {
+		t.Errorf("failedOperations = %+v, want listusers held for the capped render", failed)
+	}
+}
+
+func TestAutoConfigReconcile_AnUnchangedSyncThatHoldsRunsNoCheckAgain(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	bad := generatedEndpoint("getB", "/b")
+	bad.Spec.Endpoints[0].Backends[0].Host = []string{"http://invalid.test"}
+	g.output.Endpoints = append(g.output.Endpoints, bad)
+	val := rejectsBadHosts()
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, val)
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+	lints := val.lints
+
+	if _, err := reconcileAC(r, getAC(t, c, ac)); err != nil {
+		t.Fatal(err)
+	}
+
+	if val.lints != lints {
+		t.Errorf("the unchanged sync ran %d checks again, want none", val.lints-lints)
+	}
+}
+
+func TestAutoConfigReconcile_AnEndpointCheckThatCannotRunFailsTheSync(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{
+		group:       func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "x"} },
+		endpointErr: errors.New("fork/exec krakend: resource temporarily unavailable"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("reconcile succeeded although an endpoint check could not run")
+	}
+
+	synced := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if synced == nil || synced.Reason != v1alpha1.ReasonValidatorUnavailable || endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("Synced = %+v; want ValidatorUnavailable and nothing written", synced)
+	}
+}
+
+// Another tenant's endpoint on the same gateway carries a value its own
+// check refuses. A candidate's checks never render it, so it can neither hold
+// the candidate nor appear in a hold.
+func TestAutoConfigReconcile_AnotherEndpointsFailureNeverReachesACandidate(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	foreign := testEndpoint("orders", "/orders")
+	foreign.Namespace = "tenant-z"
+	foreign.Spec.GatewayRef.Namespace = "default"
+	foreign.Spec.Endpoints[0].Backends[0].Host = []string{"http://SECRET-PASS@secret.invalid"}
+	val := &contentValidator{markers: map[string]string{"secret.invalid": "SECRET-PASS is refused"}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway(), foreign).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, val)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 || !endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("failedOperations = %+v; want listusers written: another endpoint's failure is not its", failed)
+	}
+}
+
+// A group verdict never blames anyone: when the group fails and every
+// candidate passes on its own, the failure needs other endpoints and none of
+// the candidates is held for it.
+func TestAutoConfigReconcile_AGroupFailureNoCandidateOwnsHoldsNoCandidate(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "together"} },
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"root", "group:test-ac-listusers", "endpoint:test-ac-listusers"}
+	if !slices.Equal(checker.checks, want) {
+		t.Errorf("checks = %v, want %v", checker.checks, want)
+	}
+	if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 || !endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("failedOperations = %+v; want listusers written: a group verdict blames no one", failed)
+	}
+}
+
+// A hold that judging adds keeps the stale endpoints (the sync deletes none
+// once something is held), so the router-clash stage, which modelled them gone,
+// must look again: a candidate whose new route would lose to a kept stale
+// endpoint is held, not written into a clash nobody saw.
+func TestAutoConfigReconcile_AJudgingHoldKeepsTheStaleEndpointsTheClashStageModelledGone(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	stale := ownedCopy(t, ac, generatedEndpoint("getUser", "/users/{id}"))
+	stale.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	orders := ownedCopy(t, ac, generatedEndpoint("getUserOrders", "/users/{id}/orders"))
+	orders.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	bad := generatedEndpoint("getB", "/b")
+	bad.Spec.Endpoints[0].Backends[0].Host = []string{"http://invalid.test"}
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"), bad,
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orders, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, rejectsBadHosts())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var cur v1alpha1.KrakenDEndpoint
+	key := types.NamespacedName{Name: "test-ac-getuserorders", Namespace: "default"}
+	if err := c.Get(context.Background(), key, &cur); err != nil {
+		t.Fatalf("getting the endpoint: %v", err)
+	}
+	if got := cur.Spec.Endpoints[0].Endpoint; got != "/users/{id}/orders" {
+		t.Errorf("getUserOrders route = %q, want it held at /users/{id}/orders", got)
+	}
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		if op.Reason == v1alpha1.ReasonConfigValidationFailed {
+			held[op.Endpoint] = op.Message
+		}
+	}
+	if msg, ok := held["test-ac-getuserorders"]; !ok || !strings.Contains(msg, "test-ac-getuser") {
+		t.Errorf("held = %v, want getUserOrders held, naming the stale endpoint it would lose to", held)
+	}
+	if _, ok := held["test-ac-getb"]; !ok {
+		t.Errorf("held = %v, want getB held for its own failure", held)
+	}
+}
+
+// The status cuts a message at maxStatusMessageLen with an ellipsis, in the
+// middle of a finding. A hold's own output is bounded so that the whole
+// message fits and ends at a finding boundary, naming how many it left out.
+// Five 42-byte findings take 218 bytes joined: under the limit without the
+// room for that count, over it with the room.
+func TestAutoConfigReconcile_AHoldMessageEndsAtAFindingBoundaryWithinTheStatusLimit(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	var findings []string
+	for i := range 20 {
+		findings = append(findings, fmt.Sprintf("finding %02d: the host is not valid here!!!!", i))
+	}
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "together"} },
+		endpoint: func(*v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+			return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: strings.Join(findings, "\n")}
+		},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 {
+		t.Fatalf("failedOperations = %+v, want listusers held", failed)
+	}
+	msg := failed[0].Message
+	if len(msg) > maxStatusMessageLen || strings.HasSuffix(msg, "...") || !strings.HasSuffix(msg, " more)") {
+		t.Errorf("message = %q (%d bytes), want one ending at a finding boundary with a count of the rest", msg, len(msg))
+	}
+}
+
+// A clash hold keeps the stale endpoints just as a judging hold does: the
+// first clash render modelled them gone, so a sibling whose new route loses to
+// a kept stale endpoint is held too.
+func TestAutoConfigReconcile_AClashHoldKeepsTheStaleEndpointsTheClashStageModelledGone(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	stale := ownedCopy(t, ac, generatedEndpoint("getUser", "/users/{id}"))
+	stale.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	orders := ownedCopy(t, ac, generatedEndpoint("getUserOrders", "/users/{id}/orders"))
+	orders.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	other := testEndpoint("other", "/c/{a}")
+	other.CreationTimestamp = metav1.NewTime(time.Unix(500, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"), generatedEndpoint("getC", "/c/{b}/d"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orders, other, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, rejectsBadHosts())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		held[op.Endpoint] = op.Reason
+	}
+	if held["test-ac-getc"] != v1alpha1.ReasonConfigValidationFailed {
+		t.Fatalf("held = %v, want getC held for its router clash", held)
+	}
+	if held["test-ac-getuserorders"] != v1alpha1.ReasonConfigValidationFailed {
+		t.Errorf("held = %v, want getUserOrders held: it would lose to the kept stale getUser", held)
+	}
+}
+
+// A candidate a clash holds stays at its stored route, which a sibling's new
+// route may clash with: the sibling is held, not written into that clash.
+func TestAutoConfigReconcile_ASiblingOfAClashHeldCandidateIsHeldWhenItClashesWithTheStoredRoute(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	other := testEndpoint("other", "/c/{a}")
+	other.CreationTimestamp = metav1.NewTime(time.Unix(500, 0))
+	xStored := ownedCopy(t, ac, generatedEndpoint("getX", "/p/{xid}"))
+	xStored.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	yStored := ownedCopy(t, ac, generatedEndpoint("getY", "/p/{xid}/z"))
+	yStored.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getX", "/c/{b}/d"), generatedEndpoint("getY", "/p/{yid}/z"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, other, xStored, yStored, testGateway()).
+		WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, rejectsBadHosts())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		held[op.Endpoint] = op.Reason
+	}
+	if held["test-ac-getx"] != v1alpha1.ReasonConfigValidationFailed ||
+		held["test-ac-gety"] != v1alpha1.ReasonConfigValidationFailed {
+		t.Errorf("held = %v, want getX held for its clash and getY held for clashing with getX's stored route", held)
+	}
+}

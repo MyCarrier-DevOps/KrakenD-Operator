@@ -38,6 +38,8 @@ const (
 	TriggerPeriodic TriggerType = "Periodic"
 )
 
+// AutoConfigPhase is derived from the Synced condition. Fetching and Rendering are never
+// written; they stay in the enum so previously stored values keep validating.
 // +kubebuilder:validation:Enum=Pending;Fetching;Rendering;Synced;Error
 type AutoConfigPhase string
 
@@ -50,6 +52,9 @@ const (
 )
 
 // KrakenDAutoConfigSpec defines the desired state of KrakenDAutoConfig.
+// +kubebuilder:validation:XValidation:rule="!has(self.openapi.configMapRef) || (has(self.urlTransform) && has(self.urlTransform.hostMapping) && size(self.urlTransform.hostMapping) > 0)",message="hostMapping is required when using configMapRef",fieldPath=".urlTransform.hostMapping"
+// +kubebuilder:validation:XValidation:rule="self.trigger != 'Periodic' || (has(self.periodic) && (!self.periodic.interval.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self.periodic.interval) >= duration('30s')))",message="periodic.interval of at least 30s is required when trigger is Periodic",fieldPath=".periodic.interval"
+// +kubebuilder:validation:XValidation:rule="!(has(self.additionalEndpointsBasePath) && size(self.additionalEndpointsBasePath) > 0 && has(self.urlTransform) && has(self.urlTransform.addPathPrefix) && size(self.urlTransform.addPathPrefix) > 0)",message="additionalEndpointsBasePath is mutually exclusive with urlTransform.addPathPrefix; set only one",fieldPath=".additionalEndpointsBasePath"
 type KrakenDAutoConfigSpec struct {
 	// GatewayRef references the KrakenDGateway that generated endpoints belong to.
 	GatewayRef GatewayRef `json:"gatewayRef"`
@@ -67,6 +72,7 @@ type KrakenDAutoConfigSpec struct {
 	Defaults *Defaults `json:"defaults,omitempty"`
 
 	// Overrides applies per-operation overrides to generated endpoints.
+	// +kubebuilder:validation:MaxItems=1024
 	Overrides []OperationOverride `json:"overrides,omitempty"`
 
 	// Filter restricts which OpenAPI operations are converted to endpoints.
@@ -82,17 +88,23 @@ type KrakenDAutoConfigSpec struct {
 	// spec (e.g. health/liveness probes). They are synthesized into full
 	// endpoints and rendered alongside the spec-derived ones.
 	// +optional
+	// +listType=map
+	// +listMapKey=endpoint
+	// +listMapKey=method
+	// +kubebuilder:validation:MaxItems=256
 	AdditionalEndpoints []AdditionalEndpoint `json:"additionalEndpoints,omitempty"`
 
 	// AdditionalEndpointsBasePath overrides the auto-derived base path used to
 	// scope AdditionalEndpoints under the application. When empty, the base is
-	// derived from the generated endpoints' common parent directory. Must start
-	// with "/".
+	// derived from the common parent directory of the generated endpoints and
+	// the operations held by a failure. Must start with "/".
 	// +optional
+	// +kubebuilder:validation:Pattern=`^/`
 	AdditionalEndpointsBasePath string `json:"additionalEndpointsBasePath,omitempty"`
 }
 
 // OpenAPISource defines the location of an OpenAPI spec.
+// +kubebuilder:validation:XValidation:rule="(has(self.url) && size(self.url) > 0) != has(self.configMapRef)",message="exactly one of url or configMapRef is required"
 type OpenAPISource struct {
 	// URL is the HTTP(S) URL to fetch the OpenAPI spec from.
 	URL string `json:"url,omitempty"`
@@ -111,6 +123,7 @@ type OpenAPISource struct {
 }
 
 // AuthConfig configures authentication for OpenAPI spec fetching.
+// +kubebuilder:validation:XValidation:rule="!(has(self.bearerTokenSecret) && has(self.basicAuthSecret))",message="bearerTokenSecret and basicAuthSecret are mutually exclusive"
 type AuthConfig struct {
 	// BearerTokenSecret references a Secret key containing a bearer token.
 	BearerTokenSecret *corev1.SecretKeySelector `json:"bearerTokenSecret,omitempty"`
@@ -168,12 +181,21 @@ type Defaults struct {
 // EndpointDefaults sets default values for generated endpoints.
 type EndpointDefaults struct {
 	// Timeout sets the default endpoint timeout.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
 	// CacheTTL sets the default endpoint cache TTL.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// OutputEncoding sets the default response encoding (e.g. "json", "no-op").
+	// +kubebuilder:validation:Enum=json;json-collection;yaml;fast-json;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls sets the default number of concurrent backend calls.
@@ -197,9 +219,11 @@ type EndpointDefaults struct {
 // Method, Allow, and Mapping are per-backend and set via overrides.
 type BackendDefaults struct {
 	// Encoding sets the default backend response encoding (e.g. "json", "safejson", "no-op").
+	// +kubebuilder:validation:Enum=json;safejson;fast-json;xml;rss;string;no-op;yaml
 	Encoding string `json:"encoding,omitempty"`
 
 	// SD sets the default service discovery provider (e.g. "static", "dns").
+	// +kubebuilder:validation:Enum=static;dns;dns-shared
 	SD string `json:"sd,omitempty"`
 
 	// SDScheme sets the default service discovery scheme (e.g. "http", "https").
@@ -225,21 +249,34 @@ type OperationOverride struct {
 	OperationID string `json:"operationId"`
 
 	// Endpoint overrides the generated endpoint path.
+	// +kubebuilder:validation:Pattern=`^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$`
 	Endpoint string `json:"endpoint,omitempty"`
 
 	// Method overrides the HTTP method.
+	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
 	Method string `json:"method,omitempty"`
 
-	// Timeout overrides the endpoint timeout.
+	// Timeout overrides the endpoint timeout (a Go duration).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
 	// CacheTTL overrides the endpoint cache TTL.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// OutputEncoding overrides the response encoding (e.g. "no-op", "json").
+	// +kubebuilder:validation:Enum=json;json-collection;yaml;fast-json;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls overrides the number of concurrent backend calls.
+	// When specified, it must be a positive integer.
+	// +kubebuilder:validation:Minimum=1
 	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
 
 	// InputHeaders overrides the list of headers forwarded to backends.
@@ -261,6 +298,7 @@ type OperationOverride struct {
 // BackendOverride applies extra_config to a specific backend by index.
 type BackendOverride struct {
 	// Index is the 0-based backend index.
+	// +kubebuilder:validation:Minimum=0
 	Index int `json:"index"`
 
 	// ExtraConfig holds arbitrary backend-level extra_config JSON.
@@ -281,12 +319,16 @@ type FilterSpec struct {
 // document. Only Endpoint is required; everything else is optional and, when
 // omitted, is synthesized or (when InheritDefaults is true) taken from
 // spec.defaults.
+// +kubebuilder:validation:XValidation:rule="!(has(self.backends) && size(self.backends) > 0 && ((has(self.host) && size(self.host) > 0) || (has(self.backendUrlPattern) && size(self.backendUrlPattern) > 0) || (has(self.encoding) && size(self.encoding) > 0)))",message="backends and the host/backendUrlPattern/encoding shorthand are mutually exclusive"
 type AdditionalEndpoint struct {
 	// Endpoint is the public path KrakenD exposes (e.g. "/liveness").
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$`
 	Endpoint string `json:"endpoint"`
 
 	// Method is the HTTP method. Defaults to GET.
 	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
+	// +kubebuilder:default=GET
 	// +optional
 	Method string `json:"method,omitempty"`
 
@@ -303,6 +345,7 @@ type AdditionalEndpoint struct {
 	// Encoding sets the synthesized backend's encoding. "no-op" also sets the
 	// endpoint output encoding to no-op unless OutputEncoding is set. Ignored when Backends is set.
 	// +optional
+	// +kubebuilder:validation:Enum=json;safejson;fast-json;xml;rss;string;no-op;yaml
 	Encoding string `json:"encoding,omitempty"`
 
 	// Backends, when set, is used verbatim; Host/BackendURLPattern/Encoding are ignored.
@@ -311,9 +354,17 @@ type AdditionalEndpoint struct {
 
 	// Timeout overrides the endpoint timeout.
 	// +optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 	// CacheTTL overrides the endpoint cache TTL.
 	// +optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 	// InputHeaders is the list of headers forwarded to backends.
 	// +optional
@@ -323,6 +374,7 @@ type AdditionalEndpoint struct {
 	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
 	// OutputEncoding overrides the endpoint response encoding.
 	// +optional
+	// +kubebuilder:validation:Enum=json;json-collection;yaml;fast-json;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 	// ConcurrentCalls sets the number of concurrent backend calls.
 	// +kubebuilder:validation:Minimum=1
@@ -341,28 +393,100 @@ type AdditionalEndpoint struct {
 
 // PeriodicSpec configures the polling interval for periodic triggers.
 type PeriodicSpec struct {
+	// Interval is the polling interval; at least 30s.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Interval metav1.Duration `json:"interval"`
+}
+
+// OperationStatus reports one OpenAPI operation the AutoConfig skipped or
+// could not converge.
+type OperationStatus struct {
+	// Method is the operation's HTTP method, upper case.
+	Method string `json:"method"`
+	// Path is the gateway path the operation's endpoint has, or would have.
+	Path string `json:"path"`
+	// OperationID is the operation's operationId, when it declares one.
+	// +optional
+	OperationID string `json:"operationId,omitempty"`
+	// Endpoint is the KrakenDEndpoint generated for the operation, when the
+	// problem concerns that object.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+	// Reason is a CamelCase code for why the operation is listed.
+	Reason string `json:"reason"`
+	// Message explains Reason, truncated to 256 bytes.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
 type KrakenDAutoConfigStatus struct {
-	Phase              AutoConfigPhase    `json:"phase,omitempty"`
-	LastSyncTime       *metav1.Time       `json:"lastSyncTime,omitempty"`
-	SpecChecksum       string             `json:"specChecksum,omitempty"`
-	GeneratedEndpoints int                `json:"generatedEndpoints,omitempty"`
-	SkippedOperations  int                `json:"skippedOperations,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	// Phase is derived from the Synced condition and kept for compatibility;
+	// read the Ready condition instead.
+	Phase AutoConfigPhase `json:"phase,omitempty"`
+	// ObservedGeneration is the metadata.generation this status was computed for.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// LastSyncTime is when a sync last changed something: new inputs (a
+	// different OpenAPI spec, CUE definitions or spec generation) or an
+	// endpoint create, update or delete. A resync that changes nothing leaves
+	// it alone, so an old value does not mean the AutoConfig is stale; use
+	// the Ready condition or the krakend_operator_autoconfig_synced metric
+	// for freshness.
+	LastSyncTime       *metav1.Time `json:"lastSyncTime,omitempty"`
+	SpecChecksum       string       `json:"specChecksum,omitempty"`
+	GeneratedEndpoints int          `json:"generatedEndpoints,omitempty"`
+	// ReadyEndpoints counts the KrakenDEndpoints this AutoConfig controls
+	// whose Ready condition is True for their current generation.
+	// +optional
+	ReadyEndpoints int `json:"readyEndpoints,omitempty"`
+	// SkippedOperations counts the operations the last sync generated no
+	// endpoint for by rule (see skipped), including any beyond the 20 listed.
+	SkippedOperations int `json:"skippedOperations,omitempty"`
+	// Skipped lists up to 20 operations the last sync generated no endpoint
+	// for by rule: an HTTP method KrakenDEndpoint does not accept
+	// (UnsupportedMethod), or a duplicate of an earlier operation
+	// (DuplicateOperationId).
+	// +optional
+	// +listType=atomic
+	Skipped []OperationStatus `json:"skipped,omitempty"`
+	// FailedOperations lists up to 20 operations the last sync could not
+	// converge: they failed CUE evaluation (CUEEvaluationFailed), the gateway
+	// config check (ConfigValidationFailed), or the API server rejected their
+	// endpoint (EndpointRejected). Each keeps the endpoint it had, if any,
+	// and while any is listed no stale endpoint is deleted. Synced is False
+	// while this list is not empty; its reason is OperationsFailed unless a
+	// later sync failed before its endpoint writes, which leaves this list
+	// as the last sync that reached them recorded it.
+	// +optional
+	// +listType=atomic
+	FailedOperations []OperationStatus `json:"failedOperations,omitempty"`
+	// Warnings lists up to 20 problems in the OpenAPI spec or the AutoConfig
+	// that do not stop a sync, such as unresolved or colliding schema
+	// references, which leave the published documentation wrong.
+	// +optional
+	// +listType=atomic
+	Warnings []string `json:"warnings,omitempty"`
+	// Conditions are keyed by type. Ready is the summary condition.
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=kac
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.spec.gatewayRef.name`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Generated",type=integer,JSONPath=`.status.generatedEndpoints`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+// KrakenDAutoConfig generates the KrakenDEndpoints of a gateway from an OpenAPI
+// specification and keeps them in sync with it.
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="name must be at most 63 characters: it is a label value on generated endpoints"
 type KrakenDAutoConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

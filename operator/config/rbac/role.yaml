@@ -8,15 +8,11 @@ rules:
   - ""
   resources:
   - configmaps
-  - serviceaccounts
-  - services
   verbs:
   - create
   - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - ""
@@ -34,6 +30,18 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
   - apps
   resources:
   - deployments
@@ -42,9 +50,20 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - list
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
 - apiGroups:
   - autoscaling
   resources:
@@ -54,7 +73,6 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -66,8 +84,6 @@ rules:
   - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - dragonflydb.io
@@ -78,7 +94,6 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -90,44 +105,53 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
   - gateway.krakend.io
   resources:
   - krakendautoconfigs
-  - krakendbackendpolicies
-  - krakendendpoints
   - krakendgateways
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - gateway.krakend.io
   resources:
   - krakendautoconfigs/finalizers
-  - krakendbackendpolicies/finalizers
-  - krakendendpoints/finalizers
+  - krakendautoconfigs/status
+  - krakendbackendpolicies/status
   - krakendgateways/finalizers
+  - krakendgateways/status
   verbs:
   - update
 - apiGroups:
   - gateway.krakend.io
   resources:
-  - krakendautoconfigs/status
-  - krakendbackendpolicies/status
-  - krakendendpoints/status
-  - krakendgateways/status
+  - krakendbackendpolicies
   verbs:
   - get
-  - patch
+  - list
   - update
+  - watch
+- apiGroups:
+  - gateway.krakend.io
+  resources:
+  - krakendendpoints
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - gateway.krakend.io
+  resources:
+  - krakendendpoints/status
+  verbs:
+  - patch
 - apiGroups:
   - networking.istio.io
   resources:
@@ -137,7 +161,6 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -149,6 +172,5 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch

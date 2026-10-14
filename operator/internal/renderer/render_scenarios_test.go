@@ -857,6 +857,7 @@ func TestRenderScenario_AutoConfigToKrakendJSON(t *testing.T) {
 
 	gw := minimalGateway()
 	gw.Namespace = "krakend"
+	gw.Spec.Edition = v1alpha1.EditionEE
 
 	_, byKey := renderAndParse(t, RenderInput{
 		Gateway:   gw,

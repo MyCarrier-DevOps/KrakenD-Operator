@@ -18,12 +18,15 @@ package renderer
 
 import (
 	"encoding/json"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func minimalGateway() *v1alpha1.KrakenDGateway {
@@ -54,8 +57,8 @@ func TestRender_MinimalGateway(t *testing.T) {
 	if out.Checksum == "" {
 		t.Fatal("expected non-empty checksum")
 	}
-	if out.DesiredImage != "krakend:2.7.0" {
-		t.Errorf("expected CE image, got %s", out.DesiredImage)
+	if got := ResolveImage(minimalGateway(), false); got != "krakend:2.7.0" {
+		t.Errorf("expected CE image, got %s", got)
 	}
 
 	var config map[string]any
@@ -463,78 +466,72 @@ func TestBuildGatewayExtraConfig_Logging(t *testing.T) {
 	}
 }
 
-func TestBuildGatewayExtraConfig_DNSCache(t *testing.T) {
+func TestBuildRootConfig_DNSCacheTTLIsTheRootField(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Config.DNSCacheTTL = "30s"
 
-	ec := buildGatewayExtraConfig(gw, nil)
-	dns, ok := ec["qos/dns"]
-	if !ok {
-		t.Fatal("expected qos/dns in extra_config")
+	if got := buildRootConfig(gw)["dns_cache_ttl"]; got != "30s" {
+		t.Errorf("dns_cache_ttl = %v, want 30s", got)
 	}
-	dnsMap := dns.(map[string]any)
-	if dnsMap["ttl"] != "30s" {
-		t.Errorf("expected ttl 30s, got %v", dnsMap["ttl"])
+	if _, ok := buildGatewayExtraConfig(gw, nil)["qos/dns"]; ok {
+		t.Error("qos/dns is not a KrakenD namespace and must not be rendered")
 	}
 }
 
-func TestBuildGatewayExtraConfig_Redis(t *testing.T) {
-	gw := minimalGateway()
-	gw.Spec.Redis = &v1alpha1.RedisSpec{
-		ConnectionPool: v1alpha1.RedisConnectionPool{
-			Addresses: []string{"redis:6379"},
-			PoolSize:  10,
-		},
+func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
+	dragonfly := &DragonflyState{Enabled: true, ServiceDNS: "gw-dragonfly.ns.svc.cluster.local:6379"}
+	pool := func(addresses ...string) *v1alpha1.RedisSpec {
+		return &v1alpha1.RedisSpec{ConnectionPool: v1alpha1.RedisConnectionPool{
+			Addresses: addresses, PoolSize: 10, MinIdleConns: 2, DialTimeout: "5s",
+			ReadTimeout: "3s", WriteTimeout: "3s",
+		}}
 	}
-
-	ec := buildGatewayExtraConfig(gw, nil)
-	redis, ok := ec["backend/redis"]
-	if !ok {
-		t.Fatal("expected backend/redis in extra_config")
+	cases := []struct {
+		name  string
+		redis *v1alpha1.RedisSpec
+		df    *DragonflyState
+		want  map[string]any
+	}{
+		{"one address is a connection pool", pool("redis:6379"), nil, map[string]any{
+			"connection_pools": []any{map[string]any{
+				"name": "default", "address": "redis:6379", "pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
+			}},
+		}},
+		{"several addresses are a cluster", pool("r1:6379", "r2:6379"), nil, map[string]any{
+			"clusters": []any{map[string]any{
+				"name": "default", "addresses": []string{"r1:6379", "r2:6379"},
+				"pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
+			}},
+		}},
+		{"Dragonfly overrides the addresses", pool("old:6379"), dragonfly, map[string]any{
+			"connection_pools": []any{map[string]any{
+				"name": "default", "address": "gw-dragonfly.ns.svc.cluster.local:6379",
+				"pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
+			}},
+		}},
+		{"Dragonfly without spec.redis", nil, dragonfly, map[string]any{
+			"connection_pools": []any{map[string]any{"name": "default", "address": "gw-dragonfly.ns.svc.cluster.local:6379"}},
+		}},
+		{"no address renders no pool", pool(), nil, nil},
 	}
-	redisMap := redis.(map[string]any)
-	addrs := redisMap["addresses"].([]string)
-	if len(addrs) != 1 || addrs[0] != "redis:6379" {
-		t.Errorf("unexpected redis addresses: %v", addrs)
-	}
-}
-
-func TestBuildGatewayExtraConfig_DragonflyOverridesRedis(t *testing.T) {
-	gw := minimalGateway()
-	gw.Spec.Redis = &v1alpha1.RedisSpec{
-		ConnectionPool: v1alpha1.RedisConnectionPool{
-			Addresses: []string{"old-redis:6379"},
-		},
-	}
-	df := &DragonflyState{
-		Enabled:    true,
-		ServiceDNS: "gw-dragonfly.ns.svc.cluster.local:6379",
-	}
-
-	ec := buildGatewayExtraConfig(gw, df)
-	redis := ec["backend/redis"].(map[string]any)
-	addrs := redis["addresses"].([]string)
-	if len(addrs) != 1 || addrs[0] != "gw-dragonfly.ns.svc.cluster.local:6379" {
-		t.Errorf("expected dragonfly DNS to override redis, got %v", addrs)
-	}
-}
-
-func TestBuildGatewayExtraConfig_DragonflyWithoutRedis(t *testing.T) {
-	gw := minimalGateway()
-	df := &DragonflyState{
-		Enabled:    true,
-		ServiceDNS: "gw-dragonfly.ns.svc.cluster.local:6379",
-	}
-
-	ec := buildGatewayExtraConfig(gw, df)
-	redis, ok := ec["backend/redis"]
-	if !ok {
-		t.Fatal("expected backend/redis from dragonfly state")
-	}
-	redisMap := redis.(map[string]any)
-	addrs := redisMap["addresses"].([]string)
-	if addrs[0] != "gw-dragonfly.ns.svc.cluster.local:6379" {
-		t.Errorf("expected dragonfly DNS, got %v", addrs)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := minimalGateway()
+			gw.Spec.Redis = tc.redis
+			ec := buildGatewayExtraConfig(gw, tc.df)
+			if _, ok := ec["backend/redis"]; ok {
+				t.Error("backend/redis is not a KrakenD namespace and must not be rendered")
+			}
+			if tc.want == nil {
+				if _, ok := ec["redis"]; ok {
+					t.Errorf("redis = %#v, want none without an address", ec["redis"])
+				}
+				return
+			}
+			if !reflect.DeepEqual(ec["redis"], tc.want) {
+				t.Errorf("redis = %#v, want %#v", ec["redis"], tc.want)
+			}
+		})
 	}
 }
 
@@ -973,5 +970,215 @@ func TestAppendEndpointComponentSchemas_FirstSeenWins(t *testing.T) {
 	schemaMap := schemas["user"].(map[string]any)
 	if schemaMap["description"] != "first" {
 		t.Errorf("expected first-seen wins, got description=%v", schemaMap["description"])
+	}
+}
+
+func TestRender_LeavesOutConflictLosersAndEndpointsWithAMissingPolicy(t *testing.T) {
+	earlier := metav1.NewTime(time.Now().Add(-time.Hour))
+	later := metav1.NewTime(time.Now())
+	entry := func(path, policy string) v1alpha1.EndpointEntry {
+		b := v1alpha1.BackendSpec{Host: []string{"http://svc:80"}, URLPattern: "/x"}
+		if policy != "" {
+			b.PolicyRef = &v1alpha1.PolicyRef{Name: policy}
+		}
+		return v1alpha1.EndpointEntry{Endpoint: path, Method: "GET", Backends: []v1alpha1.BackendSpec{b}}
+	}
+	cr := func(name string, created metav1.Time, e v1alpha1.EndpointEntry) v1alpha1.KrakenDEndpoint {
+		return v1alpha1.KrakenDEndpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: created},
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				GatewayRef: v1alpha1.GatewayRef{Name: "test"}, Endpoints: []v1alpha1.EndpointEntry{e},
+			},
+		}
+	}
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		cr("winner", earlier, entry("/dup", "")),
+		cr("loser", later, entry("/dup", "")),
+		cr("broken", earlier, entry("/broken", "nonexistent")),
+	}
+
+	out, err := New(Options{}).Render(RenderInput{Gateway: minimalGateway(), Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := endpointPaths(t, out.JSON); !slices.Equal(got, []string{"/dup"}) {
+		t.Errorf("rendered %v, want only the winner's /dup", got)
+	}
+	if got := out.EntryConflicts[types.NamespacedName{Namespace: "default", Name: "loser"}]; len(got) != 1 ||
+		got[0].Winner.Name != "winner" {
+		t.Errorf("ns/loser lost %+v, want its /dup to default/winner", got)
+	}
+}
+
+func TestRender_EntryConflictsNameTheWinner(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionCE, Version: "2.13"},
+	}
+	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	entry := func(path string) v1alpha1.EndpointEntry {
+		return v1alpha1.EndpointEntry{Endpoint: path, Method: "GET", Backends: backend}
+	}
+	t0 := metav1.NewTime(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	t1 := metav1.NewTime(t0.Add(time.Minute))
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Name: "older", Namespace: "ns", CreationTimestamp: t0},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{entry("/shared")}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "newer", Namespace: "ns", CreationTimestamp: t1},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{entry("/shared"), entry("/own")}}},
+	}
+	out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := types.NamespacedName{Namespace: "ns", Name: "newer"}
+	want := []EntryConflict{{Endpoint: "/shared", Method: "GET", Winner: types.NamespacedName{Namespace: "ns", Name: "older"}}}
+	if got := out.EntryConflicts[newer]; !reflect.DeepEqual(got, want) {
+		t.Errorf("EntryConflicts[newer] = %+v, want %+v", got, want)
+	}
+	if _, ok := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "older"}]; ok {
+		t.Error("the winner lost nothing and must have no entry conflicts")
+	}
+}
+
+func TestRender_EntryConflictsAreSortedByEndpointThenMethod(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionCE, Version: "2.13"},
+	}
+	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	entry := func(path, method string) v1alpha1.EndpointEntry {
+		return v1alpha1.EndpointEntry{Endpoint: path, Method: method, Backends: backend}
+	}
+	t0 := metav1.NewTime(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Name: "older", Namespace: "ns", CreationTimestamp: t0},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{
+				entry("/a", "GET"), entry("/b", "GET"), entry("/b", "POST"), entry("/c", "GET")}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "newer", Namespace: "ns", CreationTimestamp: metav1.NewTime(t0.Add(time.Minute))},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{
+				entry("/c", "GET"), entry("/b", "POST"), entry("/a", "GET"), entry("/b", "GET")}}},
+	}
+	out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner := types.NamespacedName{Namespace: "ns", Name: "older"}
+	want := []EntryConflict{
+		{Endpoint: "/a", Method: "GET", Winner: winner},
+		{Endpoint: "/b", Method: "GET", Winner: winner},
+		{Endpoint: "/b", Method: "POST", Winner: winner},
+		{Endpoint: "/c", Method: "GET", Winner: winner},
+	}
+	if got := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "newer"}]; !reflect.DeepEqual(got, want) {
+		t.Errorf("EntryConflicts[newer] = %+v, want %+v", got, want)
+	}
+}
+
+// schemaEndpoint returns an endpoint in namespace "default" carrying the
+// given component schemas.
+func schemaEndpoint(name string, schemas map[string]string) v1alpha1.KrakenDEndpoint {
+	ep := v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	ep.Spec.ComponentSchemas = map[string]runtime.RawExtension{}
+	for k, v := range schemas {
+		ep.Spec.ComponentSchemas[k] = runtime.RawExtension{Raw: json.RawMessage(v)}
+	}
+	return ep
+}
+
+func TestAppendEndpointComponentSchemas_ReportsDifferingBodies(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"type":"object","description":"a"}`}),
+		schemaEndpoint("c", map[string]string{
+			"User": `{"type":"object","description":"c"}`,
+			"Pet":  `{"type":"object"}`,
+		}),
+	}
+
+	conflicts := appendEndpointComponentSchemas(map[string]any{}, endpoints)
+
+	want := []SchemaConflict{{
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "c"},
+		Schema:   "User",
+		Winner:   types.NamespacedName{Namespace: "default", Name: "a"},
+	}}
+	if !reflect.DeepEqual(conflicts, want) {
+		t.Errorf("conflicts = %+v, want %+v", conflicts, want)
+	}
+}
+
+func TestAppendEndpointComponentSchemas_ComparesDecodedBodies(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"type":"object","description":"a"}`}),
+		// The same body with other key order and spacing.
+		schemaEndpoint("b", map[string]string{"User": `{"description": "a", "type": "object"}`}),
+	}
+
+	if conflicts := appendEndpointComponentSchemas(map[string]any{}, endpoints); len(conflicts) != 0 {
+		t.Errorf("conflicts = %+v, want none for an equal body", conflicts)
+	}
+}
+
+func TestRender_SchemaConflictsOnlyWhereDocsArePublished(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"type":"object","description":"a"}`}),
+		schemaEndpoint("c", map[string]string{"User": `{"type":"object","description":"c"}`}),
+	}
+	for _, tc := range []struct {
+		name       string
+		edition    v1alpha1.Edition
+		openapi    bool
+		ceFallback bool
+		want       int
+	}{
+		{"EE publishing docs", v1alpha1.EditionEE, true, false, 1},
+		{"EE in CE fallback", v1alpha1.EditionEE, true, true, 0},
+		{"CE edition", v1alpha1.EditionCE, true, false, 0},
+		{"EE without the OpenAPI export", v1alpha1.EditionEE, false, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := minimalGateway()
+			gw.Spec.Edition = tc.edition
+			gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: tc.openapi}
+
+			out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints, CEFallback: tc.ceFallback})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.SchemaConflicts) != tc.want {
+				t.Errorf("SchemaConflicts = %+v, want %d", out.SchemaConflicts, tc.want)
+			}
+		})
+	}
+}
+
+func TestAppendEndpointComponentSchemas_ComparesAgainstTheWinner(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"description":"A"}`}),
+		schemaEndpoint("b", map[string]string{"User": `{"description":"B"}`}),
+		schemaEndpoint("c", map[string]string{
+			"User": `{"description":"B"}`,
+			"Pet":  `{"description":"C"}`,
+			"Cat":  `{"description":"C"}`,
+		}),
+		schemaEndpoint("d", map[string]string{
+			"Pet": `{"description":"D"}`,
+			"Cat": `{"description":"D"}`,
+		}),
+	}
+	ref := func(name string) types.NamespacedName { return types.NamespacedName{Namespace: "default", Name: name} }
+
+	conflicts := appendEndpointComponentSchemas(map[string]any{}, endpoints)
+
+	want := []SchemaConflict{
+		{Endpoint: ref("b"), Schema: "User", Winner: ref("a")},
+		// c equals b, but the winner is a, so c conflicts with it too.
+		{Endpoint: ref("c"), Schema: "User", Winner: ref("a")},
+		// c wins Cat and Pet; d differs on both, in schema name order.
+		{Endpoint: ref("d"), Schema: "Cat", Winner: ref("c")},
+		{Endpoint: ref("d"), Schema: "Pet", Winner: ref("c")},
+	}
+	if !reflect.DeepEqual(conflicts, want) {
+		t.Errorf("conflicts = %+v, want %+v", conflicts, want)
 	}
 }

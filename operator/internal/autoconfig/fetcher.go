@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,6 +28,11 @@ import (
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/redact"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,13 +60,16 @@ type FetchResult struct {
 	Checksum string
 }
 
-// Fetcher fetches OpenAPI specs from URLs or ConfigMaps.
+// Fetcher fetches OpenAPI specs from URLs or ConfigMaps. Its errors name a URL
+// only through redact.URL: they become status messages and span events.
 type Fetcher interface {
 	Fetch(ctx context.Context, source FetchSource) (*FetchResult, error)
 }
 
-// NewFetcher creates a Fetcher that can read from HTTP and ConfigMaps.
-func NewFetcher(k8sClient client.Client) Fetcher {
+// NewFetcher creates a Fetcher that can read from HTTP and ConfigMaps. Each
+// fetch is a span of tracer, its HTTP request a client span below it; a nil
+// tracer records none.
+func NewFetcher(k8sClient client.Client, tracer trace.Tracer) Fetcher {
 	checkRedirect := func(_ *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
 			return fmt.Errorf("too many redirects (max %d)", maxRedirects)
@@ -70,15 +79,16 @@ func NewFetcher(k8sClient client.Client) Fetcher {
 	return &httpFetcher{
 		client: k8sClient,
 		strictClient: &http.Client{
-			Transport:     SSRFSafeTransportWithPolicy(false),
+			Transport:     clientSpans{next: SSRFSafeTransportWithPolicy(false), tracer: tracer},
 			Timeout:       fetchTimeout,
 			CheckRedirect: checkRedirect,
 		},
 		lenientClient: &http.Client{
-			Transport:     SSRFSafeTransportWithPolicy(true),
+			Transport:     clientSpans{next: SSRFSafeTransportWithPolicy(true), tracer: tracer},
 			Timeout:       fetchTimeout,
 			CheckRedirect: checkRedirect,
 		},
+		tracer: tracer,
 	}
 }
 
@@ -86,9 +96,18 @@ type httpFetcher struct {
 	client        client.Client
 	strictClient  *http.Client
 	lenientClient *http.Client
+	tracer        trace.Tracer
 }
 
-func (f *httpFetcher) Fetch(ctx context.Context, source FetchSource) (*FetchResult, error) {
+func (f *httpFetcher) Fetch(ctx context.Context, source FetchSource) (_ *FetchResult, retErr error) {
+	attrs := []attribute.KeyValue{attribute.String("autoconfig.source", "url"), semconv.URLFull(redact.URL(source.URL))}
+	if source.ConfigMapRef != nil {
+		attrs = []attribute.KeyValue{
+			attribute.String("autoconfig.source", "configmap"), tracing.KeyName.String(source.ConfigMapRef.Name),
+		}
+	}
+	ctx, span := tracing.Start(ctx, f.tracer, "autoconfig.fetch", trace.WithAttributes(attrs...))
+	defer func() { tracing.End(span, retErr) }()
 	if source.ConfigMapRef != nil {
 		return f.fetchFromConfigMap(ctx, source)
 	}
@@ -118,22 +137,35 @@ func (f *httpFetcher) fetchFromConfigMap(ctx context.Context, source FetchSource
 	return &FetchResult{Data: raw, Checksum: checksum}, nil
 }
 
+// fetchFromURL reads source's URL. Every error it returns names the URL once,
+// redacted, as "fetching <URL>: ...", so a $ref's error tells which document
+// failed, and nothing it wraps may repeat the URL.
 func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*FetchResult, error) {
 	if source.URL == "" {
 		return nil, fmt.Errorf("no URL or ConfigMapRef provided")
 	}
+	result, err := f.get(ctx, source)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s: %w", redact.URL(source.URL), err)
+	}
+	return result, nil
+}
 
+func (f *httpFetcher) get(ctx context.Context, source FetchSource) (*FetchResult, error) {
 	parsed, err := url.Parse(source.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parsing URL: %w", err)
+		return nil, fmt.Errorf("parsing URL: %w", withoutURL(err))
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, fmt.Errorf("unsupported scheme %q: only http and https are allowed", parsed.Scheme)
+		return nil, errors.New("unsupported scheme: only http and https are allowed")
+	}
+	if parsed.Hostname() == "" {
+		return nil, fmt.Errorf("URL has no host")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request: %w", withoutURL(err))
 	}
 
 	if source.Auth != nil {
@@ -149,7 +181,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching %s: %w", source.URL, err)
+		return nil, withoutURL(err)
 	}
 	defer func() {
 		if cerr := resp.Body.Close(); cerr != nil {
@@ -158,7 +190,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, source.URL)
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))

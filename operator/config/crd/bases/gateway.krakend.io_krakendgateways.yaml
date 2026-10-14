@@ -23,8 +23,15 @@ spec:
     - jsonPath: .spec.version
       name: Version
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      type: string
     - jsonPath: .status.phase
       name: Phase
+      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -32,7 +39,10 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KrakenDGateway is the Schema for the krakendgateways API.
+        description: |-
+          KrakenDGateway declares a KrakenD API gateway. The operator creates and keeps
+          its Deployment, Service and rendered configuration in sync with the gateway
+          and its endpoints.
         properties:
           apiVersion:
             description: |-
@@ -79,7 +89,13 @@ spec:
                 properties:
                   cacheTTL:
                     description: CacheTTL is the global cache TTL (e.g. "0s").
+                    maxLength: 64
+                    pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a duration that fits in 64 bits of nanoseconds
+                      rule: '!self.matches(''^[0-9]+(ns|ms|us|µs|s|m|h)$'') || duration(self)
+                        >= duration(''0s'')'
                   cors:
                     description: CORS configures Cross-Origin Resource Sharing headers.
                     properties:
@@ -104,6 +120,7 @@ spec:
                           type: string
                         type: array
                       maxAge:
+                        pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                         type: string
                     type: object
                   debugEndpoint:
@@ -112,7 +129,13 @@ spec:
                   dnsCacheTTL:
                     description: DNSCacheTTL is the DNS lookup cache duration (e.g.
                       "30s").
+                    maxLength: 64
+                    pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a duration that fits in 64 bits of nanoseconds
+                      rule: '!self.matches(''^[0-9]+(ns|ms|us|µs|s|m|h)$'') || duration(self)
+                        >= duration(''0s'')'
                   documentation:
                     description: Documentation configures gateway-level OpenAPI documentation.
                     properties:
@@ -157,12 +180,21 @@ spec:
                       config.
                     type: string
                   outputEncoding:
-                    description: 'OutputEncoding selects the default response encoding:
-                      json, negotiate, no-op.'
+                    description: OutputEncoding selects the default response encoding.
+                    enum:
+                    - json
+                    - fast-json
+                    - json-collection
+                    - xml
+                    - negotiate
+                    - string
+                    - no-op
                     type: string
                   port:
                     description: Port is the KrakenD listen port (default 8080).
                     format: int32
+                    maximum: 65535
+                    minimum: 1
                     type: integer
                   router:
                     description: Router configures KrakenD router behavior.
@@ -176,6 +208,7 @@ spec:
                       disableRedirectTrailingSlash:
                         type: boolean
                       healthPath:
+                        pattern: ^/
                         type: string
                       loggerSkipPaths:
                         items:
@@ -339,7 +372,13 @@ spec:
                     type: object
                   timeout:
                     description: Timeout is the global request timeout (e.g. "3s").
+                    maxLength: 64
+                    pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a duration that fits in 64 bits of nanoseconds
+                      rule: '!self.matches(''^[0-9]+(ns|ms|us|µs|s|m|h)$'') || duration(self)
+                        >= duration(''0s'')'
                 type: object
               dragonfly:
                 description: Dragonfly configures an in-cluster Dragonfly instance
@@ -1221,6 +1260,9 @@ spec:
                   rendered KrakenD configuration and a sidecar container serves it
                   on an additional container port. The port is exposed on the gateway
                   Service but is NOT added to the Istio VirtualService (local traffic only).
+                  The export needs the Enterprise binary: no export, sidecar or Service
+                  port is created for a CE gateway, or while an EE gateway serves its CE
+                  fallback.
                 properties:
                   audience:
                     description: |-
@@ -1722,10 +1764,16 @@ spec:
                           - claimName
                           type: object
                       type: object
+                    maxItems: 32
                     type: array
                 required:
                 - sources
                 type: object
+                x-kubernetes-validations:
+                - fieldPath: .sources
+                  message: only one PVC plugin source is supported
+                  rule: self.sources.filter(s, has(s.persistentVolumeClaimRef)).size()
+                    <= 1
               postRestartJob:
                 description: |-
                   PostRestartJob configures a Kubernetes Job that runs a user-provided
@@ -2454,6 +2502,9 @@ spec:
                       Defaults to the gateway's ServiceAccount.
                     type: string
                   tmpSizeLimit:
+                    allOf:
+                    - pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    - pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?[0-9]{1,2}))?$
                     anyOf:
                     - type: integer
                     - type: string
@@ -2466,9 +2517,15 @@ spec:
                       script-level failure. A value of "0" means no cap (an emptyDir
                       SizeLimit of zero is treated by the kubelet as unbounded — it only
                       enforces a limit for positive quantities); a negative value is
-                      rejected by the validating webhook.
-                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      rejected by the validating webhook. The suffix is a binary (Ki..Ei) or
+                      decimal (n..E) SI suffix, or an e/E exponent of at most two digits:
+                      larger exponents are refused before they are parsed.
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: must be a quantity of at most 64 characters that Kubernetes
+                        can decode
+                      rule: type(self) == int || (size(self) <= 64 && self.matches('^([+]|-)?(([0-9]+([.][0-9]*)?)|([.][0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE]([+]|-)?[0-9]{1,2}))?$')
+                        && isQuantity(self))
                   ttlSecondsAfterFinished:
                     description: |-
                       TTLSecondsAfterFinished controls automatic cleanup after Job
@@ -2496,6 +2553,11 @@ spec:
                 required:
                 - enabled
                 type: object
+                x-kubernetes-validations:
+                - fieldPath: .script
+                  message: script is required when postRestartJob is enabled
+                  rule: '!self.enabled || (has(self.script) && size(self.script) >
+                    0)'
               redis:
                 description: Redis configures the connection pool to an external Redis/Dragonfly.
                 properties:
@@ -2507,11 +2569,18 @@ spec:
                           type: string
                         type: array
                       dialTimeout:
+                        maxLength: 64
+                        pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                         type: string
+                        x-kubernetes-validations:
+                        - message: must be a duration that fits in 64 bits of nanoseconds
+                          rule: '!self.matches(''^[0-9]+(ns|ms|us|µs|s|m|h)$'') ||
+                            duration(self) >= duration(''0s'')'
                       minIdleConns:
                         type: integer
                       password:
-                        description: SecretKeySelector selects a key of a Secret.
+                        description: Password is not rendered yet; setting or changing
+                          it is rejected.
                         properties:
                           key:
                             description: The key of the secret to select from.  Must
@@ -2534,19 +2603,32 @@ spec:
                         - key
                         type: object
                         x-kubernetes-map-type: atomic
+                        x-kubernetes-validations:
+                        - message: 'password is not supported yet: the operator has
+                            never rendered it, so KrakenD would connect without it'
+                          rule: "false"
                       poolSize:
                         type: integer
                       readTimeout:
+                        description: 'Deprecated: has no effect. KrakenD''s redis
+                          connection pools have no such setting; it is not rendered.'
                         type: string
                       tls:
-                        description: RedisTLSConfig configures TLS for Redis connections.
+                        description: TLS is not rendered yet; setting or changing
+                          it is rejected.
                         properties:
                           enabled:
                             type: boolean
                           secretName:
                             type: string
                         type: object
+                        x-kubernetes-validations:
+                        - message: 'tls is not supported yet: the operator has never
+                            rendered it, so KrakenD would connect without it'
+                          rule: "false"
                       writeTimeout:
+                        description: 'Deprecated: has no effect. KrakenD''s redis
+                          connection pools have no such setting; it is not rendered.'
                         type: string
                     required:
                     - addresses
@@ -2639,12 +2721,46 @@ spec:
             - edition
             - version
             type: object
+            x-kubernetes-validations:
+            - fieldPath: .license
+              message: edition EE requires license.externalSecret.enabled or a license.secretRef
+                with a non-empty name
+              rule: self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret)
+                && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled)
+                || (has(self.license.secretRef) && size(self.license.secretRef.name)
+                > 0)))
+            - fieldPath: .license
+              message: CE edition does not require license configuration
+              rule: self.edition != 'CE' || !has(self.license) || !((has(self.license.externalSecret)
+                && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled)
+                || has(self.license.secretRef))
+            - fieldPath: .license
+              message: externalSecret and secretRef are mutually exclusive
+              rule: '!has(self.license) || !(has(self.license.externalSecret) && has(self.license.externalSecret.enabled)
+                && self.license.externalSecret.enabled && has(self.license.secretRef))'
+            - fieldPath: .openapi.port
+              message: openapi port must differ from the gateway listen port
+              rule: '!has(self.openapi) || !self.openapi.enabled || ((has(self.openapi.port)
+                && self.openapi.port > 0) ? self.openapi.port : 8090) != ((has(self.config.port)
+                && self.config.port > 0) ? self.config.port : 8080)'
+            - fieldPath: .dragonfly.authentication.passwordFromSecret
+              message: 'dragonfly.authentication.passwordFromSecret is not supported
+                yet with edition EE: the operator renders KrakenD''s redis pool without
+                the password, so KrakenD could not authenticate'
+              optionalOldSelf: true
+              rule: '!(self.edition == ''EE'' && has(self.dragonfly) && has(self.dragonfly.authentication)
+                && has(self.dragonfly.authentication.passwordFromSecret)) || (oldSelf.hasValue()
+                && oldSelf.value().edition == ''EE'' && has(oldSelf.value().dragonfly)
+                && has(oldSelf.value().dragonfly.authentication) && has(oldSelf.value().dragonfly.authentication.passwordFromSecret)
+                && oldSelf.value().dragonfly.authentication.passwordFromSecret ==
+                self.dragonfly.authentication.passwordFromSecret)'
           status:
             description: KrakenDGatewayStatus defines the observed state of KrakenDGateway.
             properties:
               activeImage:
                 type: string
               conditions:
+                description: Conditions are keyed by type. Ready is the summary condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -2700,7 +2816,19 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               configChecksum:
+                type: string
+              configEdition:
+                description: |-
+                  ConfigEdition is the edition configChecksum was validated for and is
+                  deployed with: EE, or CE for a CE gateway or an EE gateway in license
+                  fallback. The Deployment's image follows it.
+                enum:
+                - CE
+                - EE
                 type: string
               dragonflyAddress:
                 type: string
@@ -2726,6 +2854,9 @@ spec:
                 format: int64
                 type: integer
               phase:
+                description: |-
+                  Phase is derived from the Ready condition on every reconcile and kept
+                  for compatibility; read the Ready condition instead.
                 enum:
                 - Pending
                 - Rendering

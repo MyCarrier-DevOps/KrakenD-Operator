@@ -1,0 +1,11 @@
+{
+  "$schema": "https://www.krakend.io/schema/krakend.json",
+  "version": 3,
+  "endpoints": [
+    {
+      "endpoint": "/bad",
+      "timeout": "not-a-duration",
+      "backend": [{ "url_pattern": "/bad", "host": ["http://backend.invalid:8080"] }]
+    }
+  ]
+}

@@ -20,6 +20,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"reflect"
+	"slices"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
@@ -42,26 +45,63 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 
 	// Flatten and deduplicate endpoints
-	flat, conflicted, invalid := flattenEndpoints(input.Endpoints, input.Policies)
+	flat, shadowed, conflicted, invalid := flattenEndpoints(input.Endpoints, input.Policies)
 
 	// Build the root config object
 	config := buildRootConfig(gw)
 
-	// Build endpoints array
+	// The gateway-level extra_config comes first: its router block decides
+	// which routes the entries must share. Entries the router cannot serve
+	// next to an older endpoint's are left out, oldest first, as duplicates
+	// are.
+	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
+	flat, capped := dropRouteLosers(flat, shadowed, conflicted, routeRules{
+		autoOptions: routerOptionsOf(gatewayEC).AutoOptions,
+		eeWildcards: gw.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback,
+	})
+
+	// Build endpoints array. A CE-fallback render drops Enterprise-only
+	// features and lists them.
 	endpointsJSON := make([]any, 0, len(flat))
+	var stripped []StrippedEEFeature
 	for _, fe := range flat {
+		if input.CEFallback && IsEEWildcard(fe.Entry.Endpoint) {
+			stripped = append(stripped, StrippedEEFeature{
+				Source: fe.Source, Method: fe.Entry.Method, Endpoint: fe.Entry.Endpoint,
+				Feature: FeatureWildcardEndpoint,
+			})
+			continue
+		}
 		ep := buildEndpointJSON(fe.Entry, input.Policies, fe.Source.Namespace)
+		// Every CE render drops the entries' docs-only namespaces and lists
+		// nothing for them: they never change what the gateway serves. A
+		// CE-fallback render then strips and lists the functional
+		// Enterprise-only features.
+		if input.CEFallback || gw.Spec.Edition == v1alpha1.EditionCE {
+			dropCEInertNamespaces(ep)
+		}
+		if input.CEFallback {
+			stripped = append(stripped, stripEndpointEEFeatures(ep, fe)...)
+		}
 		endpointsJSON = append(endpointsJSON, ep)
 	}
 	config["endpoints"] = endpointsJSON
 
-	// Build gateway-level extra_config
-	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
-
 	// Aggregate component schemas from all endpoints into root
-	// documentation/openapi.components_schemas so that endpoint-level
-	// ref fields resolve correctly.
-	appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
+	// documentation/openapi.components_schemas so that endpoint-level ref
+	// fields resolve. Only KrakenD Enterprise publishes it, so a CE-edition
+	// render aggregates nothing.
+	var schemaConflicts []SchemaConflict
+	if gw.Spec.Edition != v1alpha1.EditionCE {
+		schemaConflicts = appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
+	}
+	if !publishesDocs(input) {
+		schemaConflicts = nil
+	}
+	if input.CEFallback {
+		stripped = append(stripped,
+			stripNamespaces(gatewayEC, LevelService, eeOnlyServiceNamespaces, StrippedEEFeature{}, "extra_config")...)
+	}
 
 	if len(gatewayEC) > 0 {
 		config["extra_config"] = gatewayEC
@@ -79,7 +119,6 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 
 	checksum := hash.SHA256Hex(jsonData)
-	desiredImage := ResolveImage(gw, input.CEFallback)
 	pluginChecksum := computePluginChecksum(gw, input.PluginConfigMaps)
 
 	// Convert conflict/invalid sets to slices
@@ -93,12 +132,15 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 
 	return &RenderOutput{
-		JSON:                jsonData,
-		Checksum:            checksum,
-		DesiredImage:        desiredImage,
-		PluginChecksum:      pluginChecksum,
-		ConflictedEndpoints: conflictedSlice,
-		InvalidEndpoints:    invalidSlice,
+		JSON:                  jsonData,
+		Checksum:              checksum,
+		PluginChecksum:        pluginChecksum,
+		ConflictedEndpoints:   conflictedSlice,
+		EntryConflicts:        conflicted,
+		RouteResolutionCapped: capped,
+		InvalidEndpoints:      invalidSlice,
+		StrippedEEFeatures:    stripped,
+		SchemaConflicts:       schemaConflicts,
 	}, nil
 }
 
@@ -118,6 +160,9 @@ func buildRootConfig(gw *v1alpha1.KrakenDGateway) map[string]any {
 	}
 	if spec.CacheTTL != "" {
 		config["cache_ttl"] = spec.CacheTTL
+	}
+	if spec.DNSCacheTTL != "" {
+		config["dns_cache_ttl"] = spec.DNSCacheTTL
 	}
 	if spec.OutputEncoding != "" {
 		config["output_encoding"] = spec.OutputEncoding
@@ -153,10 +198,6 @@ func buildGatewayExtraConfig(gw *v1alpha1.KrakenDGateway, df *DragonflyState) ma
 	appendRouterConfig(ec, spec.Router)
 	appendLoggingConfig(ec, spec.Logging)
 	appendDocumentationConfig(ec, spec.Documentation)
-
-	if spec.DNSCacheTTL != "" {
-		ec["qos/dns"] = map[string]any{"ttl": spec.DNSCacheTTL}
-	}
 
 	appendRedisConfig(ec, gw.Spec.Redis, df)
 
@@ -430,21 +471,32 @@ func appendDocumentationConfig(ec map[string]any, doc *v1alpha1.DocumentationCon
 
 // appendEndpointComponentSchemas collects component schemas from all endpoint
 // CRs and merges them into the root documentation/openapi.components_schemas.
-// First-seen wins for duplicate schema names across different CRs.
-func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.KrakenDEndpoint) {
+// First-seen wins for duplicate schema names across different CRs; each
+// later endpoint that defines a seen name differently is returned as a
+// SchemaConflict, in endpoint order and then by schema name.
+func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.KrakenDEndpoint) []SchemaConflict {
 	schemas := make(map[string]any)
+	from := make(map[string]types.NamespacedName)
+	var conflicts []SchemaConflict
 	for i := range endpoints {
-		for name, raw := range endpoints[i].Spec.ComponentSchemas {
-			if _, exists := schemas[name]; !exists {
-				var schema any
-				if err := json.Unmarshal(raw.Raw, &schema); err == nil {
-					schemas[name] = schema
-				}
+		source := types.NamespacedName{Namespace: endpoints[i].Namespace, Name: endpoints[i].Name}
+		for _, name := range slices.Sorted(maps.Keys(endpoints[i].Spec.ComponentSchemas)) {
+			var schema any
+			if err := json.Unmarshal(endpoints[i].Spec.ComponentSchemas[name].Raw, &schema); err != nil {
+				continue
+			}
+			seen, exists := schemas[name]
+			switch {
+			case !exists:
+				schemas[name] = schema
+				from[name] = source
+			case !reflect.DeepEqual(seen, schema):
+				conflicts = append(conflicts, SchemaConflict{Endpoint: source, Schema: name, Winner: from[name]})
 			}
 		}
 	}
 	if len(schemas) == 0 {
-		return
+		return conflicts
 	}
 	docConfig, ok := ec["documentation/openapi"].(map[string]any)
 	if !ok {
@@ -452,40 +504,56 @@ func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.Krak
 	}
 	docConfig["components_schemas"] = schemas
 	ec["documentation/openapi"] = docConfig
+	return conflicts
 }
 
-func appendRedisConfig(ec map[string]any, redis *v1alpha1.RedisSpec, df *DragonflyState) {
-	if redis != nil {
-		pool := redis.ConnectionPool
-		r := map[string]any{"addresses": pool.Addresses}
-		if pool.PoolSize > 0 {
-			r["pool_size"] = pool.PoolSize
-		}
-		if pool.MinIdleConns > 0 {
-			r["min_idle_conns"] = pool.MinIdleConns
-		}
-		if pool.DialTimeout != "" {
-			r["dial_timeout"] = pool.DialTimeout
-		}
-		if pool.ReadTimeout != "" {
-			r["read_timeout"] = pool.ReadTimeout
-		}
-		if pool.WriteTimeout != "" {
-			r["write_timeout"] = pool.WriteTimeout
-		}
-		ec["backend/redis"] = r
-	}
+// publishesDocs reports whether a render of input publishes OpenAPI docs: an
+// EE gateway, not in CE fallback, with the OpenAPI export enabled. A schema
+// name collision anywhere else changes no document a reader sees.
+func publishesDocs(input RenderInput) bool {
+	gw := input.Gateway
+	return gw.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback && gw.Spec.OpenAPI != nil &&
+		gw.Spec.OpenAPI.Enabled
+}
 
-	if df != nil && df.Enabled && df.ServiceDNS != "" {
-		if existing, ok := ec["backend/redis"]; ok {
-			if redisMap, ok := existing.(map[string]any); ok {
-				redisMap["addresses"] = []string{df.ServiceDNS}
-			}
-		} else {
-			ec["backend/redis"] = map[string]any{
-				"addresses": []string{df.ServiceDNS},
-			}
+// RedisPoolName names the Redis connection pool (or cluster) rendered from
+// spec.redis and Dragonfly. KrakenD EE components reference it by name, for
+// example qos/ratelimit/router/redis {"connection_name": "default"}.
+const RedisPoolName = "default"
+
+// appendRedisConfig renders the KrakenD EE service-level "redis" namespace
+// (https://www.krakend.io/docs/enterprise/service-settings/redis-connection-pools/):
+// one connection pool for a single address, or one cluster for several.
+// readTimeout and writeTimeout have no equivalent in that namespace and are
+// not rendered.
+func appendRedisConfig(ec map[string]any, redis *v1alpha1.RedisSpec, df *DragonflyState) {
+	pool := map[string]any{"name": RedisPoolName}
+	var addresses []string
+	if redis != nil {
+		p := redis.ConnectionPool
+		addresses = p.Addresses
+		if p.PoolSize > 0 {
+			pool["pool_size"] = p.PoolSize
 		}
+		if p.MinIdleConns > 0 {
+			pool["min_idle_conns"] = p.MinIdleConns
+		}
+		if p.DialTimeout != "" {
+			pool["dial_timeout"] = p.DialTimeout
+		}
+	}
+	if df != nil && df.Enabled && df.ServiceDNS != "" {
+		addresses = []string{df.ServiceDNS}
+	}
+	switch len(addresses) {
+	case 0:
+		return
+	case 1:
+		pool["address"] = addresses[0]
+		ec["redis"] = map[string]any{"connection_pools": []any{pool}}
+	default:
+		pool["addresses"] = addresses
+		ec["redis"] = map[string]any{"clusters": []any{pool}}
 	}
 }
 

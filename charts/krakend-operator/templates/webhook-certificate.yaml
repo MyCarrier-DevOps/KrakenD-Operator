@@ -1,15 +1,5 @@
 {{- if and .Values.webhooks.enabled .Values.webhooks.certManager.enabled }}
 apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: {{ include "krakend-operator.fullname" . }}-selfsigned-issuer
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "krakend-operator.labels" . | nindent 4 }}
-spec:
-  selfSigned: {}
----
-apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: {{ include "krakend-operator.fullname" . }}-serving-cert
@@ -22,6 +12,6 @@ spec:
     - {{ include "krakend-operator.fullname" . }}-webhook-service.{{ .Release.Namespace }}.svc.cluster.local
   issuerRef:
     kind: Issuer
-    name: {{ include "krakend-operator.fullname" . }}-selfsigned-issuer
+    name: {{ include "krakend-operator.issuerName" . }}
   secretName: {{ include "krakend-operator.fullname" . }}-webhook-server-cert
 {{- end }}

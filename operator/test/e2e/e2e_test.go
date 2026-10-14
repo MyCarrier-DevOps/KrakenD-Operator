@@ -40,7 +40,7 @@ const namespace = "krakend-operator-system"
 const serviceAccountName = "krakend-operator-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "krakend-operator-controller-manager-metrics-service"
+const metricsServiceName = "krakend-operator-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "krakend-operator-metrics-binding"
@@ -65,15 +65,21 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+		By("rendering the Helm chart")
+		manifest, err := utils.OperatorManifest(namespace, projectImage, true)
+		Expect(err).NotTo(HaveOccurred(), "Failed to render the Helm chart")
 
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+		By("installing the CRDs and the controller-manager from the chart")
+		cmd = exec.Command("kubectl", "apply", "--server-side", "-f", "-")
+		cmd.Stdin = strings.NewReader(manifest)
 		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+		Expect(err).NotTo(HaveOccurred(), "Failed to install the operator from the chart")
+
+		By("waiting for the controller-manager to roll out")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/krakend-operator-controller-manager",
+			"-n", namespace, "--timeout=5m")
+		_, err = utils.Run(cmd) // Ready only once the webhook server serves
+		Expect(err).NotTo(HaveOccurred(), "The controller-manager did not roll out")
 
 		By("creating test namespace for CRD lifecycle tests")
 		cmd = exec.Command("kubectl", "create", "ns", testNamespace)
@@ -93,13 +99,16 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 			"-n", namespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
+		// The CRDs go with the K3s container: deleting them once the operator is gone could
+		// hang on the policy-protection finalizer.
+		By("deleting the controller-manager")
+		if manifest, err := utils.OperatorManifest(namespace, projectImage, false); err == nil {
+			cmd = exec.Command("kubectl", "delete", "--ignore-not-found", "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			_, _ = utils.Run(cmd)
+		} else {
+			fmt.Fprintf(GinkgoWriter, "warning: rendering the chart for teardown: %v\n", err) //nolint:errcheck // best-effort log
+		}
 
 		By("cleaning up metrics ClusterRoleBinding")
 		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
@@ -227,8 +236,8 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
-					"Metrics server not yet started")
+				g.Expect(hasMetricsServerRecord(output)).To(BeTrue(),
+					"no single record has the body, the logger name and the service name of the metrics server start")
 			}
 			Eventually(verifyMetricsServerStarted).Should(Succeed())
 
@@ -278,6 +287,12 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 			Expect(metricsOutput).To(ContainSubstring(
 				"controller_runtime_reconcile_total",
 			))
+
+			By("checking the operator's metrics keep their names and gain no exporter family")
+			Expect(metricsOutput).To(ContainSubstring("krakend_operator_config_renders_total"))
+			Expect(metricsOutput).NotTo(ContainSubstring("target_info"))
+			Expect(metricsOutput).NotTo(ContainSubstring("otel_scope_"))
+			Expect(metricsOutput).NotTo(ContainSubstring("http_server_request"))
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
@@ -454,8 +469,12 @@ metadata:
   name: e2e-dragonfly
 spec:
   version: "2.9"
-  edition: CE
+  edition: EE
   config: {}
+  license:
+    secretRef:
+      name: e2e-license
+      key: license.lic
   dragonfly:
     enabled: true
     replicas: 1
@@ -472,6 +491,19 @@ spec:
 				g.Expect(output).To(Equal("e2e-dragonfly"))
 			}
 			Eventually(verifyDeployment).Should(Succeed())
+
+			By("verifying the missing license Secret is reported and does not fall back to CE")
+			verifyLicenseState := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-dragonfly",
+					"-n", testNamespace, "-o",
+					"jsonpath=unavailable={.status.conditions[?(@.type==\"LicenseSecretUnavailable\")].status}"+
+						",fallback={.status.conditions[?(@.type==\"CEFallbackApplied\")].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("unavailable=True,fallback="),
+					"want LicenseSecretUnavailable True and no CEFallbackApplied condition")
+			}
+			Eventually(verifyLicenseState).Should(Succeed())
 
 			By("verifying the Dragonfly CR is created")
 			verifyDragonfly := func(g Gomega) {
@@ -518,6 +550,197 @@ spec:
 				g.Expect(err).To(HaveOccurred(), "Dragonfly CR should be garbage collected")
 			}
 			Eventually(verifyDragonflyDeleted).Should(Succeed())
+		})
+	})
+
+	// ── Admission: post-restart Job that borrows a ServiceAccount ──────────
+
+	Context("Admission — post-restart Job that borrows a ServiceAccount", func() {
+		const (
+			borrowingGateway = "e2e-borrowing-job"
+			editorUser       = "e2e-gateway-editor"
+			editorBinding    = "e2e-gateway-editor-binding"
+		)
+		borrowingManifest := `
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: ` + borrowingGateway + `
+spec:
+  version: "2.9"
+  edition: CE
+  config: {}
+  postRestartJob:
+    enabled: true
+    script: "true"
+    serviceAccountName: default
+`
+
+		It("admits it for a requester who may create pods and denies it for one who may not", func() {
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "krakendgateway", borrowingGateway,
+					"-n", testNamespace, "--ignore-not-found", "--timeout=60s")
+				_, _ = utils.Run(cmd)
+				cmd = exec.Command("kubectl", "delete", "rolebinding", editorBinding,
+					"-n", testNamespace, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			})
+
+			By("admitting the gateway for the cluster admin, whose pods/create comes through a group")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+				cmd.Stdin = strings.NewReader(borrowingManifest)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(),
+					"the cluster admin was refused a post-restart Job that borrows the default ServiceAccount: "+
+						"the SubjectAccessReview failed or dropped the requester's groups: %s", output)
+			}).Should(Succeed())
+
+			By("removing it before the rollout so the Job never runs")
+			cmd := exec.Command("kubectl", "delete", "krakendgateway", borrowingGateway,
+				"-n", testNamespace, "--timeout=60s")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("binding a user to the chart's krakendgateway editor role, which carries no pods/create")
+			cmd = exec.Command("kubectl", "create", "rolebinding", editorBinding,
+				"-n", testNamespace, "--clusterrole=krakend-operator-krakendgateway-editor-role",
+				"--user="+editorUser)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("denying the same gateway for that user")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "--as="+editorUser, "-f", "-")
+				cmd.Stdin = strings.NewReader(borrowingManifest)
+				output, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(),
+					"a gateway editor without pods/create was admitted a post-restart Job that borrows "+
+						"the default ServiceAccount; output: %s", output)
+				g.Expect(output).To(ContainSubstring("may not create pods"),
+					"the apply failed, but not with the post-restart Job denial (a role binding that has "+
+						"not propagated yet, or a webhook error)")
+			}).Should(Succeed())
+		})
+	})
+
+	// ── Admission: Secret references need the requester's own rights ───────
+
+	Context("Admission — a Secret reference needs the requester's own rights", func() {
+		const (
+			licenseSecret = "e2e-sar-license"
+			editorUser    = "e2e-sar-editor"
+			editorBinding = "e2e-sar-editor-binding"
+			readerRole    = "e2e-sar-license-reader"
+			createRole    = "e2e-sar-externalsecret-creator"
+		)
+		secretRefManifest := `
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-sar-secret
+spec:
+  version: "2.9"
+  edition: EE
+  config: {}
+  license:
+    secretRef:
+      name: ` + licenseSecret + `
+      key: LICENSE
+`
+		externalSecretManifest := `
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-sar-externalsecret
+spec:
+  version: "2.9"
+  edition: EE
+  config: {}
+  license:
+    externalSecret:
+      enabled: true
+      secretStoreRef:
+        name: vault
+        kind: ClusterSecretStore
+      remoteRef:
+        key: krakend/license
+`
+		// dryRunAs server-side dry-runs manifest as the editor: nothing is
+		// persisted, and the admission webhooks still run.
+		dryRunAs := func(manifest string) (string, error) {
+			cmd := exec.Command("kubectl", "apply", "--dry-run=server", "-n", testNamespace,
+				"--as="+editorUser, "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			return utils.Run(cmd)
+		}
+		// grant lets the editor do verb on resource (as kubectl names it), only
+		// on resourceNames when given.
+		grant := func(role, resource, verb string, resourceNames ...string) {
+			args := []string{"create", "role", role, "-n", testNamespace,
+				"--verb=" + verb, "--resource=" + resource}
+			for _, name := range resourceNames {
+				args = append(args, "--resource-name="+name)
+			}
+			_, err := utils.Run(exec.Command("kubectl", args...))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = utils.Run(exec.Command("kubectl", "create", "rolebinding", role, "-n", testNamespace,
+				"--role="+role, "--user="+editorUser))
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		It("refuses a license reference the requester may not use and admits it once they may", func() {
+			DeferCleanup(func() {
+				for _, name := range []string{editorBinding, readerRole, createRole} {
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "rolebinding", name,
+						"-n", testNamespace, "--ignore-not-found"))
+				}
+				for _, name := range []string{readerRole, createRole} {
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "role", name,
+						"-n", testNamespace, "--ignore-not-found"))
+				}
+			})
+
+			By("binding a user to the chart's krakendgateway editor role, which carries no get on secrets")
+			_, err := utils.Run(exec.Command("kubectl", "create", "rolebinding", editorBinding,
+				"-n", testNamespace, "--clusterrole=krakend-operator-krakendgateway-editor-role",
+				"--user="+editorUser))
+			Expect(err).NotTo(HaveOccurred())
+
+			By("refusing a license secretRef for that user, naming the field")
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(secretRefManifest)
+				g.Expect(err).To(HaveOccurred(),
+					"a gateway editor without get on the Secret was admitted its license reference: %s", output)
+				g.Expect(output).To(ContainSubstring("spec.license.secretRef.name"))
+				g.Expect(output).To(ContainSubstring("may not get Secret "+licenseSecret),
+					"the apply failed, but not with the Secret denial (a role binding that has "+
+						"not propagated yet, or a webhook error)")
+			}).Should(Succeed())
+
+			By("admitting it once a Role grants get on that one Secret; the Secret need not exist")
+			grant(readerRole, "secrets", "get", licenseSecret)
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(secretRefManifest)
+				g.Expect(err).NotTo(HaveOccurred(), "the reference was refused despite the grant: %s", output)
+			}).Should(Succeed())
+
+			By("refusing a license ExternalSecret for that user")
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(externalSecretManifest)
+				g.Expect(err).To(HaveOccurred(),
+					"a gateway editor without create on externalsecrets was admitted a license ExternalSecret: %s",
+					output)
+				g.Expect(output).To(ContainSubstring("spec.license.externalSecret"))
+				g.Expect(output).To(ContainSubstring("may not create externalsecrets.external-secrets.io"))
+			}).Should(Succeed())
+
+			By("admitting it once a Role grants create on externalsecrets")
+			grant(createRole, "externalsecrets.external-secrets.io", "create")
+			Eventually(func(g Gomega) {
+				output, err := dryRunAs(externalSecretManifest)
+				g.Expect(err).NotTo(HaveOccurred(), "the ExternalSecret was refused despite the grant: %s", output)
+			}).Should(Succeed())
 		})
 	})
 
@@ -627,8 +850,12 @@ metadata:
   name: e2e-full
 spec:
   version: "2.9"
-  edition: CE
+  edition: EE
   config: {}
+  license:
+    secretRef:
+      name: e2e-license
+      key: license.lic
   dragonfly:
     enabled: true
     replicas: 1
@@ -770,4 +997,31 @@ type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`
 	} `json:"status"`
+}
+
+// hasMetricsServerRecord reports whether one line of the operator's JSON logs,
+// one record per line, is the metrics server's start: its body, the logger
+// name of its scope and the operator's service name all on the same record.
+func hasMetricsServerRecord(logs string) bool {
+	for _, line := range strings.Split(logs, "\n") {
+		var record struct {
+			Body     struct{ Value any }
+			Resource []struct {
+				Key   string
+				Value struct{ Value any }
+			}
+			Scope struct{ Name string }
+		}
+		if json.Unmarshal([]byte(line), &record) != nil ||
+			record.Body.Value != "Serving metrics server" ||
+			record.Scope.Name != "krakend-operator/controller-runtime/metrics" {
+			continue
+		}
+		for _, attr := range record.Resource {
+			if attr.Key == "service.name" && attr.Value.Value == "krakend-operator" {
+				return true
+			}
+		}
+	}
+	return false
 }

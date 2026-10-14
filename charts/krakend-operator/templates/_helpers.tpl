@@ -67,3 +67,62 @@ Operator image
 {{- $tag := default .Chart.AppVersion .Values.image.tag -}}
 {{- printf "%s:%s" .Values.image.repository $tag }}
 {{- end }}
+
+{{/*
+Webhook CA bundle for clientConfig.caBundle when cert-manager does not inject
+one. Accepts the PEM bundle itself or its base64 encoding and always emits the
+base64 encoding of the PEM on one line, which is what the API server expects.
+*/}}
+{{- define "krakend-operator.webhookCABundle" -}}
+{{- $ca := .Values.webhooks.caBundle | default "" | trim -}}
+{{- if contains "-----BEGIN" $ca -}}
+{{- $ca | b64enc -}}
+{{- else -}}
+{{- $ca | nospace -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+OTEL_RESOURCE_ATTRIBUTES from a map: key=value pairs, sorted by key, joined
+with commas. Values are percent-encoded, as the SDK decodes them.
+*/}}
+{{- define "krakend-operator.resourceAttributes" -}}
+{{- $pairs := list -}}
+{{- range $key, $value := . -}}
+{{- if or (contains "," $key) (contains "=" $key) -}}
+{{- fail (printf "telemetry.resourceAttributes key %q must not contain \",\" or \"=\"" $key) -}}
+{{- end -}}
+{{- $pairs = append $pairs (printf "%s=%s" $key (urlquery (toString $value) | replace "+" "%20")) -}}
+{{- end -}}
+{{- join "," $pairs -}}
+{{- end }}
+
+{{/*
+The OTLP endpoint: telemetry.otlp.endpoint, or the collector on the node's IP
+when telemetry.otlp.nodeCollector.enabled. Empty when neither is set.
+*/}}
+{{- define "krakend-operator.otlpEndpoint" -}}
+{{- $otlp := .Values.telemetry.otlp -}}
+{{- if and $otlp.nodeCollector.enabled $otlp.endpoint -}}
+{{- fail "telemetry.otlp.endpoint and telemetry.otlp.nodeCollector.enabled are both set; use one" -}}
+{{- end -}}
+{{- if $otlp.nodeCollector.enabled -}}
+{{- printf "http://$(NODE_IP):%v" $otlp.nodeCollector.port -}}
+{{- else -}}
+{{- $otlp.endpoint -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The self-signed Issuer both cert-manager certificates use, and whether it is
+rendered: when the webhook certificate or the metrics certificate is on.
+*/}}
+{{- define "krakend-operator.issuerName" -}}
+{{ include "krakend-operator.fullname" . }}-selfsigned-issuer
+{{- end }}
+
+{{- define "krakend-operator.issuerEnabled" -}}
+{{- if or (and .Values.webhooks.enabled .Values.webhooks.certManager.enabled) (and .Values.metrics.enabled .Values.metrics.certManager.enabled) -}}
+true
+{{- end -}}
+{{- end }}

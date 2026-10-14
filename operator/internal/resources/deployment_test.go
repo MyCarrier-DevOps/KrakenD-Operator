@@ -17,6 +17,7 @@ limitations under the License.
 package resources
 
 import (
+	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -29,7 +30,7 @@ import (
 func TestBuildDeployment_Minimal(t *testing.T) {
 	gw := testGateway()
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "abc123", "", "krakend/krakend-ce:2.7.0")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "abc123", PluginChecksum: "", Image: "krakend/krakend-ce:2.7.0"})
 
 	// Labels
 	if dep.Labels["app.kubernetes.io/name"] != "krakend" {
@@ -175,11 +176,43 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 func TestBuildDeployment_PluginChecksum(t *testing.T) {
 	gw := testGateway()
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "abc", "pluginhash", "img:latest")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "abc", PluginChecksum: "pluginhash", Image: "img:latest"})
 
 	ann := dep.Spec.Template.Annotations
 	if ann["krakend.io/checksum-plugins"] != "pluginhash" {
 		t.Errorf("expected plugin checksum annotation, got %q", ann["krakend.io/checksum-plugins"])
+	}
+}
+
+func TestBuildDeployment_LicenseChecksum(t *testing.T) {
+	cases := map[string]struct {
+		checksum string
+		want     string
+		present  bool
+	}{
+		"a license checksum is recorded": {checksum: "abc", want: "abc", present: true},
+		"no license checksum is absent":  {checksum: "", present: false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dep := &appsv1.Deployment{}
+			BuildDeployment(dep, testGateway(), DeploymentInputs{
+				ConfigChecksum: "cs", Image: "img:v1", LicenseChecksum: tc.checksum,
+			})
+			got, ok := dep.Spec.Template.Annotations[LicenseChecksumAnnotation]
+			if ok != tc.present || got != tc.want {
+				t.Errorf("license annotation = %q (present %v), want %q (present %v)", got, ok, tc.want, tc.present)
+			}
+		})
+	}
+}
+
+func TestBuildDeployment_RecordsTheImageItSet(t *testing.T) {
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, testGateway(), DeploymentInputs{ConfigChecksum: "abc", PluginChecksum: "", Image: "img:latest"})
+
+	if got := dep.Spec.Template.Annotations[ImageAnnotation]; got != "img:latest" {
+		t.Errorf("image annotation = %q, want %q", got, "img:latest")
 	}
 }
 
@@ -188,7 +221,7 @@ func TestBuildDeployment_CustomPortAndHealthPath(t *testing.T) {
 	gw.Spec.Config.Port = 9090
 	gw.Spec.Config.Router = &v1alpha1.RouterConfig{HealthPath: "/ready"}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	c := dep.Spec.Template.Spec.Containers[0]
 	if c.Ports[0].ContainerPort != 9090 {
@@ -215,7 +248,7 @@ func TestBuildDeployment_WithResources(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	c := dep.Spec.Template.Spec.Containers[0]
 	if c.Resources.Requests.Cpu().String() != "250m" {
@@ -230,7 +263,7 @@ func TestBuildDeployment_WithReplicas(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Replicas = ptr.To(int32(3))
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	if *dep.Spec.Replicas != 3 {
 		t.Errorf("expected 3 replicas, got %d", *dep.Spec.Replicas)
@@ -247,7 +280,7 @@ func TestBuildDeployment_EEWithLicense(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "krakend/krakend-ee:2.7.0")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "krakend/krakend-ee:2.7.0"})
 
 	// Should have config + tmp + license = 3 volumes
 	vols := dep.Spec.Template.Spec.Volumes
@@ -286,6 +319,26 @@ func TestBuildDeployment_EEWithLicense(t *testing.T) {
 	}
 }
 
+func TestBuildDeployment_LicenseSecretReferenceWithNoKeyMountsTheLICENSEKey(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Edition = v1alpha1.EditionEE
+	gw.Spec.License = &v1alpha1.LicenseConfig{
+		SecretRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "krakend-license"}},
+	}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", Image: "krakend/krakend-ee:2.7.0"})
+
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == "license" {
+			if got := v.Secret.Items[0].Key; got != "LICENSE" {
+				t.Errorf("mounted key = %q, want LICENSE: the controller reads that key when none is named", got)
+			}
+			return
+		}
+	}
+	t.Error("no license volume")
+}
+
 func TestBuildDeployment_SingleSourceConfigMapPlugin(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Plugins = &v1alpha1.PluginsSpec{
@@ -294,7 +347,7 @@ func TestBuildDeployment_SingleSourceConfigMapPlugin(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	// config + tmp + plugin-0 = 3
 	vols := dep.Spec.Template.Spec.Volumes
@@ -339,7 +392,7 @@ func TestBuildDeployment_SingleSourcePVC(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	vols := dep.Spec.Template.Spec.Volumes
 	if len(vols) != 3 {
@@ -362,7 +415,7 @@ func TestBuildDeployment_MultiSourceOCI(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "phash", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "phash", Image: "img:v1"})
 
 	// Should use multi-source: emptyDir "plugins" + plugin-cm-1
 	vols := dep.Spec.Template.Spec.Volumes
@@ -424,7 +477,7 @@ func TestBuildDeployment_MultiSourcePVC(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	ics := dep.Spec.Template.Spec.InitContainers
 	if len(ics) != 2 {
@@ -439,7 +492,7 @@ func TestBuildDeployment_NoPlugins(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Plugins = nil
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	if len(dep.Spec.Template.Spec.Volumes) != 2 {
 		t.Errorf("expected 2 base volumes with nil plugins, got %d", len(dep.Spec.Template.Spec.Volumes))
@@ -450,7 +503,7 @@ func TestBuildDeployment_EmptyPluginSources(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{}}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	if len(dep.Spec.Template.Spec.Volumes) != 2 {
 		t.Errorf("expected 2 base volumes with empty sources, got %d", len(dep.Spec.Template.Spec.Volumes))
@@ -467,12 +520,106 @@ func TestBuildDeployment_CENoLicenseVolume(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cs", "", "img:v1")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", PluginChecksum: "", Image: "img:v1"})
 
 	// CE should not mount license even if SecretRef is set
 	for _, v := range dep.Spec.Template.Spec.Volumes {
 		if v.Name == "license" {
 			t.Error("CE deployment should not have license volume")
 		}
+	}
+}
+
+func TestBuildDeployment_AutoscalingKeepsLiveReplicas(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Replicas = ptr.To(int32(3))
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 10}
+	dep := &appsv1.Deployment{}
+	dep.Spec.Replicas = ptr.To(int32(7)) // scaled by the HPA
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "abc123", PluginChecksum: "", Image: "krakend/krakend-ce:2.7.0"})
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 7 {
+		t.Errorf("replicas = %d, want the HPA's 7 kept", got)
+	}
+}
+
+func TestBuildDeployment_AutoscalingStartsAtMinReplicas(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Replicas = ptr.To(int32(5))
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 10}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "abc123", PluginChecksum: "", Image: "krakend/krakend-ce:2.7.0"})
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 2 {
+		t.Errorf("replicas = %d, want minReplicas 2 for a new Deployment", got)
+	}
+}
+
+func TestBuildDeployment_AutoscalingWithoutMinStartsAtOne(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MaxReplicas: 10}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "abc123", PluginChecksum: "", Image: "krakend/krakend-ce:2.7.0"})
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 1 {
+		t.Errorf("replicas = %d, want 1, the HPA default floor", got)
+	}
+}
+
+func TestBuildDeployment_MountsTheNamedConfigMap(t *testing.T) {
+	gw := testGateway()
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, DeploymentInputs{
+		ConfigMapName: "test-gw-config-0123456789", ConfigChecksum: "cs", Image: "img:v1",
+	})
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == "config" {
+			if v.ConfigMap == nil || v.ConfigMap.Name != "test-gw-config-0123456789" {
+				t.Fatalf("config volume = %+v, want ConfigMap test-gw-config-0123456789", v.VolumeSource)
+			}
+			return
+		}
+	}
+	t.Fatal("no config volume")
+}
+
+func TestBuildDeployment_CERenderRunsWithoutTheOpenAPIPieces(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		edition  v1alpha1.Edition
+		ceRender bool
+		want     bool
+	}{
+		{"EE render", v1alpha1.EditionEE, false, true},
+		{"EE gateway in CE fallback", v1alpha1.EditionEE, true, false},
+		{"CE-edition gateway", v1alpha1.EditionCE, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := testGateway()
+			gw.Spec.Edition = tc.edition
+			gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+			dep := &appsv1.Deployment{}
+			BuildDeployment(dep, gw,
+				DeploymentInputs{ConfigMapName: "cm", ConfigChecksum: "cs", Image: "img", CERender: tc.ceRender})
+			spec := dep.Spec.Template.Spec
+			hasExport := slices.ContainsFunc(spec.InitContainers, func(c corev1.Container) bool {
+				return c.Name == "openapi-export"
+			})
+			hasServe := slices.ContainsFunc(spec.Containers, func(c corev1.Container) bool {
+				return c.Name == "openapi-serve"
+			})
+			if hasExport != tc.want || hasServe != tc.want {
+				t.Errorf("openapi-export %v, openapi-serve %v; want both %v (the CE binary has no openapi command)",
+					hasExport, hasServe, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildDeployment_RemovedAutoscalingReturnsToSpecReplicas(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Replicas = ptr.To(int32(3))
+	dep := &appsv1.Deployment{}
+	dep.Spec.Replicas = ptr.To(int32(7)) // left by the HPA that was just deleted
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "abc123", PluginChecksum: "", Image: "krakend/krakend-ce:2.7.0"})
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 3 {
+		t.Errorf("replicas = %d, want spec.replicas 3 once autoscaling is removed", got)
 	}
 }

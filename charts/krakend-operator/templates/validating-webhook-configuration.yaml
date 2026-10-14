@@ -9,99 +9,38 @@ metadata:
   annotations:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "krakend-operator.fullname" . }}-serving-cert
   {{- end }}
+# Webhooks are generated: files/webhook-manifests.yaml is copied from
+# operator/config/webhook/manifests.yaml by `make manifests`. Change the
+# +kubebuilder:webhook markers, not this file. The template adds only the
+# service reference, the caBundle, failurePolicy from values, and the
+# cert-manager annotation above.
+# A generated field this template does not render fails the render, so the
+# install never registers something other than the markers describe.
 webhooks:
-  - name: vkrakendgateway.kb.io
+{{- $generated := .Files.Get "files/webhook-manifests.yaml" | fromYaml }}
+{{- if or (ne (toString $generated.kind) "ValidatingWebhookConfiguration") (not $generated.webhooks) }}
+{{- fail "files/webhook-manifests.yaml must hold one ValidatingWebhookConfiguration with webhooks" }}
+{{- end }}
+{{- range $generated.webhooks }}
+{{- $unknown := concat (keys (omit . "name" "admissionReviewVersions" "clientConfig" "failurePolicy" "rules" "sideEffects" "timeoutSeconds")) (keys (omit .clientConfig "service")) (keys (omit (.clientConfig.service | default dict) "name" "namespace" "path")) }}
+{{- if $unknown }}
+{{- fail (printf "webhook %s in files/webhook-manifests.yaml sets %s, which templates/validating-webhook-configuration.yaml does not render" .name (sortAlpha $unknown | join ", ")) }}
+{{- end }}
+  - name: {{ .name }}
     admissionReviewVersions:
-      - v1
+      {{- toYaml .admissionReviewVersions | nindent 6 }}
     clientConfig:
       service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendgateway
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+        name: {{ include "krakend-operator.fullname" $ }}-webhook-service
+        namespace: {{ $.Release.Namespace }}
+        path: {{ .clientConfig.service.path }}
+      {{- if not $.Values.webhooks.certManager.enabled }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" $ }}
       {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
+    failurePolicy: {{ $.Values.webhooks.failurePolicy }}
     rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-          - DELETE
-        resources:
-          - krakendgateways
-    sideEffects: None
-  - name: vkrakendendpoint.kb.io
-    admissionReviewVersions:
-      - v1
-    clientConfig:
-      service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
-      {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
-    rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-        resources:
-          - krakendendpoints
-    sideEffects: None
-  - name: vkrakendbackendpolicy.kb.io
-    admissionReviewVersions:
-      - v1
-    clientConfig:
-      service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
-      {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
-    rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-          - DELETE
-        resources:
-          - krakendbackendpolicies
-    sideEffects: None
-  - name: vkrakendautoconfig.kb.io
-    admissionReviewVersions:
-      - v1
-    clientConfig:
-      service:
-        name: {{ include "krakend-operator.fullname" . }}-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
-      {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
-      {{- end }}
-    failurePolicy: {{ .Values.webhooks.failurePolicy }}
-    rules:
-      - apiGroups:
-          - gateway.krakend.io
-        apiVersions:
-          - v1alpha1
-        operations:
-          - CREATE
-          - UPDATE
-        resources:
-          - krakendautoconfigs
-    sideEffects: None
+      {{- toYaml .rules | nindent 6 }}
+    sideEffects: {{ .sideEffects }}
+    timeoutSeconds: {{ .timeoutSeconds }}
+{{- end }}
 {{- end }}

@@ -3,7 +3,6 @@ kind: KrakenDBackendPolicy
 metadata:
   labels:
     app.kubernetes.io/name: krakend-operator
-    app.kubernetes.io/managed-by: kustomize
   name: krakendbackendpolicy-sample
 spec:
   circuitBreaker:

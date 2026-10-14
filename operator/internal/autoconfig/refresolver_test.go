@@ -21,6 +21,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,7 +41,7 @@ func (s *stubFetcher) Fetch(_ context.Context, source FetchSource) (*FetchResult
 	s.hits[source.URL]++
 	body, ok := s.docs[source.URL]
 	if !ok {
-		return nil, fmt.Errorf("not found: %s", source.URL)
+		return nil, fmt.Errorf("fetching %s: not found", source.URL)
 	}
 	return &FetchResult{Data: body, Checksum: fmt.Sprintf("%x", sha256.Sum256(body))}, nil
 }
@@ -110,6 +114,38 @@ func TestResolveExternalRefs_RelativeRef(t *testing.T) {
 	}
 }
 
+func TestResolveExternalRefs_NestedRelativeRefResolvesAgainstContainingDocument(t *testing.T) {
+	// A relative ref inside a fetched document is relative to that
+	// document, not to the main spec.
+	main := []byte(`{"paths":{"/pets":{"get":{"responses":{"200":{"content":{"application/json":{` +
+		`"schema":{"$ref":"schemas/pet.json#/Pet"}}}}}}}}}`)
+	pet := []byte(`{"Pet":{"type":"object","properties":{"category":{"$ref":"category.json#/Category"}}}}`)
+	category := []byte(`{"Category":{"type":"string"}}`)
+
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/v1/schemas/pet.json":      pet,
+		"https://api.example.com/v1/schemas/category.json": category,
+	}}
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/v1/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve failed: %v (fetches: %v)", err, fetcher.hits)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	wantHits := map[string]int{
+		"https://api.example.com/v1/schemas/pet.json":      1,
+		"https://api.example.com/v1/schemas/category.json": 1,
+	}
+	if !maps.Equal(fetcher.hits, wantHits) {
+		t.Errorf("expected fetches %v, got %v", wantHits, fetcher.hits)
+	}
+	if !strings.Contains(string(resolved), `"$ref":"#/components/schemas/category_Category"`) {
+		t.Errorf("nested ref not rewritten to the inlined category schema: %s", resolved)
+	}
+}
+
 func TestResolveExternalRefs_InternalRefsUntouched(t *testing.T) {
 	main := []byte(
 		`{"components":{"schemas":{"X":{"type":"string"}}},"paths":{"/a":{"get":{"responses":{"200":{"$ref":"#/components/schemas/X"}}}}}}`,
@@ -128,16 +164,140 @@ func TestResolveExternalRefs_InternalRefsUntouched(t *testing.T) {
 	}
 }
 
-func TestResolveExternalRefs_FetchFailureIsWarning(t *testing.T) {
+func TestResolveExternalRefs_FetchFailureIsFatal(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https://missing.example/x.json#/A"}}}}}}`)
 	fetcher := &stubFetcher{docs: map[string][]byte{}}
+	_, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err == nil {
+		t.Fatalf("expected a fatal error for failed external $ref fetch")
+	}
+	if !strings.HasPrefix(err.Error(), "resolving external $refs: ") {
+		t.Errorf("expected the error to be marked as an external $ref failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "https://missing.example/x.json") {
+		t.Fatalf("expected error to mention the failing URL, got: %v", err)
+	}
+}
+
+func TestResolveExternalRefs_FetchFailureStopsFurtherResolution(t *testing.T) {
+	// Two external refs to two different documents, reached in a
+	// deterministic (array) order. The first document's fetch fails.
+	main := []byte(`{
+		"paths": {
+			"/a": {
+				"get": {
+					"responses": {
+						"200": {
+							"content": {
+								"application/json": {
+									"schema": {
+										"anyOf": [
+											{"$ref": "https://missing.example/one.json#/A"},
+											{"$ref": "https://schemas.example.com/two.json#/B"}
+										]
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://schemas.example.com/two.json": []byte(`{"B":{"type":"string"}}`),
+	}}
+	_, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err == nil {
+		t.Fatal("expected a fatal error for failed external $ref fetch")
+	}
+	if !strings.Contains(err.Error(), "https://missing.example/one.json") {
+		t.Fatalf("expected error to mention the failing URL, got: %v", err)
+	}
+	var totalHits int
+	for _, n := range fetcher.hits {
+		totalHits += n
+	}
+	if totalHits != 1 {
+		t.Fatalf("expected the fetcher to be called exactly once, got %d calls: %v", totalHits, fetcher.hits)
+	}
+	if fetcher.hits["https://schemas.example.com/two.json"] != 0 {
+		t.Fatalf("expected the second document not to be fetched after the first failure, got %v", fetcher.hits)
+	}
+}
+
+func TestResolveExternalRefs_FirstFailingRefIsDeterministic(t *testing.T) {
+	// Failing refs under sibling map keys: the walk visits keys in sorted
+	// order, so the fatal error always names the sorted-first key's URL
+	// rather than whichever Go's map iteration happens to reach first.
+	main := []byte(`{"components":{"schemas":{` +
+		`"Hotel":{"$ref":"https://h.example/h.json#/X"},` +
+		`"Alpha":{"$ref":"https://a.example/a.json#/X"},` +
+		`"Golf":{"$ref":"https://g.example/g.json#/X"},` +
+		`"Bravo":{"$ref":"https://b.example/b.json#/X"},` +
+		`"Foxtrot":{"$ref":"https://f.example/f.json#/X"},` +
+		`"Charlie":{"$ref":"https://c.example/c.json#/X"},` +
+		`"Echo":{"$ref":"https://e.example/e.json#/X"},` +
+		`"Delta":{"$ref":"https://d.example/d.json#/X"}` +
+		`}}}`)
+	for range 20 {
+		_, _, err := ResolveExternalRefs(context.Background(), main,
+			"https://api.example.com/openapi.json", &stubFetcher{}, FetchSource{})
+		if err == nil || !strings.Contains(err.Error(), "https://a.example/a.json") {
+			t.Fatalf("expected the error to name the sorted-first ref's URL https://a.example/a.json, got: %v", err)
+		}
+	}
+}
+
+func TestResolveExternalRefs_NestedFetchFailureIsFatalAndStopsFurtherResolution(t *testing.T) {
+	// The first document fetches fine, but a ref inside it cannot be
+	// fetched: that failure is the resolve's fatal error, and nothing after
+	// it is fetched — neither the fetched document's next ref nor the main
+	// spec's next ref.
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":{"schema":{` +
+		`"anyOf":[{"$ref":"schemas/pet.json#/Pet"},{"$ref":"https://schemas.example.com/two.json#/B"}]` +
+		`}}}}}}}}}`)
+	pet := []byte(`{"Pet":{"anyOf":[{"$ref":"missing.json#/M"},{"$ref":"tag.json#/Tag"}]}}`)
+
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/v1/schemas/pet.json": pet,
+		"https://api.example.com/v1/schemas/tag.json": []byte(`{"Tag":{"type":"string"}}`),
+		"https://schemas.example.com/two.json":        []byte(`{"B":{"type":"string"}}`),
+	}}
+	_, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/v1/openapi.json", fetcher, FetchSource{})
+	if err == nil {
+		t.Fatal("expected a fatal error for the failed nested $ref fetch")
+	}
+	if !strings.Contains(err.Error(), "https://api.example.com/v1/schemas/missing.json") {
+		t.Fatalf("expected error to mention the failing nested URL, got: %v", err)
+	}
+	wantHits := map[string]int{
+		"https://api.example.com/v1/schemas/pet.json":     1,
+		"https://api.example.com/v1/schemas/missing.json": 1,
+	}
+	if !maps.Equal(fetcher.hits, wantHits) {
+		t.Errorf("expected fetches %v, got %v", wantHits, fetcher.hits)
+	}
+}
+
+func TestResolveExternalRefs_PointerNotFoundIsWarningNotError(t *testing.T) {
+	// Pin existing behavior: a deterministic issue in an otherwise
+	// successfully-fetched document (a JSON pointer that doesn't exist) stays
+	// a warning, not a fatal error.
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https://schemas.example.com/doc.json#/Missing"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://schemas.example.com/doc.json": []byte(`{"Present":{"type":"string"}}`),
+	}}
 	_, warnings, err := ResolveExternalRefs(context.Background(), main,
 		"https://api.example.com/openapi.json", fetcher, FetchSource{})
 	if err != nil {
-		t.Fatalf("resolve should not hard-fail: %v", err)
+		t.Fatalf("pointer-not-found must not fail the resolve: %v", err)
 	}
 	if len(warnings) == 0 {
-		t.Fatalf("expected a warning for failed fetch")
+		t.Fatalf("expected a warning for the missing pointer")
 	}
 }
 
@@ -322,5 +482,698 @@ func TestSanitizeRefName_EmptyFragment(t *testing.T) {
 	}
 	if !strings.Contains(name, "common") {
 		t.Errorf("expected doc basename in name, got %q", name)
+	}
+}
+
+func TestResolveExternalRefs_ResolvesLocalRefInFetchedDocumentAgainstThatDocument(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}},"components":{"schemas":{"Owner":{"type":"integer"}}}}`)
+	// Two refs to Owner are one inlined schema.
+	common := []byte(`{"Pet":{"properties":{"owner":{"$ref":"#/Owner"},"previous":{"$ref":"#/Owner"}}},` +
+		`"Owner":{"type":"string"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none", warnings)
+	}
+	var out struct {
+		Components struct {
+			Schemas map[string]struct {
+				Type       string `json:"type"`
+				Properties map[string]struct {
+					Ref string `json:"$ref"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(resolved, &out); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	const want = "#/components/schemas/common_Owner"
+	pet := out.Components.Schemas["common_Pet"]
+	if pet.Properties["owner"].Ref != want || pet.Properties["previous"].Ref != want {
+		t.Errorf("Pet properties = %+v, want both to reference %s", pet.Properties, want)
+	}
+	if got := out.Components.Schemas["common_Owner"].Type; got != "string" {
+		t.Errorf("inlined Owner type = %q, want string (the fetched document's, not the main spec's)", got)
+	}
+	if got := out.Components.Schemas["Owner"].Type; got != "integer" {
+		t.Errorf("main spec Owner type = %q, want it untouched", got)
+	}
+}
+
+func TestExternalRefs_ListsDistinctNonLocalRefs(t *testing.T) {
+	spec := []byte(`{"paths":{"/a":{"get":{"parameters":[{"$ref":"common.yaml#/Limit"}],` +
+		`"responses":{"200":{"$ref":"#/components/responses/OK"},"404":{"$ref":"common.yaml#/Limit"},` +
+		`"500":{"$ref":"https://x.example.com/e.json"}}}}}}`)
+	refs, err := ExternalRefs(spec)
+	if err != nil {
+		t.Fatalf("ExternalRefs: %v", err)
+	}
+	if want := []string{"common.yaml#/Limit", "https://x.example.com/e.json"}; !slices.Equal(refs, want) {
+		t.Errorf("refs = %v, want %v", refs, want)
+	}
+}
+
+func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
+	cases := []struct {
+		name string
+		spec string
+		want []string
+	}{
+		{"example value", `{"example":{"$ref":"not-a-ref.json"}}`, nil},
+		{"examples entry value", `{"examples":{"e":{"value":{"$ref":"data"}}}}`, nil},
+		{"examples entry reference", `{"examples":{"e":{"$ref":"common.yaml#/components/examples/E"}}}`,
+			[]string{"common.yaml#/components/examples/E"}},
+		{"examples array", `{"examples":[{"$ref":"data.json"}]}`, nil},
+		{"empty ref", `{"a":{"$ref":""}}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, err := ExternalRefs([]byte(tc.spec))
+			if err != nil {
+				t.Fatalf("ExternalRefs: %v", err)
+			}
+			if !slices.Equal(refs, tc.want) {
+				t.Errorf("refs = %q, want %q", refs, tc.want)
+			}
+		})
+	}
+}
+
+// A member of a name-keyed map is an object whatever it is named, so an
+// external ref below one called "example" or "examples" is reported.
+func TestExternalRefs_ListsRefsUnderMembersNamedExample(t *testing.T) {
+	tests := []struct{ name, spec string }{
+		{"component schema", `{"components":{"schemas":{"example":{"$ref":"x.json#/X"}}}}`},
+		{"component response", `{"components":{"responses":{"examples":{"$ref":"x.json#/X"}}}}`},
+		{"response header", `{"components":{"responses":{"R":{"headers":{"example":{"$ref":"x.json#/X"}}}}}}`},
+		{"property", `{"properties":{"example":{"$ref":"x.json#/X"}}}`},
+		{"webhook", `{"webhooks":{"example":{"$ref":"x.json#/X"}}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, err := ExternalRefs([]byte(tc.spec))
+			if err != nil {
+				t.Fatalf("ExternalRefs: %v", err)
+			}
+			if want := []string{"x.json#/X"}; !slices.Equal(refs, want) {
+				t.Errorf("refs = %q, want %q", refs, want)
+			}
+		})
+	}
+}
+
+func TestResolveExternalRefs_LocalRefResolutionSkipsExamplePayload(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"example":{"$ref":"#/just-data"},` +
+		`"properties":{"owner":{"$ref":"#/Owner"}}},"Owner":{"type":"string"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none: the example payload is data", warnings)
+	}
+	raw := string(resolved)
+	if !strings.Contains(raw, `"$ref":"#/components/schemas/common_Owner"`) ||
+		!strings.Contains(raw, `"example":{"$ref":"#/just-data"}`) {
+		t.Errorf("want Owner rewritten and the example payload untouched; got %s", raw)
+	}
+}
+
+func TestResolveExternalRefs_LocalRefIsResolvedInItsOwnDocument(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"a.json#/A"}}}}}}}}}`)
+	a := []byte(`{"A":{"properties":{"b":{"$ref":"sub/b.json#/B"}}},"Z":{"type":"integer"}}`)
+	b := []byte(`{"B":{"properties":{"z":{"$ref":"#/Z"}}},"Z":{"type":"string"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/a.json":     a,
+		"https://api.example.com/sub/b.json": b,
+	}}
+
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none", warnings)
+	}
+	raw := string(resolved)
+	if !strings.Contains(raw, `"b_Z":{"type":"string"}`) || strings.Contains(raw, `"a_Z"`) {
+		t.Errorf("want Z taken from sub/b.json, not a.json; got %s", raw)
+	}
+}
+
+// A pointer that is not in its own document is left for the main spec to
+// resolve, as a bundle-style fragment expects, and the warning says so.
+func TestResolveExternalRefs_LocalRefMissingFromItsDocumentFallsBackToTheMainSpec(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"properties":{"owner":{"$ref":"#/components/schemas/Owner"}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	want := `$ref "#/components/schemas/Owner" is not in https://api.example.com/common.json: ` +
+		`it is resolved against the main spec after inlining`
+	if len(warnings) != 1 || !strings.Contains(warnings[0], want) {
+		t.Errorf("warnings = %q, want one containing %q", warnings, want)
+	}
+	if !strings.Contains(string(resolved), `"owner":{"$ref":"#/components/schemas/Owner"}`) {
+		t.Errorf("want the ref left as written; got %s", resolved)
+	}
+}
+
+// A bare "#" names the whole document: it is left alone, not inlined.
+func TestResolveExternalRefs_BareHashInFetchedDocumentIsLeftAlone(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Tree"}}}}}}}}}`)
+	common := []byte(`{"Tree":{"properties":{"root":{"$ref":"#"}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	raw := string(resolved)
+	if !strings.Contains(raw, `"root":{"$ref":"#"}`) || strings.Contains(raw, "common_Tree_root") {
+		t.Errorf("want the bare # left as written and nothing inlined for it; got %s", raw)
+	}
+}
+
+func TestResolveExternalRefs_LocalRefToAnExampleObjectIsWarnedAbout(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"examples":{"e":{"$ref":"#/Sample"}}},"Sample":{"value":1}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `"#/Sample"`) {
+		t.Errorf("warnings = %q, want exactly one, about #/Sample", warnings)
+	}
+}
+
+// Example data is never fetched, a reference to an Example Object is, and a
+// schema, response, header or other member of a name-keyed map is an object
+// whatever it is named, so one called "example" or "examples" is resolved.
+func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
+	const ref = `{"$ref":"https://schemas.example.com/x.json#/X"}`
+	const op = `{"paths":{"/a":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":%s}}}}}}}`
+	docs := map[string][]byte{
+		"https://schemas.example.com/x.json":  []byte(`{"X":{"type":"string"}}`),
+		"https://api.example.com/ex.json":     []byte(`{"E":{"value":1}}`),
+		"https://api.example.com/exv.json":    []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/a.json":      []byte(`{"$ref":"b.json#/E"}`),
+		"https://api.example.com/b.json":      []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/sub/ex.json": []byte(`{"E":{"value":2}}`),
+		"https://api.example.com/ca.json":     []byte(`{"$ref":"cb.json"}`),
+		"https://api.example.com/cb.json":     []byte(`{"$ref":"ca.json"}`),
+		"https://api.example.com/y.json":      []byte(`{"Y":{"properties":{"p":{"$ref":"z.json#/Z"}}}}`),
+		"https://api.example.com/z.json":      []byte(`{"Z":{"type":"string"}}`),
+		"https://api.example.com/a2.json":     []byte(`{"$ref":"gone.json#/E"}`),
+		"https://api.example.com/payload.json": []byte(
+			`{"type":"object","properties":{"a":{"$ref":"common.json#/A"}}}`),
+	}
+	tests := []struct {
+		name     string
+		spec     string
+		wantErr  string // substring of the error; empty means the sync succeeds
+		wantOut  string // substring of the resolved spec
+		wantAlso string // a second substring of the resolved spec
+		noWarn   string // substring no warning may contain
+		wantHits int    // fetches in total
+	}{
+		{
+			name:    "a media type example is not fetched",
+			spec:    fmt.Sprintf(op, `{"example":{"$ref":"not-a-ref.json"}}`),
+			wantOut: `{"example":{"$ref":"not-a-ref.json"}}`,
+		},
+		{
+			name:    "a schema keyword example is not fetched",
+			spec:    fmt.Sprintf(op, `{"schema":{"type":"object","example":{"$ref":"not-a-ref.json"}}}`),
+			wantOut: `"example":{"$ref":"not-a-ref.json"}`,
+		},
+		{
+			name:    "the value of an examples entry is not fetched",
+			spec:    fmt.Sprintf(op, `{"examples":{"e":{"value":{"$ref":"data.json"}}}}`),
+			wantOut: `{"value":{"$ref":"data.json"}}`,
+		},
+		{
+			name:     "an examples entry that is a reference is resolved",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"}}}`),
+			wantOut:  `{"$ref":"#/components/examples/ex_E"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "the value of an external Example Object is not fetched",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"exv.json#/E"}}}`),
+			wantOut:  `{"$ref":"#/components/examples/exv_E"}`,
+			wantAlso: `"examples":{"exv_E":{"value":{"$ref":"data.json"}}}`,
+			wantHits: 1,
+		},
+		{
+			name:     "the value of a components example reached through a reference is not fetched",
+			spec:     `{"components":{"examples":{"E":{"$ref":"exv.json#/E"}}}}`,
+			wantOut:  `"E":{"$ref":"#/components/examples/exv_E"}`,
+			wantAlso: `"exv_E":{"value":{"$ref":"data.json"}}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a payload file an examples entry points to is not fetched from",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"payload.json"}}}`),
+			wantOut:  `{"$ref":"#/components/examples/payload"}`,
+			wantAlso: `"payload":{"properties":{"a":{"$ref":"common.json#/A"}},"type":"object"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a reference chain from an examples entry is followed without fetching its data",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"a.json"}}}`),
+			wantOut:  `{"$ref":"#/components/examples/a"}`,
+			wantAlso: `"a":{"$ref":"#/components/examples/b_E"},"b_E":{"value":{"$ref":"data.json"}}`,
+			wantHits: 2,
+		},
+		{
+			name:     "an unreachable link of a reference chain fails closed",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"a2.json"}}}`),
+			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 2,
+		},
+		{
+			name: "one fragment reached as a schema and as an example is walked only as a schema",
+			spec: `{"components":{"schemas":{"S":{"$ref":"y.json#/Y"}},` +
+				`"examples":{"E":{"$ref":"y.json#/Y"}}}}`,
+			wantOut: `"examples":{"E":{"$ref":"#/components/examples/y_Y"},` +
+				`"y_Y":{"properties":{"p":{"$ref":"z.json#/Z"}}}}`,
+			wantAlso: `"y_Y":{"properties":{"p":{"$ref":"#/components/schemas/z_Z"}}}`,
+			noWarn:   "collision",
+			wantHits: 2,
+		},
+		{
+			name:     "a components example named like its own reference gets a free name",
+			spec:     `{"components":{"examples":{"ex_E":{"$ref":"ex.json#/E"}}}}`,
+			wantOut:  `"ex_E":{"$ref":"#/components/examples/ex_E_2"}`,
+			wantAlso: `"ex_E_2":{"value":1}`,
+			wantHits: 1,
+		},
+		{
+			name:     "an unrelated components example keeps the name a reference would take",
+			spec:     `{"components":{"examples":{"ex_E":{"value":"mine"},"use":{"$ref":"ex.json#/E"}}}}`,
+			wantOut:  `"ex_E":{"value":"mine"}`,
+			wantAlso: `"use":{"$ref":"#/components/examples/ex_E_2"}`,
+			wantHits: 1,
+		},
+		{
+			name: "two references that sanitize to one name get different names",
+			spec: fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"},`+
+				`"two":{"$ref":"sub/ex.json#/E"}}}`),
+			wantOut:  `"one":{"$ref":"#/components/examples/ex_E"},"two":{"$ref":"#/components/examples/ex_E_2"}`,
+			wantAlso: `"ex_E":{"value":1},"ex_E_2":{"value":2}`,
+			wantHits: 2,
+		},
+		{
+			name:     "a reference cycle in an example chain keeps the name it was given",
+			spec:     `{"components":{"examples":{"ca":{"value":1},"use":{"$ref":"ca.json"}}}}`,
+			wantOut:  `"ca_2":{"$ref":"#/components/examples/cb"}`,
+			wantAlso: `"cb":{"$ref":"#/components/examples/ca_2"}`,
+			wantHits: 2,
+		},
+		{
+			name:     "no examples entry is fetched after one failed",
+			spec:     fmt.Sprintf(op, `{"examples":{"a":{"$ref":"gone.json#/E"},"b":{"$ref":"ex.json#/E"}}}`),
+			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 1,
+		},
+		{
+			name:     "an unreachable examples entry reference fails closed",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"gone.json#/E"}}}`),
+			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 1,
+		},
+		{
+			name:     "an unreachable components example reference fails closed",
+			spec:     `{"components":{"examples":{"E":{"$ref":"gone.json#/E"}}}}`,
+			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 1,
+		},
+		{
+			name:     "a schema named example is resolved",
+			spec:     `{"components":{"schemas":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "an unreachable schema named example fails closed",
+			spec:     `{"components":{"schemas":{"example":{"$ref":"https://missing.example.com/y.json#/Y"}}}}`,
+			wantErr:  "fetching https://missing.example.com/y.json",
+			wantHits: 1,
+		},
+		{
+			name:     "a property of a schema named examples is resolved",
+			spec:     `{"components":{"schemas":{"examples":{"type":"object","properties":{"p":` + ref + `}}}}}`,
+			wantOut:  `{"p":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a property named example is resolved",
+			spec:     `{"components":{"schemas":{"Pet":{"properties":{"example":` + ref + `}}}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component response named example is resolved",
+			spec:     `{"components":{"responses":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component parameter named examples is resolved",
+			spec:     `{"components":{"parameters":{"examples":` + ref + `}}}`,
+			wantOut:  `{"examples":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component request body named example is resolved",
+			spec:     `{"components":{"requestBodies":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component link named example is resolved",
+			spec:     `{"components":{"links":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a response header named example is resolved",
+			spec:     `{"components":{"responses":{"R":{"headers":{"example":` + ref + `}}}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a header of an encoding named example is resolved",
+			spec:     fmt.Sprintf(op, `{"encoding":{"example":{"headers":{"h":`+ref+`}}}}`),
+			wantOut:  `{"h":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a callback named example is resolved",
+			spec:     `{"paths":{"/a":{"post":{"callbacks":{"example":` + ref + `}}}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a webhook named example is resolved",
+			spec:     `{"webhooks":{"example":` + ref + `}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fetcher := &stubFetcher{docs: docs}
+
+			out, warnings, err := ResolveExternalRefs(context.Background(), []byte(tc.spec),
+				"https://api.example.com/openapi.json", fetcher, FetchSource{})
+
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("resolve: %v", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
+			case tc.wantErr == "" && !strings.Contains(string(out), tc.wantOut):
+				t.Errorf("resolved spec = %s, want it to contain %s", out, tc.wantOut)
+			case tc.wantErr == "" && !strings.Contains(string(out), tc.wantAlso):
+				t.Errorf("resolved spec = %s, want it to contain %s", out, tc.wantAlso)
+			}
+			for _, w := range warnings {
+				if tc.noWarn != "" && strings.Contains(w, tc.noWarn) {
+					t.Errorf("warning %q contains %q", w, tc.noWarn)
+				}
+			}
+			hits := 0
+			for _, n := range fetcher.hits {
+				hits += n
+			}
+			if hits != tc.wantHits {
+				t.Errorf("fetches = %v, want %d in total", fetcher.hits, tc.wantHits)
+			}
+		})
+	}
+}
+
+// A ref's URL can carry credentials: the errors the resolver builds from it,
+// which become status messages and span events, name it redacted.
+const refWithSecrets = "https://user:pw@schemas.example.com/x.json?token=secret"
+
+func requireNoSecrets(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if msg := err.Error(); strings.Contains(msg, "pw@") || strings.Contains(msg, "secret") {
+		t.Errorf("error %q carries a credential", msg)
+	}
+}
+
+type failingFetcher struct{ err error }
+
+func (f failingFetcher) Fetch(context.Context, FetchSource) (*FetchResult, error) { return nil, f.err }
+
+// plainFetcher is the real fetcher over a client that reaches loopback hosts.
+func plainFetcher() *httpFetcher {
+	return &httpFetcher{strictClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout}}
+}
+
+func TestResolveExternalRefs_AFailedFetchErrorCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"http://user:pw@127.0.0.1:1/x.json?token=secret#/A"}}}}}}`)
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "http://127.0.0.1:1/openapi.json",
+		plainFetcher(), FetchSource{})
+
+	requireNoSecrets(t, err)
+	if want := "fetching http://127.0.0.1:1/x.json?token=REDACTED: "; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not contain %q", err, want)
+	}
+}
+
+func TestResolveExternalRefs_ADecodeErrorCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{refWithSecrets: []byte(`not json`)}}
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	requireNoSecrets(t, err)
+}
+
+func TestAbsolutize_ABaseURLErrorCarriesNoCredentials(t *testing.T) {
+	_, err := absolutize("x.json", "https://user:pw@host:badport/spec.json?token=secret")
+
+	requireNoSecrets(t, err)
+}
+
+func TestAbsolutize_ARefURLErrorCarriesNoCredentials(t *testing.T) {
+	_, err := absolutize("https://user:pw@host:badport/x.json?token=secret", "https://api.example.com/spec.json")
+
+	requireNoSecrets(t, err)
+}
+
+func requireNoSecretWarnings(t *testing.T, warnings []string) {
+	t.Helper()
+	if len(warnings) == 0 {
+		t.Fatal("expected a warning")
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "pw@") || strings.Contains(w, "secret") {
+			t.Errorf("warning %q carries a credential", w)
+		}
+	}
+}
+
+func TestResolveExternalRefs_AFailedRefWarningCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/Missing"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{refWithSecrets: []byte(`{"A":{}}`)}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoSecretWarnings(t, warnings)
+}
+
+func TestResolveExternalRefs_ACycleWarningCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		refWithSecrets: []byte(`{"A":{"next":{"$ref":"` + refWithSecrets + `#/A"}}}`),
+	}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoSecretWarnings(t, warnings)
+}
+
+func TestResolveExternalRefs_AMissingLocalRefWarningCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		refWithSecrets: []byte(`{"A":{"next":{"$ref":"#/B"}}}`),
+	}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoSecretWarnings(t, warnings)
+}
+
+func TestResolveExternalRefs_AnOpaqueRefCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https:user:pw@schemas.example.com/x.json?token=secret#/A"}}}}}}`)
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		plainFetcher(), FetchSource{})
+
+	requireNoSecrets(t, err)
+}
+
+// A ref that carries no credential is shown as written; one that does keeps
+// its JSON pointer and loses the credential.
+func TestRedactRef(t *testing.T) {
+	for _, tc := range []struct{ name, ref, want string }{
+		{"spaces are not encoded", "my schemas.json#/R", "my schemas.json#/R"},
+		{"a relative ref is unchanged", "../common/pet.json#/Pet", "../common/pet.json#/Pet"},
+		{"a local ref is unchanged", "#/components/schemas/Pet", "#/components/schemas/Pet"},
+		{"a ref without a pointer", "https://example.com/pet.json", "https://example.com/pet.json"},
+		{
+			"userinfo and query values go, the pointer stays",
+			"https://user:pw@example.com/pet.json?token=abc#/Pet", "https://example.com/pet.json?token=REDACTED#/Pet",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RedactRef(tc.ref); got != tc.want {
+				t.Errorf("RedactRef(%q) = %q, want %q", tc.ref, got, tc.want)
+			}
+		})
+	}
+}
+
+// The fetcher's error names the document, whichever step of the fetch failed:
+// the resolver does not repeat it.
+func TestResolveExternalRefs_AFetchErrorNamesTheDocumentOnce(t *testing.T) {
+	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("x"))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	defer short.Close()
+	for name, doc := range map[string]string{
+		"a request that fails":   "http://127.0.0.1:1/x.json",
+		"a body that ends early": short.URL + "/x.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + doc + `#/A"}}}}}}`)
+
+			_, _, err := ResolveExternalRefs(context.Background(), main, "http://127.0.0.1:1/openapi.json",
+				plainFetcher(), FetchSource{})
+
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if n := strings.Count(err.Error(), doc); n != 1 {
+				t.Errorf("error %q names the document %d times, want once", err, n)
+			}
+		})
+	}
+}
+
+// The warning for a local ref the resolver does not follow, here an Example
+// Object reference, names its document without the credentials in its URL.
+func TestResolveExternalRefs_AnUnfollowedLocalRefWarningCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		refWithSecrets: []byte(`{"A":{"examples":{"e":{"$ref":"#/S"}}},"S":{}}`),
+	}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoSecretWarnings(t, warnings)
+}
+
+// An external ref beside a fetched document's local ref is still resolved.
+func TestResolveExternalRefs_ExternalRefBesideALocalRefIsStillInlined(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"properties":{"o":{"$ref":"#/Owner",` +
+		`"properties":{"x":{"$ref":"other.json#/Bar"}}}}},"Owner":{"type":"string"}}`)
+	other := []byte(`{"Bar":{"type":"integer"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/common.json": common,
+		"https://api.example.com/other.json":  other,
+	}}
+
+	resolved, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	raw := string(resolved)
+	if strings.Contains(raw, "other.json#") || !strings.Contains(raw, `"other_Bar":{"type":"integer"}`) {
+		t.Errorf("want other.json#/Bar inlined as other_Bar and rewritten; got %s", raw)
+	}
+}
+
+// A recursive schema in a fetched document is rewritten to its inlined name,
+// so the cycle note must not say the resolution was skipped.
+func TestResolveExternalRefs_RecursiveSchemaWarningDoesNotClaimItWasSkipped(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Node"}}}}}}}}}`)
+	common := []byte(`{"Node":{"properties":{"left":{"$ref":"#/Node"}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !strings.Contains(string(resolved), `"left":{"$ref":"#/components/schemas/common_Node"}`) {
+		t.Errorf("want the recursive ref rewritten to common_Node; got %s", resolved)
+	}
+	for _, w := range warnings {
+		if !strings.Contains(w, "cycle detected") || strings.Contains(w, "skipping") {
+			t.Errorf("warning %q, want a cycle note that does not claim the resolution was skipped", w)
+		}
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %q, want one cycle note", warnings)
 	}
 }

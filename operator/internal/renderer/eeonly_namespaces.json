@@ -1,0 +1,33 @@
+{
+  "enterpriseOnly": {
+    "service": [
+      "ai/mcp", "auth/api-keys", "auth/basic", "documentation/openapi", "documentation/postman",
+      "governance/processors", "governance/quota", "grpc", "modifier/request-body-extractor",
+      "modifier/response-headers", "qos/ratelimit/service", "qos/ratelimit/service/redis",
+      "qos/ratelimit/tiered", "redis", "server/static-filesystem", "server/virtualhost",
+      "telemetry/moesif", "telemetry/newrelic", "telemetry/opentelemetry-security"
+    ],
+    "endpoint": [
+      "ai/mcp", "auth/api-keys", "auth/basic", "documentation/openapi", "documentation/postman",
+      "governance/quota", "modifier/jmespath", "modifier/request-body-extractor",
+      "modifier/request-body-extractor/early", "modifier/request-body-generator",
+      "modifier/response-body", "modifier/response-body-generator", "plugin/middleware",
+      "qos/ratelimit/router/redis", "qos/ratelimit/tiered", "security/policies",
+      "validation/response-json-schema", "websocket"
+    ],
+    "backend": [
+      "ai/llm", "auth/aws-sigv4", "auth/gcp", "auth/ntlm", "backend/conditional", "backend/grpc",
+      "backend/http/client", "backend/pubsub/publisher/kafka", "backend/pubsub/subscriber/kafka",
+      "backend/soap", "backend/static-filesystem", "governance/quota", "modifier/body-generator",
+      "modifier/jmespath", "modifier/request-body-generator", "modifier/response-body",
+      "modifier/response-body-generator", "plugin/middleware", "qos/circuit-breaker/http",
+      "security/policies", "telemetry/logging", "validation/response-json-schema", "workflow"
+    ]
+  },
+  "ceHonoredKeys": {
+    "backend": {"backend/http/client": ["send_body_on_redirect"]}
+  },
+  "ceRenderDrops": {
+    "endpoint": ["documentation/openapi"]
+  }
+}

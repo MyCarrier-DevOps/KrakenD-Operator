@@ -1,0 +1,6 @@
+{"items":[
+ {"metadata":{"namespace":"a","name":"p-ee"},"spec":{"raw":{"backend/http/client":{"proxy_address":"http://p"},"qos/circuit-breaker":{"interval":1,"timeout":1,"max_errors":1}}}},
+ {"metadata":{"namespace":"b","name":"p-other"},"spec":{"raw":{"auth/gcp":{}}}},
+ {"metadata":{"namespace":"a","name":"p-unused"},"spec":{"raw":{"auth/gcp":{}}}},
+ {"metadata":{"namespace":"a","name":"p-ee-only"},"spec":{"raw":{"auth/gcp":{}}}}
+]}

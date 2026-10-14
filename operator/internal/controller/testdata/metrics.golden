@@ -1,0 +1,46 @@
+# HELP krakend_operator_autoconfig_synced 1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing
+# TYPE krakend_operator_autoconfig_synced gauge
+krakend_operator_autoconfig_synced{name,namespace}
+# HELP krakend_operator_config_renders_total Total config render attempts
+# TYPE krakend_operator_config_renders_total counter
+krakend_operator_config_renders_total
+# HELP krakend_operator_config_validation_failures_total Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again
+# TYPE krakend_operator_config_validation_failures_total counter
+krakend_operator_config_validation_failures_total
+# HELP krakend_operator_dragonfly_ready 1 if Dragonfly is ready, 0 otherwise
+# TYPE krakend_operator_dragonfly_ready gauge
+krakend_operator_dragonfly_ready{name,namespace}
+# HELP krakend_operator_endpoints Number of KrakenDEndpoints per gateway
+# TYPE krakend_operator_endpoints gauge
+krakend_operator_endpoints{name,namespace}
+# HELP krakend_operator_gateway_config_valid 1 while the gateway's newest rendered config passed validation (ConfigValid=True), 0 otherwise
+# TYPE krakend_operator_gateway_config_valid gauge
+krakend_operator_gateway_config_valid{name,namespace}
+# HELP krakend_operator_gateway_excluded_endpoints KrakenDEndpoints a gateway leaves out of its config because they fail validation on their own, by Accepted reason
+# TYPE krakend_operator_gateway_excluded_endpoints gauge
+krakend_operator_gateway_excluded_endpoints{gateway,namespace,reason}
+# HELP krakend_operator_gateway_info Gateway metadata labels
+# TYPE krakend_operator_gateway_info gauge
+krakend_operator_gateway_info{edition,name,namespace,version}
+# HELP krakend_operator_license_expiry_seconds Seconds until EE license expiry
+# TYPE krakend_operator_license_expiry_seconds gauge
+krakend_operator_license_expiry_seconds{name,namespace}
+# HELP krakend_operator_reconcile_duration_seconds Reconciliation loop latency
+# TYPE krakend_operator_reconcile_duration_seconds histogram
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="0.005"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="0.01"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="0.025"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="0.05"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="0.1"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="0.25"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="0.5"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="1"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="2.5"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="5"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="10"}
+krakend_operator_reconcile_duration_seconds_bucket{controller,name,namespace,le="+Inf"}
+krakend_operator_reconcile_duration_seconds_sum{controller,name,namespace}
+krakend_operator_reconcile_duration_seconds_count{controller,name,namespace}
+# HELP krakend_operator_rolling_restarts_total Deployment writes that changed the pod template, rolling the pods (not creations)
+# TYPE krakend_operator_rolling_restarts_total counter
+krakend_operator_rolling_restarts_total

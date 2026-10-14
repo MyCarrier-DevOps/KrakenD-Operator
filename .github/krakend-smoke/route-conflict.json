@@ -1,0 +1,14 @@
+{
+  "$schema": "https://www.krakend.io/schema/krakend.json",
+  "version": 3,
+  "endpoints": [
+    {
+      "endpoint": "/items/{id}",
+      "backend": [{ "url_pattern": "/items", "host": ["http://backend.invalid:8080"] }]
+    },
+    {
+      "endpoint": "/items/{name}",
+      "backend": [{ "url_pattern": "/items", "host": ["http://backend.invalid:8080"] }]
+    }
+  ]
+}

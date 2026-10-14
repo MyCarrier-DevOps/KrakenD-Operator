@@ -17,8 +17,12 @@ limitations under the License.
 package autoconfig
 
 import (
+	"encoding/base64"
+	"maps"
+	"slices"
 	"testing"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -105,5 +109,239 @@ func TestExtractComponentSchemas_PreservesRawContent(t *testing.T) {
 	roundtrip.Raw = raw.Raw
 	if roundtrip.Raw == nil {
 		t.Error("round-trip failed")
+	}
+}
+
+// docEntry returns an entry whose documentation/openapi extra config is doc.
+func docEntry(path, doc string) v1alpha1.EndpointEntry {
+	return v1alpha1.EndpointEntry{
+		Endpoint:    path,
+		Method:      "GET",
+		Backends:    []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: path}},
+		ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":` + doc + `}`)},
+	}
+}
+
+// petSchemas is a components map: Pet references Owner, Owner references
+// Address; Error's example carries a $ref that is data; Unused stands alone.
+func petSchemas() map[string]runtime.RawExtension {
+	return map[string]runtime.RawExtension{
+		"Pet":     {Raw: []byte(`{"type":"object","properties":{"owner":{"$ref":"#/components/schemas/Owner"}}}`)},
+		"Owner":   {Raw: []byte(`{"type":"object","properties":{"address":{"$ref":"#/components/schemas/Address"}}}`)},
+		"Address": {Raw: []byte(`{"type":"object"}`)},
+		"Error":   {Raw: []byte(`{"type":"object","example":{"$ref":"#/components/schemas/Unused"}}`)},
+		"Unused":  {Raw: []byte(`{"type":"object"}`)},
+	}
+}
+
+func TestSchemaClosure_FollowsRefsTransitively(t *testing.T) {
+	allOf := base64.StdEncoding.EncodeToString([]byte(`{"allOf":[{"$ref":"#/components/schemas/Pet"}]}`))
+	entry := docEntry("/pets", `{"request_definition":[{"ref":"Error"}],`+
+		`"response_definition":{"200":{"example_schema":"`+allOf+`","example":{"ref":"Unused"}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, petSchemas())
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Error", "Owner", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
+
+func TestSchemaClosure_ReportsUnresolvableRefs(t *testing.T) {
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Ghost"},`+
+		`"400":{"example_schema":{"type":"object","properties":{"x":{"$ref":"#/definitions/Legacy"}}}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, petSchemas())
+
+	if closure != nil {
+		t.Errorf("closure = %v, want nil", closure)
+	}
+	if want := []string{"#/definitions/Legacy", "Ghost"}; !slices.Equal(unresolved, want) {
+		t.Errorf("unresolved = %v, want %v", unresolved, want)
+	}
+}
+
+// A schema property may be named "example" or "examples". Its value is a
+// schema, so a $ref there is a real reference, unlike an example payload.
+func TestSchemaClosure_SeesRefsUnderPropertiesNamedExample(t *testing.T) {
+	components := petSchemas()
+	components["Odd"] = runtime.RawExtension{Raw: []byte(`{"type":"object","properties":{` +
+		`"example":{"$ref":"#/components/schemas/Address","example":{"$ref":"#/components/schemas/Unused"}},` +
+		`"examples":{"type":"array","items":{"$ref":"#/components/schemas/Owner"}}}}`)}
+	entry := docEntry("/odd", `{"response_definition":{"200":{"ref":"Odd"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Odd", "Owner"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
+
+func TestSchemaClosure_TerminatesOnCycles(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Node": {Raw: []byte(`{"properties":{"next":{"$ref":"#/components/schemas/Node"},` +
+			`"peer":{"$ref":"#/components/schemas/Other"}}}`)},
+		"Other": {Raw: []byte(`{"properties":{"back":{"$ref":"#/components/schemas/Node"}}}`)},
+	}
+	entry := docEntry("/nodes", `{"response_definition":{"200":{"ref":"Node"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Node", "Other"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
+
+// An "examples" entry that is a $ref points at an Example Object under
+// components/examples, which is not a schema, so the closure neither attaches
+// nor reports it.
+func TestSchemaClosure_IgnoresRefsToExampleObjects(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"type":"object","examples":{"fido":{"$ref":"#/components/examples/Fido"}}}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
+
+// A pointer into a component schema needs that schema's root attached, and
+// is not an unresolved reference.
+func TestSchemaClosure_AttachesTheRootOfAPointerIntoASchema(t *testing.T) {
+	entry := docEntry("/pets", `{"response_definition":{"200":{"example_schema":`+
+		`{"$ref":"#/components/schemas/Pet/$defs/Tag"}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, petSchemas())
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Owner", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
+
+func TestSchemaClosure_PointerIntoASchemaVariants(t *testing.T) {
+	tests := []struct {
+		name           string
+		ref            string
+		wantClosure    []string
+		wantUnresolved []string
+	}{
+		{"property pointer", "#/components/schemas/Pet/properties/id", []string{"Address", "Owner", "Pet"}, nil},
+		{"escaped name", "#/components/schemas/Pet~1Cat/properties/id", nil, []string{"Pet/Cat"}},
+		{"missing root", "#/components/schemas/Ghost/$defs/Tag", nil, []string{"Ghost"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := docEntry("/pets", `{"response_definition":{"200":{"example_schema":{"$ref":"`+tt.ref+`"}}}}`)
+
+			closure, unresolved := SchemaClosure(entry, petSchemas())
+
+			if got := slices.Sorted(maps.Keys(closure)); !slices.Equal(got, tt.wantClosure) {
+				t.Errorf("closure = %v, want %v", got, tt.wantClosure)
+			}
+			if !slices.Equal(unresolved, tt.wantUnresolved) {
+				t.Errorf("unresolved = %v, want %v", unresolved, tt.wantUnresolved)
+			}
+		})
+	}
+}
+
+// A discriminator mapping names the schemas a response may be, so they belong
+// to the closure of a schema that declares one: Dog inherits from Pet, which
+// maps back to it.
+func TestSchemaClosure_FollowsDiscriminatorMappings(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"type":"object","discriminator":{"propertyName":"kind",` +
+			`"mapping":{"dog":"#/components/schemas/Dog"}}}`)},
+		"Dog": {Raw: []byte(`{"allOf":[{"$ref":"#/components/schemas/Pet"},{"type":"object"}]}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Dog", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
+
+func TestSchemaClosure_DiscriminatorMappingValueForms(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"discriminator":{"propertyName":"kind","mapping":{"dog":"Dog","cat":"Ghost"}},` +
+			`"properties":{"labels":{"mapping":{"x":"NotASchema"}}}}`)},
+		"Dog": {Raw: []byte(`{"type":"object"}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Dog", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if want := []string{"Ghost"}; !slices.Equal(unresolved, want) {
+		t.Errorf("unresolved = %v, want %v (a mapping outside a discriminator is not read)", unresolved, want)
+	}
+}
+
+// The members of every keyword that holds a map of schemas are schemas
+// whatever they are named, so one called "example" is searched.
+func TestSchemaClosure_SeesRefsUnderSchemaMapsMemberNamedExample(t *testing.T) {
+	tests := []struct{ keyword string }{
+		{"$defs"},
+		{"definitions"},
+		{"patternProperties"},
+		{"dependentSchemas"},
+		{"dependencies"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.keyword, func(t *testing.T) {
+			components := petSchemas()
+			components["Odd"] = runtime.RawExtension{Raw: []byte(`{"` + tt.keyword +
+				`":{"example":{"$ref":"#/components/schemas/Address"}}}`)}
+			entry := docEntry("/odd", `{"response_definition":{"200":{"ref":"Odd"}}}`)
+
+			closure, _ := SchemaClosure(entry, components)
+
+			if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Odd"}; !slices.Equal(got, want) {
+				t.Errorf("closure = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// An example payload that happens to look like a reference to an undefined
+// schema is data, so it produces no unresolved reference.
+func TestSchemaClosure_ExamplePayloadsNamingUndefinedSchemasAreNotReported(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"type":"object","example":{"ref":"ABC","$ref":"#/components/schemas/ABC"}}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet","example":{"ref":"ABC"},`+
+		`"examples":{"a":{"value":{"ref":"ABC"}}}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }

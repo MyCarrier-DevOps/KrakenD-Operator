@@ -28,23 +28,79 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	// GatewayContainerName names the KrakenD container in the gateway pod.
+	GatewayContainerName = "krakend"
+
+	// PluginChecksumAnnotation records the plugin set a pod template was
+	// built with; it is absent when the gateway has no plugins.
+	PluginChecksumAnnotation = "krakend.io/checksum-plugins"
+
+	// ImageAnnotation records the image the operator set on the gateway
+	// container. The container's own image can be rewritten after admission
+	// (digest pinning, registry mirrors), so rollout checks compare this
+	// annotation instead.
+	ImageAnnotation = "krakend.io/image"
+
+	// LicenseChecksumAnnotation records the license the pod template was
+	// built for. The license is mounted with subPath, which never receives
+	// Secret updates, so a changed license has to change the pod template to
+	// reach running pods. It tracks the mounted license, so it is present for
+	// every EE gateway with a readable license, CE fallback or not, and absent
+	// when no license is mounted.
+	LicenseChecksumAnnotation = "krakend.io/checksum-license"
+)
+
+// desiredReplicas returns the replica count BuildDeployment writes. With
+// autoscaling configured the HorizontalPodAutoscaler owns spec.replicas: an
+// existing Deployment keeps its live value, and a new one starts at the
+// HPA's floor, MinReplicas (1 when unset, as for the HPA itself).
+func desiredReplicas(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway) *int32 {
+	if gw.Spec.Autoscaling == nil {
+		return gw.Spec.Replicas
+	}
+	if dep.Spec.Replicas != nil {
+		return dep.Spec.Replicas
+	}
+	return ptr.To(ptr.Deref(gw.Spec.Autoscaling.MinReplicas, 1))
+}
+
+// configVolumeName is the name of the volume holding the gateway config.
+const configVolumeName = "config"
+
+// DeploymentInputs is what BuildDeployment needs besides the gateway spec.
+// Named fields, not positional strings: four strings transposed would
+// compile silently.
+type DeploymentInputs struct {
+	// ConfigMapName is the content-addressed ConfigMap holding the applied
+	// config (see ConfigMapName).
+	ConfigMapName string
+	// ConfigChecksum is the applied config's checksum. The pod template
+	// records it in PostRestartJobChecksumAnnotation for the post-restart
+	// Job gate.
+	ConfigChecksum string
+	PluginChecksum string
+	Image          string
+	// LicenseChecksum is the checksum of the license bytes mounted into an
+	// EE gateway, whether or not it falls back to CE; "" when none is mounted.
+	LicenseChecksum string
+	// CERender: the applied config is a CE render — a CE-edition gateway's,
+	// or an EE gateway's CE fallback — run with the CE image.
+	CERender bool
+}
+
 // BuildDeployment mutates dep in place with a complete Deployment for the
-// KrakenD gateway. The image parameter is the resolved container image
-// (from renderer.ResolveImage). configChecksum and pluginChecksum are
-// injected as pod annotations to trigger rolling restarts on config changes.
-func BuildDeployment(
-	dep *appsv1.Deployment,
-	gw *v1alpha1.KrakenDGateway,
-	configChecksum string,
-	pluginChecksum string,
-	image string,
-) {
+// KrakenD gateway. in.Image is the container image the infrastructure
+// stage deploys, that of the applied config's edition. in.ConfigChecksum and
+// in.PluginChecksum are injected as pod annotations to trigger rolling
+// restarts on config changes.
+func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in DeploymentInputs) {
 	labels := StandardLabels(gw)
 	selectorLabels := SelectorLabels(gw)
 
 	dep.Labels = labels
 
-	dep.Spec.Replicas = gw.Spec.Replicas
+	dep.Spec.Replicas = desiredReplicas(dep, gw)
 	dep.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: selectorLabels,
 	}
@@ -60,10 +116,14 @@ func BuildDeployment(
 
 	// Pod annotations for config change detection
 	annotations := map[string]string{
-		PostRestartJobChecksumAnnotation: configChecksum,
+		PostRestartJobChecksumAnnotation: in.ConfigChecksum,
+		ImageAnnotation:                  in.Image,
 	}
-	if pluginChecksum != "" {
-		annotations["krakend.io/checksum-plugins"] = pluginChecksum
+	if in.PluginChecksum != "" {
+		annotations[PluginChecksumAnnotation] = in.PluginChecksum
+	}
+	if in.LicenseChecksum != "" {
+		annotations[LicenseChecksumAnnotation] = in.LicenseChecksum
 	}
 
 	port := int32(8080)
@@ -76,10 +136,20 @@ func BuildDeployment(
 	}
 
 	// Volumes and volume mounts
-	volumes, volumeMounts, initContainers := buildVolumes(gw)
+	volumes, volumeMounts, initContainers := buildVolumes(gw, in.ConfigMapName)
 
 	// OpenAPI export init container + shared volume (so the sidecar can serve it)
-	oaInit, oaSidecar, oaVolume, oaMountForExport := buildOpenAPIPieces(gw, image)
+	// OpenAPI export and serving are Enterprise features: the CE binary has
+	// no `openapi` command, and a CE render has no documentation/openapi to
+	// export. A pod running a CE render runs without them.
+	var (
+		oaInit, oaSidecar *corev1.Container
+		oaVolume          *corev1.Volume
+		oaMountForExport  *corev1.VolumeMount
+	)
+	if !in.CERender {
+		oaInit, oaSidecar, oaVolume, oaMountForExport = buildOpenAPIPieces(gw, in.Image)
+	}
 	if oaVolume != nil {
 		volumes = append(volumes, *oaVolume)
 	}
@@ -87,9 +157,9 @@ func BuildDeployment(
 		// The export init container needs the rendered config and writable /tmp.
 		oaInit.VolumeMounts = append(oaInit.VolumeMounts,
 			corev1.VolumeMount{
-				Name:      "config",
+				Name:      configVolumeName,
 				MountPath: "/etc/krakend/krakend.json",
-				SubPath:   "krakend.json",
+				SubPath:   ConfigKey,
 				ReadOnly:  true,
 			},
 			corev1.VolumeMount{
@@ -114,8 +184,8 @@ func BuildDeployment(
 
 	// Main container
 	container := corev1.Container{
-		Name:  "krakend",
-		Image: image,
+		Name:  GatewayContainerName,
+		Image: in.Image,
 		Command: []string{
 			"/usr/bin/krakend",
 			"run",
@@ -210,24 +280,24 @@ func BuildDeployment(
 // buildVolumes assembles volumes, volume mounts, and init containers for the
 // KrakenD deployment. Always mounts the ConfigMap and emptyDir /tmp. Adds
 // license Secret if EE and plugin volumes if plugins are configured.
-func buildVolumes(gw *v1alpha1.KrakenDGateway) (
+func buildVolumes(gw *v1alpha1.KrakenDGateway, configMapName string) (
 	volumes []corev1.Volume,
 	mounts []corev1.VolumeMount,
 	initContainers []corev1.Container,
 ) {
 	// ConfigMap volume: krakend.json
 	volumes = append(volumes, corev1.Volume{
-		Name: "config",
+		Name: configVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: gw.Name},
+				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
 			},
 		},
 	})
 	mounts = append(mounts, corev1.VolumeMount{
-		Name:      "config",
+		Name:      configVolumeName,
 		MountPath: "/etc/krakend/krakend.json",
-		SubPath:   "krakend.json",
+		SubPath:   ConfigKey,
 		ReadOnly:  true,
 	})
 
@@ -242,17 +312,8 @@ func buildVolumes(gw *v1alpha1.KrakenDGateway) (
 	})
 
 	// License Secret (EE only)
-	if gw.Spec.Edition == v1alpha1.EditionEE && gw.Spec.License != nil {
-		var licenseSecretName, licenseKey string
-		if gw.Spec.License.SecretRef != nil {
-			licenseSecretName = gw.Spec.License.SecretRef.Name
-			licenseKey = gw.Spec.License.SecretRef.Key
-		} else if gw.Spec.License.ExternalSecret.Enabled {
-			// ExternalSecret convention: target Secret is {gw.Name}-license with key LICENSE
-			licenseSecretName = gw.Name + "-license"
-			licenseKey = "LICENSE"
-		}
-		if licenseSecretName != "" {
+	if gw.Spec.Edition == v1alpha1.EditionEE {
+		if licenseSecretName, licenseKey, ok := LicenseSecret(gw); ok {
 			volumes = append(volumes, corev1.Volume{
 				Name: "license",
 				VolumeSource: corev1.VolumeSource{
@@ -653,4 +714,15 @@ func buildOpenAPIPieces(
 	}
 
 	return initContainer, sidecar, volume, initMount
+}
+
+// MountedConfigMapName returns the ConfigMap spec mounts as the gateway
+// config, or "" when it mounts none.
+func MountedConfigMapName(spec *corev1.PodSpec) string {
+	for _, v := range spec.Volumes {
+		if v.Name == configVolumeName && v.ConfigMap != nil {
+			return v.ConfigMap.Name
+		}
+	}
+	return ""
 }
