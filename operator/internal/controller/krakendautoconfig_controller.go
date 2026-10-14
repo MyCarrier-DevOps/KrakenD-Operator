@@ -643,6 +643,12 @@ func applyAdditionalEndpoints(
 			inScope = append(inScope, v1alpha1.EndpointEntry{Endpoint: op.Path})
 		}
 		base = autoconfig.DeriveBasePath(inScope)
+		if base == "" && len(inScope) == 0 {
+			return nil, nil, fmt.Errorf(
+				"cannot derive a base path for additionalEndpoints (no generated " +
+					"endpoint or held operation is left to derive a base path from); set " +
+					"spec.additionalEndpointsBasePath or spec.urlTransform.addPathPrefix")
+		}
 		if base == "" {
 			return nil, nil, fmt.Errorf(
 				"cannot derive a base path for additionalEndpoints (the generated " +
